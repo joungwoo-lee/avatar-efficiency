@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // SessionStart 스위퍼 — 미처리 transcript를 골라 Haiku 매칭 + η 산정 후 집계 서버로 비동기 송출.
-// 설계: skill-eval-platform docs/avatar-efficiency/{session-matching-design,efficiency-metrics-design}.md
+// 설계: docs/{session-matching-design,efficiency-metrics-design}.md
 const fs = require("fs");
 const path = require("path");
 const { loadConfig } = require("./lib/config");

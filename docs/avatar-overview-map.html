@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>아바타 효율성 구조 — 조망도</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0f1117; color: #e6e9f0;
+    font-family: "Segoe UI", "Malgun Gothic", sans-serif;
+    padding: 24px 28px 40px;
+  }
+  h1 { font-size: 18px; margin-bottom: 2px; }
+  .subtitle { color: #8b93a7; font-size: 12px; margin-bottom: 10px; }
+  .wrap { max-width: 1300px; margin: 0 auto; }
+  svg.map { display: block; width: 100%; height: auto; }
+  .formula-bar {
+    margin-top: 6px;
+    background: #171a23; border: 1px solid #4a3c1e; border-radius: 10px;
+    padding: 11px 18px;
+    display: flex; flex-wrap: wrap; gap: 6px 30px; align-items: center;
+    font-family: Consolas, monospace; font-size: 13px; color: #ffd9a0;
+  }
+  .formula-bar .label { color: #ffb454; font-weight: 700; font-family: "Segoe UI", "Malgun Gothic", sans-serif; }
+  .formula-bar .item { white-space: nowrap; }
+  .legend { margin-top: 12px; color: #8b93a7; font-size: 11.5px; display: flex; gap: 22px; flex-wrap: wrap; }
+  .line-sample { display: inline-block; width: 26px; height: 0; border-top: 2px solid #8b93a7; vertical-align: middle; margin-right: 6px; }
+  .line-sample.dash { border-top-style: dashed; border-color: #f0649c; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>조망도 — PM Plan · 아바타 · 역할 · 업무 · 스킬 · 세션</h1>
+  <div class="subtitle">자동차용 반도체 팹리스 예시 · 상세도는 avatar-structure-map.html 참조</div>
+
+  <svg class="map" viewBox="0 0 1320 770" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="ar-pm"     viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#e3585b"/></marker>
+      <marker id="ar-avatar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7c5cff"/></marker>
+      <marker id="ar-role"   viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2f81f7"/></marker>
+      <marker id="ar-task"   viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#3fb950"/></marker>
+      <marker id="ar-haiku"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#39c5cf"/></marker>
+      <marker id="ar-pink"   viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#f0649c"/></marker>
+      <marker id="ar-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7c5cff"/></marker>
+    </defs>
+
+    <!-- ===== 컬럼 헤더 ===== -->
+    <text x="110"  y="42" text-anchor="middle" font-size="11.5" fill="#8b93a7" font-weight="700" letter-spacing="1">PM PLAN</text>
+    <text x="345"  y="42" text-anchor="middle" font-size="11.5" fill="#8b93a7" font-weight="700" letter-spacing="1">아바타 카드</text>
+    <text x="550"  y="42" text-anchor="middle" font-size="11.5" fill="#8b93a7" font-weight="700" letter-spacing="1">역할</text>
+    <text x="790"  y="42" text-anchor="middle" font-size="11.5" fill="#8b93a7" font-weight="700" letter-spacing="1">업무 · 해야할 일</text>
+    <text x="1195" y="42" text-anchor="middle" font-size="11.5" fill="#8b93a7" font-weight="700" letter-spacing="1">스킬</text>
+
+    <!-- ===== 연결선 ===== -->
+    <!-- PM → 아바타 (배분) -->
+    <line x1="200" y1="260" x2="248" y2="260" stroke="#e3585b" stroke-width="2.2" marker-end="url(#ar-pm)"/>
+    <path d="M 200 300 C 228 300, 222 383, 246 383" fill="none" stroke="#e3585b" stroke-width="1.6" opacity="0.4" marker-end="url(#ar-pm)"/>
+    <!-- 아바타 → 역할 -->
+    <line x1="440" y1="235" x2="468" y2="176" stroke="#7c5cff" stroke-width="2" marker-end="url(#ar-avatar)"/>
+    <line x1="440" y1="290" x2="468" y2="360" stroke="#7c5cff" stroke-width="2" marker-end="url(#ar-avatar)"/>
+    <!-- 역할 → 업무 -->
+    <line x1="630" y1="152" x2="678" y2="96"  stroke="#2f81f7" stroke-width="1.8" marker-end="url(#ar-role)"/>
+    <line x1="630" y1="170" x2="678" y2="170" stroke="#2f81f7" stroke-width="1.8" marker-end="url(#ar-role)"/>
+    <line x1="630" y1="188" x2="678" y2="246" stroke="#2f81f7" stroke-width="1.8" marker-end="url(#ar-role)"/>
+    <line x1="630" y1="352" x2="678" y2="328" stroke="#2f81f7" stroke-width="1.8" marker-end="url(#ar-role)"/>
+    <line x1="630" y1="378" x2="678" y2="402" stroke="#2f81f7" stroke-width="1.8" marker-end="url(#ar-role)"/>
+    <!-- 업무 → 스킬 -->
+    <line x1="900" y1="92"  x2="1088" y2="92"  stroke="#3fb950" stroke-width="1.6" opacity="0.55" marker-end="url(#ar-task)"/>
+    <line x1="900" y1="170" x2="1088" y2="170" stroke="#3fb950" stroke-width="1.6" opacity="0.55" marker-end="url(#ar-task)"/>
+    <line x1="900" y1="248" x2="1088" y2="248" stroke="#3fb950" stroke-width="1.6" opacity="0.55" marker-end="url(#ar-task)"/>
+    <line x1="900" y1="326" x2="1088" y2="326" stroke="#3fb950" stroke-width="1.6" opacity="0.55" marker-end="url(#ar-task)"/>
+    <line x1="900" y1="404" x2="1088" y2="404" stroke="#3fb950" stroke-width="1.6" opacity="0.55" marker-end="url(#ar-task)"/>
+    <!-- 세션 → Haiku -->
+    <line x1="790" y1="610" x2="876" y2="628" stroke="#39c5cf" stroke-width="1.8" marker-end="url(#ar-haiku)"/>
+    <line x1="790" y1="670" x2="876" y2="658" stroke="#39c5cf" stroke-width="1.8" marker-end="url(#ar-haiku)"/>
+    <line x1="790" y1="726" x2="876" y2="688" stroke="#39c5cf" stroke-width="1.8" marker-end="url(#ar-haiku)"/>
+    <!-- Haiku → 업무 (점선 귀속) -->
+    <path d="M 950 580 C 1000 470, 985 370, 906 334"  fill="none" stroke="#f0649c" stroke-width="1.8" stroke-dasharray="6 5" opacity="0.85" marker-end="url(#ar-pink)"/>
+    <path d="M 995 580 C 1045 420, 1030 240, 906 178" fill="none" stroke="#f0649c" stroke-width="1.8" stroke-dasharray="6 5" opacity="0.85" marker-end="url(#ar-pink)"/>
+    <path d="M 1040 580 C 1090 400, 1062 140, 906 98" fill="none" stroke="#f0649c" stroke-width="1.8" stroke-dasharray="6 5" opacity="0.85" marker-end="url(#ar-pink)"/>
+    <text x="1000" y="440" font-size="11" font-family="Consolas, monospace" fill="#f0879c">#243</text>
+    <text x="1038" y="310" font-size="11" font-family="Consolas, monospace" fill="#f0879c">#242</text>
+    <text x="1072" y="200" font-size="11" font-family="Consolas, monospace" fill="#f0879c">#241</text>
+    <!-- 세션 → 아바타 (점선 선별) -->
+    <path d="M 555 585 C 508 490, 478 428, 436 345" fill="none" stroke="#7c5cff" stroke-width="1.8" stroke-dasharray="6 5" opacity="0.7" marker-end="url(#ar-purple)"/>
+    <text x="500" y="500" text-anchor="end" font-size="11" fill="#b9a8ff">로그인 ID로</text>
+    <text x="500" y="515" text-anchor="end" font-size="11" fill="#b9a8ff">아바타 선별</text>
+
+    <!-- ===== PM Plan ===== -->
+    <g>
+      <rect x="20" y="175" width="180" height="170" rx="12" fill="#1e2230" stroke="#2c3245"/>
+      <rect x="20" y="175" width="180" height="4" rx="2" fill="#e3585b"/>
+      <text x="110" y="207" text-anchor="middle" font-size="20">📋</text>
+      <text x="110" y="230" text-anchor="middle" font-size="14.5" font-weight="700" fill="#e6e9f0">PM Plan</text>
+      <text x="110" y="250" text-anchor="middle" font-size="11" fill="#8b93a7">AX-100 ADAS SoC · 총 12.0억</text>
+      <text x="110" y="278" text-anchor="middle" font-size="11.5" font-family="Consolas, monospace" fill="#ff9e9e">김설계 3.0억 (25%)</text>
+      <text x="110" y="298" text-anchor="middle" font-size="11.5" font-family="Consolas, monospace" fill="#ff9e9e" opacity="0.5">박공정 1.8억 (15%)</text>
+      <text x="110" y="318" text-anchor="middle" font-size="11.5" font-family="Consolas, monospace" fill="#ff9e9e" opacity="0.5">기타·NRE 7.2억 (60%)</text>
+    </g>
+
+    <!-- ===== 아바타 ===== -->
+    <g>
+      <rect x="250" y="185" width="190" height="150" rx="12" fill="#1e2230" stroke="#7c5cff" stroke-width="1.5"/>
+      <rect x="250" y="185" width="190" height="4" rx="2" fill="#7c5cff"/>
+      <text x="345" y="216" text-anchor="middle" font-size="20">🚗</text>
+      <text x="345" y="240" text-anchor="middle" font-size="14" font-weight="700" fill="#e6e9f0">김설계 · ADAS SoC팀</text>
+      <text x="345" y="260" text-anchor="middle" font-size="11" fill="#8b93a7">login: skim 으로 선별됨</text>
+      <text x="345" y="290" text-anchor="middle" font-size="13.5" font-weight="700" font-family="Consolas, monospace" fill="#ffb454">E = 2.89×</text>
+      <text x="345" y="314" text-anchor="middle" font-size="11" font-family="Consolas, monospace" fill="#ff9e9e">실효 코스트 ≈ 1.04억</text>
+    </g>
+    <g opacity="0.35">
+      <rect x="250" y="355" width="190" height="56" rx="10" fill="#1e2230" stroke="#2c3245"/>
+      <text x="345" y="378" text-anchor="middle" font-size="12" font-weight="700" fill="#e6e9f0">👤 박공정 · 파운드리협력</text>
+      <text x="345" y="398" text-anchor="middle" font-size="10.5" fill="#8b93a7">login 불일치 → 이 PC에선 제외</text>
+    </g>
+
+    <!-- ===== 역할 2개 ===== -->
+    <g>
+      <rect x="470" y="135" width="160" height="70" rx="10" fill="#1e2230" stroke="#2c3245"/>
+      <rect x="470" y="135" width="160" height="4" rx="2" fill="#2f81f7"/>
+      <text x="550" y="164" text-anchor="middle" font-size="12.5" font-weight="700" fill="#e6e9f0">RTL 설계 엔지니어</text>
+      <text x="550" y="188" text-anchor="middle" font-size="11" font-family="Consolas, monospace" fill="#7fb6ff">w=60% · E₁=3.43×</text>
+    </g>
+    <g>
+      <rect x="470" y="330" width="160" height="70" rx="10" fill="#1e2230" stroke="#2c3245"/>
+      <rect x="470" y="330" width="160" height="4" rx="2" fill="#2f81f7"/>
+      <text x="550" y="359" text-anchor="middle" font-size="12.5" font-weight="700" fill="#e6e9f0">검증 엔지니어</text>
+      <text x="550" y="383" text-anchor="middle" font-size="11" font-family="Consolas, monospace" fill="#7fb6ff">w=40% · E₂=2.08×</text>
+    </g>
+
+    <!-- ===== 업무 5개 ===== -->
+    <g>
+      <rect x="680" y="60" width="220" height="64" rx="10" fill="#1e2230" stroke="#2c3245"/>
+      <rect x="680" y="60" width="220" height="4" rx="2" fill="#3fb950"/>
+      <text x="790" y="86" text-anchor="middle" font-size="12.5" font-weight="700" fill="#e6e9f0">CAN-FD IP RTL 설계</text>
+      <text x="790" y="108" text-anchor="middle" font-size="11" font-family="Consolas, monospace" fill="#7ee2a0">w=50% · η=3.4×</text>
+    </g>
+    <g>
+      <rect x="680" y="138" width="220" height="64" rx="10" fill="#1e2230" stroke="#2c3245"/>
+      <rect x="680" y="138" width="220" height="4" rx="2" fill="#3fb950"/>
+      <text x="790" y="164" text-anchor="middle" font-size="12.5" font-weight="700" fill="#e6e9f0">린트 · CDC 클린업</text>
+      <text x="790" y="186" text-anchor="middle" font-size="11" font-family="Consolas, monospace" fill="#7ee2a0">w=30% · η=5.1×</text>
+    </g>
+    <g>
+      <rect x="680" y="216" width="220" height="64" rx="10" fill="#1e2230" stroke="#2c3245"/>
+      <rect x="680" y="216" width="220" height="4" rx="2" fill="#3fb950" opacity="0.5"/>
+      <text x="790" y="242" text-anchor="middle" font-size="12.5" font-weight="700" fill="#e6e9f0">합성 · 타이밍 마감</text>
+      <text x="790" y="264" text-anchor="middle" font-size="11" font-family="Consolas, monospace" fill="#7ee2a0" opacity="0.55">w=20% · η=1.0 (세션 없음)</text>
+    </g>
+    <g>
+      <rect x="680" y="294" width="220" height="64" rx="10" fill="#1e2230" stroke="#2c3245"/>
+      <rect x="680" y="294" width="220" height="4" rx="2" fill="#3fb950"/>
+      <text x="790" y="320" text-anchor="middle" font-size="12.5" font-weight="700" fill="#e6e9f0">UVM 테스트벤치 · 회귀</text>
+      <text x="790" y="342" text-anchor="middle" font-size="11" font-family="Consolas, monospace" fill="#7ee2a0">w=60% · η=2.8×</text>
+    </g>
+    <g>
+      <rect x="680" y="372" width="220" height="64" rx="10" fill="#1e2230" stroke="#2c3245"/>
+      <rect x="680" y="372" width="220" height="4" rx="2" fill="#3fb950" opacity="0.5"/>
+      <text x="790" y="398" text-anchor="middle" font-size="12.5" font-weight="700" fill="#e6e9f0">ISO 26262 기능안전 문서</text>
+      <text x="790" y="420" text-anchor="middle" font-size="11" font-family="Consolas, monospace" fill="#7ee2a0" opacity="0.55">w=40% · η=1.0 (세션 없음)</text>
+    </g>
+
+    <!-- ===== 스킬 5개 ===== -->
+    <g font-family="Consolas, monospace" font-size="11.5">
+      <rect x="1090" y="74"  width="210" height="36" rx="8" fill="#2a2415" stroke="#4d3f14"/>
+      <text x="1195" y="97"  text-anchor="middle" fill="#e8c56a">verilog-rtl-gen · ip-integ…</text>
+      <rect x="1090" y="152" width="210" height="36" rx="8" fill="#2a2415" stroke="#4d3f14"/>
+      <text x="1195" y="175" text-anchor="middle" fill="#e8c56a">lint-autofix · cdc-analyzer</text>
+      <rect x="1090" y="230" width="210" height="36" rx="8" fill="#2a2415" stroke="#4d3f14"/>
+      <text x="1195" y="253" text-anchor="middle" fill="#e8c56a">synth-runner</text>
+      <rect x="1090" y="308" width="210" height="36" rx="8" fill="#2a2415" stroke="#4d3f14"/>
+      <text x="1195" y="331" text-anchor="middle" fill="#e8c56a">uvm-testgen · coverage…</text>
+      <rect x="1090" y="386" width="210" height="36" rx="8" fill="#2a2415" stroke="#4d3f14"/>
+      <text x="1195" y="409" text-anchor="middle" fill="#e8c56a">fmeda-writer</text>
+    </g>
+
+    <!-- ===== 세션 3개 ===== -->
+    <text x="655" y="568" text-anchor="middle" font-size="11.5" fill="#8b93a7" font-weight="700" letter-spacing="1">작업 세션 (종료 시)</text>
+    <g>
+      <rect x="520" y="585" width="270" height="48" rx="9" fill="#1e2230" stroke="#2c3245"/>
+      <rect x="520" y="585" width="4" height="48" rx="2" fill="#f0649c"/>
+      <text x="536" y="605" font-size="11.5" font-family="Consolas, monospace" fill="#f0649c" font-weight="700">#241</text>
+      <text x="536" y="623" font-size="11" fill="#8b93a7">CAN-FD 프로토콜 엔진 RTL 초안 생성 …</text>
+    </g>
+    <g>
+      <rect x="520" y="645" width="270" height="48" rx="9" fill="#1e2230" stroke="#2c3245"/>
+      <rect x="520" y="645" width="4" height="48" rx="2" fill="#f0649c"/>
+      <text x="536" y="665" font-size="11.5" font-family="Consolas, monospace" fill="#f0649c" font-weight="700">#242</text>
+      <text x="536" y="683" font-size="11" fill="#8b93a7">Spyglass 린트 128건 → 0건 자동수정 …</text>
+    </g>
+    <g>
+      <rect x="520" y="705" width="270" height="48" rx="9" fill="#1e2230" stroke="#2c3245"/>
+      <rect x="520" y="705" width="4" height="48" rx="2" fill="#f0649c"/>
+      <text x="536" y="725" font-size="11.5" font-family="Consolas, monospace" fill="#f0649c" font-weight="700">#243</text>
+      <text x="536" y="743" font-size="11" fill="#8b93a7">UVM 시퀀스 12종 · 커버리지 87→95% …</text>
+    </g>
+
+    <!-- ===== Haiku ===== -->
+    <g>
+      <rect x="880" y="580" width="300" height="150" rx="12" fill="#1e2230" stroke="#39c5cf" stroke-width="1.5"/>
+      <rect x="880" y="580" width="300" height="4" rx="2" fill="#39c5cf"/>
+      <text x="1030" y="612" text-anchor="middle" font-size="20">🤖</text>
+      <text x="1030" y="636" text-anchor="middle" font-size="14" font-weight="700" fill="#7ee0e8">Haiku 판정</text>
+      <text x="1030" y="660" text-anchor="middle" font-size="11.5" fill="#8b93a7">① 어느 역할·업무의 작업인지 매칭</text>
+      <text x="1030" y="678" text-anchor="middle" font-size="11.5" fill="#8b93a7">② 수작업 시뮬 대비 효율계수 η 산정</text>
+      <text x="1030" y="706" text-anchor="middle" font-size="11.5" font-family="Consolas, monospace" fill="#39c5cf">η = 수작업 예상시간 ÷ 세션 실제시간</text>
+    </g>
+  </svg>
+
+  <div class="formula-bar">
+    <span class="label">효율 집계</span>
+    <span class="item">E(아바타) = Σ w_r × Σ w_t × η_t</span>
+    <span class="item">E = 60%×3.43 + 40%×2.08 ≈ 2.89×</span>
+    <span class="item">실효 코스트 = 3.0억 ÷ 2.89 ≈ 1.04억</span>
+  </div>
+
+  <div class="legend">
+    <span><i class="line-sample"></i>정적 구조 (사전 정의 · 비중 w)</span>
+    <span><i class="line-sample dash"></i>동적 귀속 (세션 종료 시 Haiku 매칭 → 업무 연결 · η 부여)</span>
+  </div>
+</div>
+</body>
+</html>

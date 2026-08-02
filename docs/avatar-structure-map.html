@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>아바타 카드 — 역할·업무·스킬·세션 연결 및 효율성 계산 구조</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #171a23;
+    --card: #1e2230;
+    --border: #2c3245;
+    --text: #e6e9f0;
+    --muted: #8b93a7;
+    --avatar: #7c5cff;
+    --role: #2f81f7;
+    --task: #3fb950;
+    --skill: #d29922;
+    --session: #f0649c;
+    --haiku: #39c5cf;
+    --eff: #ffb454;
+    --pm: #e3585b;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Malgun Gothic", sans-serif;
+    padding: 28px 20px 60px;
+  }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 22px; max-width: 1400px; }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 14px;
+    margin-bottom: 24px; font-size: 12px; color: var(--muted);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+  #diagram { position: relative; max-width: 1400px; margin: 0 auto; }
+  #edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
+
+  .columns {
+    position: relative; z-index: 1;
+    display: grid;
+    grid-template-columns: 0.95fr 1.0fr 0.85fr 1.3fr 0.75fr;
+    gap: 40px;
+    align-items: start;
+  }
+  .col-title {
+    font-size: 12px; font-weight: 700; letter-spacing: 1px;
+    color: var(--muted); text-transform: uppercase;
+    margin-bottom: 12px; text-align: center;
+  }
+  .stack { display: flex; flex-direction: column; gap: 18px; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 13px;
+  }
+  .card .name { font-weight: 700; font-size: 14px; }
+  .card .desc { color: var(--muted); font-size: 12px; margin-top: 4px; }
+
+  .weight {
+    display: inline-block; margin-left: 6px;
+    background: #14301c; color: #7ee2a0;
+    border: 1px solid #2b5d3a; border-radius: 6px;
+    padding: 1px 7px; font-size: 11px; font-family: Consolas, monospace;
+    vertical-align: 1px;
+  }
+  .role-card .weight { background: #10233d; color: #7fb6ff; border-color: #26548c; }
+
+  .eff-badge {
+    display: inline-block;
+    background: #3a2a10; color: var(--eff);
+    border: 1px solid #6b4c1a; border-radius: 6px;
+    padding: 1px 7px; font-size: 11px; font-family: Consolas, monospace;
+    font-weight: 700;
+  }
+
+  /* PM Plan */
+  .pm-card { border-left: 4px solid var(--pm); }
+  .pm-card .total {
+    margin: 8px 0 10px; font-family: Consolas, monospace;
+    color: #ff9e9e; font-size: 15px; font-weight: 800;
+  }
+  .alloc { display: flex; flex-direction: column; gap: 6px; }
+  .alloc-row {
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    background: #2a1b1e; border: 1px solid #5a2f33; border-radius: 8px;
+    padding: 6px 10px; font-size: 12px;
+  }
+  .alloc-row.etc { opacity: 0.5; }
+  .alloc-row .who { color: var(--text); }
+  .alloc-row .cost { font-family: Consolas, monospace; color: #ff9e9e; font-weight: 700; white-space: nowrap; }
+  .pm-note { margin-top: 10px; padding-top: 9px; border-top: 1px dashed #5a2f33; font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+  .pm-note b { color: var(--eff); }
+
+  /* 아바타 */
+  .avatar-card { border-left: 4px solid var(--avatar); }
+  .avatar-card.selected { box-shadow: 0 0 0 2px var(--avatar); }
+  .avatar-card.dimmed { opacity: 0.35; }
+  .avatar-head { display: flex; align-items: center; gap: 10px; }
+  .avatar-emoji {
+    width: 38px; height: 38px; border-radius: 50%;
+    background: #2a2350; display: flex; align-items: center; justify-content: center;
+    font-size: 20px; flex-shrink: 0;
+  }
+  .login-id {
+    display: inline-block; margin-top: 8px;
+    background: #241d45; color: #b9a8ff;
+    border: 1px solid #3d3370; border-radius: 6px;
+    padding: 2px 8px; font-size: 11px; font-family: Consolas, monospace;
+  }
+  .avatar-eff {
+    margin-top: 10px; padding-top: 10px;
+    border-top: 1px dashed #3d3370;
+    font-size: 12px;
+  }
+  .avatar-eff .big { color: var(--eff); font-size: 18px; font-weight: 800; font-family: Consolas, monospace; }
+
+  /* 역할 */
+  .role-card { border-left: 4px solid var(--role); }
+  .role-eff { margin-top: 6px; font-size: 11.5px; color: var(--muted); }
+
+  /* 업무 */
+  .task-card { border-left: 4px solid var(--task); }
+  .task-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .todo { list-style: none; margin-top: 8px; }
+  .todo li {
+    font-size: 12px; color: var(--muted);
+    padding: 3px 0 3px 20px; position: relative;
+  }
+  .todo li::before {
+    content: ""; position: absolute; left: 0; top: 6px;
+    width: 11px; height: 11px; border-radius: 3px;
+    border: 1.5px solid #3fb95088;
+  }
+  .todo li.done { text-decoration: line-through; opacity: 0.55; }
+  .todo li.done::before { background: #3fb95055; }
+
+  /* 스킬 */
+  .skill-group { display: flex; flex-direction: column; gap: 8px; }
+  .skill-chip {
+    background: #2a2415;
+    border: 1px solid #4d3f14;
+    border-left: 4px solid var(--skill);
+    border-radius: 8px;
+    padding: 7px 12px;
+    font-size: 12px;
+    font-family: Consolas, monospace;
+    color: #e8c56a;
+  }
+
+  /* 세션 레이어 */
+  .session-layer {
+    position: relative; z-index: 1;
+    margin-top: 70px;
+    background: var(--panel);
+    border: 1px dashed #4a3040;
+    border-radius: 14px;
+    padding: 20px 24px 24px;
+  }
+  .session-layer > .layer-title {
+    font-size: 13px; font-weight: 700; color: var(--session);
+    letter-spacing: 1px; margin-bottom: 14px;
+  }
+  .pipeline {
+    display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px;
+    margin-bottom: 20px;
+  }
+  .pipe-step {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 14px;
+    font-size: 12px; flex: 1; min-width: 150px;
+  }
+  .pipe-step b { display: block; font-size: 12.5px; margin-bottom: 3px; }
+  .pipe-step .note { color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+  .pipe-arrow { align-self: center; color: var(--muted); font-size: 18px; }
+  .pipe-step.haiku { border-color: var(--haiku); }
+  .pipe-step.haiku b { color: var(--haiku); }
+  .pipe-step.filter { border-color: var(--avatar); }
+  .pipe-step.filter b { color: #b9a8ff; }
+  .pipe-step.effc { border-color: var(--eff); }
+  .pipe-step.effc b { color: var(--eff); }
+
+  .sessions { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  .session-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-left: 4px solid var(--session);
+    border-radius: 10px; padding: 11px 14px; font-size: 12.5px;
+  }
+  .session-card .sid { font-family: Consolas, monospace; color: var(--session); font-weight: 700; }
+  .session-card .summary { color: var(--muted); margin-top: 5px; line-height: 1.5; }
+  .session-card .match { margin-top: 8px; font-size: 11.5px; color: var(--haiku); }
+  .session-card .match b { color: #7ee0e8; }
+  .session-card .eff-line { margin-top: 5px; font-size: 11.5px; color: var(--muted); }
+
+  /* 효율 계산 패널 */
+  .calc-panel {
+    position: relative; z-index: 1;
+    margin-top: 26px;
+    background: var(--panel);
+    border: 1px solid #4a3c1e;
+    border-radius: 14px;
+    padding: 20px 24px 24px;
+    max-width: 1400px;
+  }
+  .calc-panel .layer-title {
+    font-size: 13px; font-weight: 700; color: var(--eff);
+    letter-spacing: 1px; margin-bottom: 6px;
+  }
+  .calc-panel .formula {
+    font-family: Consolas, monospace; font-size: 13px;
+    background: #12141c; border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 14px; margin: 10px 0 16px;
+    color: #ffd9a0;
+    overflow-x: auto; white-space: nowrap;
+  }
+  .calc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .calc-box {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 16px; font-size: 12.5px;
+  }
+  .calc-box h3 { font-size: 13px; margin-bottom: 8px; color: #7fb6ff; }
+  .calc-box table { width: 100%; border-collapse: collapse; font-family: Consolas, monospace; font-size: 12px; }
+  .calc-box td { padding: 3px 6px; color: var(--muted); }
+  .calc-box td.num { text-align: right; color: var(--text); }
+  .calc-box tr.sum td { border-top: 1px solid var(--border); color: var(--eff); font-weight: 700; padding-top: 6px; }
+  .calc-total {
+    grid-column: 1 / -1;
+    background: #241c10; border: 1px solid #6b4c1a; border-radius: 10px;
+    padding: 14px 18px; font-size: 13px;
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;
+  }
+  .calc-total .expr { font-family: Consolas, monospace; color: #ffd9a0; font-size: 12.5px; }
+  .calc-total .result { color: var(--eff); font-size: 22px; font-weight: 800; font-family: Consolas, monospace; }
+
+  footer { max-width: 1400px; margin: 26px auto 0; color: var(--muted); font-size: 11.5px; line-height: 1.7; }
+
+  @media (max-width: 900px) { .calc-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<h1>PM Plan → 아바타 카드 → 역할 → 업무 → 스킬 · 세션 매칭 · 효율성 계산 구조</h1>
+<div class="subtitle">예시: 자동차용 반도체 팹리스 회사. PM Plan(프로젝트 전체 코스트 계획)이 각 아바타에 코스트를 배분하고, 아바타가 역할을 갖고, 역할이 업무(해야할 일)를 갖고, 업무에 스킬이 연결된다. 세션은 PC 로그인 ID로 아바타를 선별한 뒤 종료 시 Haiku가 ① 어느 업무의 작업인지 매칭하고 ② 사람 수작업 시뮬 대비 효율계수 η를 산정한다. η에 업무가 역할에서 갖는 비중을 곱해 역할 효율을, 다시 역할 비중을 곱해 아바타 전체 효율을 계산한다.</div>
+
+<div class="legend">
+  <span><i class="dot" style="background:var(--pm)"></i> PM Plan (코스트 배분)</span>
+  <span><i class="dot" style="background:var(--avatar)"></i> 아바타 카드</span>
+  <span><i class="dot" style="background:var(--role)"></i> 역할 (비중 w<sub>r</sub>)</span>
+  <span><i class="dot" style="background:var(--task)"></i> 업무 (역할 내 비중 w<sub>t</sub>)</span>
+  <span><i class="dot" style="background:var(--skill)"></i> 스킬</span>
+  <span><i class="dot" style="background:var(--session)"></i> 세션</span>
+  <span><i class="dot" style="background:var(--haiku)"></i> Haiku 매칭</span>
+  <span><i class="dot" style="background:var(--eff)"></i> 효율계수 η</span>
+</div>
+
+<div id="diagram">
+  <svg id="edges"></svg>
+
+  <div class="columns">
+    <!-- PM Plan -->
+    <div>
+      <div class="col-title">⓪ PM Plan · 코스트 계획</div>
+      <div class="stack">
+        <div class="card pm-card" id="pmplan">
+          <div class="name">📋 AX-100 ADAS SoC 개발</div>
+          <div class="desc">기간 18개월 · 프로젝트 전체 코스트</div>
+          <div class="total">총 12.0억</div>
+          <div class="alloc">
+            <div class="alloc-row" id="alloc1">
+              <span class="who">🚗 김설계</span>
+              <span class="cost">3.0억 (25%)</span>
+            </div>
+            <div class="alloc-row" id="alloc2">
+              <span class="who">👤 박공정</span>
+              <span class="cost">1.8억 (15%)</span>
+            </div>
+            <div class="alloc-row etc">
+              <span class="who">기타 아바타 · NRE</span>
+              <span class="cost">7.2억 (60%)</span>
+            </div>
+          </div>
+          <div class="pm-note">
+            효율 반영 실효 코스트 = 배분 코스트 ÷ E<br>
+            김설계: 3.0억 ÷ <b>2.89</b> ≈ <b>1.04억</b>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 아바타 -->
+    <div>
+      <div class="col-title">① 아바타 카드</div>
+      <div class="stack">
+        <div class="card avatar-card selected" id="avatar1">
+          <div class="avatar-head">
+            <div class="avatar-emoji">🚗</div>
+            <div>
+              <div class="name">김설계 · ADAS SoC팀</div>
+              <div class="desc">차량용 반도체 팹리스 — 설계·검증 담당</div>
+            </div>
+          </div>
+          <span class="login-id">login: skim</span>
+          <div class="avatar-eff">
+            아바타 전체 효율성<br>
+            <span class="big">E = 2.89×</span>
+            <span class="desc" style="display:inline"> (사람 수작업 대비)</span><br>
+            <span class="desc" style="display:inline">PM Plan 배분 3.0억 → 실효 ≈ 1.04억</span>
+          </div>
+        </div>
+        <div class="card avatar-card dimmed" id="avatar2">
+          <div class="avatar-head">
+            <div class="avatar-emoji">👤</div>
+            <div>
+              <div class="name">박공정 · 파운드리협력팀</div>
+              <div class="desc">로그인 ID 불일치 → 제외</div>
+            </div>
+          </div>
+          <span class="login-id">login: gpark</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 역할 -->
+    <div>
+      <div class="col-title">② 역할</div>
+      <div class="stack">
+        <div class="card role-card" id="role1">
+          <div class="name">RTL 설계 엔지니어 <span class="weight">w=60%</span></div>
+          <div class="desc">ADAS SoC 디지털 블록 설계</div>
+          <div class="role-eff">역할 효율 E₁ = <b style="color:var(--eff)">3.43×</b></div>
+        </div>
+        <div class="card role-card" id="role2">
+          <div class="name">검증 엔지니어 <span class="weight">w=40%</span></div>
+          <div class="desc">기능검증 · ISO 26262 기능안전</div>
+          <div class="role-eff">역할 효율 E₂ = <b style="color:var(--eff)">2.08×</b></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 업무 -->
+    <div>
+      <div class="col-title">③ 업무 · 해야할 일 (역할 내 비중)</div>
+      <div class="stack">
+        <div class="card task-card" id="task1">
+          <div class="task-head">
+            <span class="name">CAN-FD IP RTL 설계</span>
+            <span><span class="weight">w=50%</span> <span class="eff-badge">η=3.4×</span></span>
+          </div>
+          <ul class="todo">
+            <li class="done">프로토콜 엔진 RTL 초안</li>
+            <li>클록 게이팅 적용</li>
+            <li>버스 인터페이스(AXI4-Lite) 연결</li>
+          </ul>
+        </div>
+        <div class="card task-card" id="task2">
+          <div class="task-head">
+            <span class="name">린트 · CDC 클린업</span>
+            <span><span class="weight">w=30%</span> <span class="eff-badge">η=5.1×</span></span>
+          </div>
+          <ul class="todo">
+            <li class="done">Spyglass 린트 위반 0건</li>
+            <li>CDC 크로싱 리포트 검토</li>
+          </ul>
+        </div>
+        <div class="card task-card" id="task3">
+          <div class="task-head">
+            <span class="name">합성 · 타이밍 마감</span>
+            <span><span class="weight">w=20%</span> <span class="eff-badge" style="opacity:.55">η=1.0 (세션 없음)</span></span>
+          </div>
+          <ul class="todo">
+            <li>WNS 0 달성 (AEC-Q100 온도 코너)</li>
+            <li>파워 리포트 정리</li>
+          </ul>
+        </div>
+        <div class="card task-card" id="task4">
+          <div class="task-head">
+            <span class="name">UVM 테스트벤치 · 회귀</span>
+            <span><span class="weight">w=60%</span> <span class="eff-badge">η=2.8×</span></span>
+          </div>
+          <ul class="todo">
+            <li class="done">기본 시퀀스 라이브러리</li>
+            <li>기능 커버리지 95% 달성</li>
+            <li>야간 회귀 스위트 구성</li>
+          </ul>
+        </div>
+        <div class="card task-card" id="task5">
+          <div class="task-head">
+            <span class="name">ISO 26262 기능안전 문서</span>
+            <span><span class="weight">w=40%</span> <span class="eff-badge" style="opacity:.55">η=1.0 (세션 없음)</span></span>
+          </div>
+          <ul class="todo">
+            <li>FMEDA 작성 (ASIL-B 목표)</li>
+            <li>안전 매뉴얼 초안</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- 스킬 -->
+    <div>
+      <div class="col-title">④ 스킬</div>
+      <div class="stack">
+        <div class="skill-group" id="skills1">
+          <div class="skill-chip">verilog-rtl-gen</div>
+          <div class="skill-chip">ip-integrator</div>
+        </div>
+        <div class="skill-group" id="skills2">
+          <div class="skill-chip">lint-autofix</div>
+          <div class="skill-chip">cdc-analyzer</div>
+        </div>
+        <div class="skill-group" id="skills3">
+          <div class="skill-chip">synth-runner</div>
+        </div>
+        <div class="skill-group" id="skills4">
+          <div class="skill-chip">uvm-testgen</div>
+          <div class="skill-chip">coverage-closer</div>
+        </div>
+        <div class="skill-group" id="skills5">
+          <div class="skill-chip">fmeda-writer</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 세션 레이어 -->
+  <div class="session-layer">
+    <div class="layer-title">⑤ 세션 → 업무 매칭 · 효율계수 산정 파이프라인</div>
+    <div class="pipeline">
+      <div class="pipe-step filter" id="pipefilter">
+        <b>1. 아바타 선별</b>
+        <div class="note">PC 로그인 계정 ID 기준 아바타 카드 선별 (login: skim → 🚗 김설계)</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step">
+        <b>2. 작업 세션 수행 → 종료</b>
+        <div class="note">세션 종료 시 대화 내용(요약/transcript) 확보</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step haiku">
+        <b>3. Haiku: 업무 매칭</b>
+        <div class="note">선별된 아바타 하위 역할·업무 목록을 후보로 주고, 세션 내용이 어느 업무인지 분류</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step effc">
+        <b>4. Haiku: 효율계수 η 산정</b>
+        <div class="note">같은 작업을 사람이 수작업으로 했을 때를 시뮬(예상 소요시간·품질)해 AI 세션과 비교 → η = 수작업 예상시간 ÷ 세션 실제시간 (품질 보정)</div>
+      </div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-step">
+        <b>5. 업무에 연결 · 집계</b>
+        <div class="note">세션을 업무에 귀속(점선), η를 업무 비중에 곱해 역할→아바타 효율로 합산</div>
+      </div>
+    </div>
+
+    <div class="sessions">
+      <div class="session-card" id="sess1">
+        <span class="sid">session #241</span> <span class="eff-badge">η=3.4×</span>
+        <div class="summary">"CAN-FD 프로토콜 엔진 RTL 초안 생성, 비트 타이밍 설정 레지스터…"</div>
+        <div class="match">🤖 매칭 → <b>RTL 설계 / CAN-FD IP RTL 설계</b></div>
+        <div class="eff-line">수작업 시뮬 17h ÷ 세션 5h = 3.4×</div>
+      </div>
+      <div class="session-card" id="sess2">
+        <span class="sid">session #242</span> <span class="eff-badge">η=5.1×</span>
+        <div class="summary">"Spyglass 린트 위반 128건 → 0건 자동수정, CDC 폴스패스 정리…"</div>
+        <div class="match">🤖 매칭 → <b>RTL 설계 / 린트 · CDC 클린업</b></div>
+        <div class="eff-line">수작업 시뮬 10h ÷ 세션 2h = 5.1×</div>
+      </div>
+      <div class="session-card" id="sess3">
+        <span class="sid">session #243</span> <span class="eff-badge">η=2.8×</span>
+        <div class="summary">"UVM 시퀀스 12종 생성, 기능 커버리지 87% → 95%…"</div>
+        <div class="match">🤖 매칭 → <b>검증 / UVM 테스트벤치 · 회귀</b></div>
+        <div class="eff-line">수작업 시뮬 14h ÷ 세션 5h = 2.8×</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 효율 계산 패널 -->
+  <div class="calc-panel">
+    <div class="layer-title">⑥ 아바타 전체 효율성 계산</div>
+    <div class="formula">E(아바타) = Σ<sub>역할 r</sub> w<sub>r</sub> × [ Σ<sub>업무 t∈r</sub> w<sub>t</sub> × η<sub>t</sub> ] &nbsp;&nbsp;·&nbsp;&nbsp; η<sub>t</sub> = Haiku 산정 세션 효율계수 (세션 없는 업무 = 1.0 기준)</div>
+    <div class="calc-grid">
+      <div class="calc-box">
+        <h3>역할 1 — RTL 설계 엔지니어 (w=60%)</h3>
+        <table>
+          <tr><td>CAN-FD IP RTL 설계</td><td class="num">50% × 3.4</td><td class="num">= 1.70</td></tr>
+          <tr><td>린트 · CDC 클린업</td><td class="num">30% × 5.1</td><td class="num">= 1.53</td></tr>
+          <tr><td>합성 · 타이밍 마감</td><td class="num">20% × 1.0</td><td class="num">= 0.20</td></tr>
+          <tr class="sum"><td>역할 효율 E₁</td><td></td><td class="num">= 3.43×</td></tr>
+        </table>
+      </div>
+      <div class="calc-box">
+        <h3>역할 2 — 검증 엔지니어 (w=40%)</h3>
+        <table>
+          <tr><td>UVM 테스트벤치 · 회귀</td><td class="num">60% × 2.8</td><td class="num">= 1.68</td></tr>
+          <tr><td>ISO 26262 기능안전 문서</td><td class="num">40% × 1.0</td><td class="num">= 0.40</td></tr>
+          <tr class="sum"><td>역할 효율 E₂</td><td></td><td class="num">= 2.08×</td></tr>
+        </table>
+      </div>
+      <div class="calc-total">
+        <span class="expr">E(김설계) = 60% × 3.43 + 40% × 2.08 = 2.058 + 0.832</span>
+        <span class="result">≈ 2.89×</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer>
+  실선 = 정적 구조 (PM Plan→아바타 코스트 배분, 아바타→역할→업무→스킬, 비중 w 포함 사전 정의). 점선 = 동적 귀속 (세션→업무, 종료 시 Haiku 매칭 + 효율계수 η 산정).
+  PM Plan은 프로젝트 전체 코스트에서 각 아바타가 차지하는 값(배분액·비중)을 정의하며, 아바타 효율 E로 나누면 효율 반영 실효 코스트가 된다.
+  η는 "사람이 수작업으로 했을 때"를 Haiku가 시뮬한 예상 소요시간을 AI 세션 실제 소요시간으로 나눈 값(품질 보정 포함). 세션이 아직 없는 업무는 기준값 1.0.
+  숫자는 예시 데이터.
+</footer>
+
+<script>
+  const solidEdges = [
+    ["alloc1", "avatar1"], ["alloc2", "avatar2"],
+    ["avatar1", "role1"], ["avatar1", "role2"],
+    ["role1", "task1"], ["role1", "task2"], ["role1", "task3"],
+    ["role2", "task4"], ["role2", "task5"],
+    ["task1", "skills1"], ["task2", "skills2"], ["task3", "skills3"],
+    ["task4", "skills4"], ["task5", "skills5"],
+  ];
+  const dashedEdges = [
+    ["sess1", "task1", "#241 · η=3.4×"],
+    ["sess2", "task2", "#242 · η=5.1×"],
+    ["sess3", "task4", "#243 · η=2.8×"],
+  ];
+  const selectEdges = [
+    ["pipefilter", "avatar1", "로그인 ID로 아바타 선별"],
+  ];
+
+  const colors = {
+    alloc1: "#e3585b", alloc2: "#e3585b",
+    avatar1: "#7c5cff", role1: "#2f81f7", role2: "#2f81f7",
+    task1: "#3fb950", task2: "#3fb950", task3: "#3fb950",
+    task4: "#3fb950", task5: "#3fb950",
+  };
+
+  function draw() {
+    const svg = document.getElementById("edges");
+    const dia = document.getElementById("diagram");
+    const dr = dia.getBoundingClientRect();
+    svg.setAttribute("width", dr.width);
+    svg.setAttribute("height", dr.height);
+    svg.innerHTML = "";
+
+    function rectOf(id) {
+      const r = document.getElementById(id).getBoundingClientRect();
+      return { left: r.left - dr.left, right: r.right - dr.left,
+               top: r.top - dr.top, bottom: r.bottom - dr.top,
+               cx: r.left - dr.left + r.width / 2, cy: r.top - dr.top + r.height / 2 };
+    }
+
+    function path(d, color, dashed) {
+      const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      p.setAttribute("d", d);
+      p.setAttribute("fill", "none");
+      p.setAttribute("stroke", color);
+      p.setAttribute("stroke-width", "1.8");
+      p.setAttribute("opacity", dashed ? "0.75" : "0.55");
+      if (dashed) p.setAttribute("stroke-dasharray", "6 5");
+      svg.appendChild(p);
+    }
+
+    function label(x, y, text, color) {
+      const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      t.setAttribute("x", x);
+      t.setAttribute("y", y);
+      t.setAttribute("text-anchor", "middle");
+      t.setAttribute("font-size", "11");
+      t.setAttribute("font-family", "Consolas, monospace");
+      t.setAttribute("fill", color);
+      t.setAttribute("paint-order", "stroke");
+      t.setAttribute("stroke", "#0f1117");
+      t.setAttribute("stroke-width", "4");
+      t.textContent = text;
+      svg.appendChild(t);
+    }
+
+    for (const [a, b] of solidEdges) {
+      const s = rectOf(a), t = rectOf(b);
+      const mx = (s.right + t.left) / 2;
+      path(`M ${s.right} ${s.cy} C ${mx} ${s.cy}, ${mx} ${t.cy}, ${t.left} ${t.cy}`,
+           colors[a] || "#8b93a7", false);
+    }
+    for (const [a, b, txt] of dashedEdges) {
+      const s = rectOf(a), t = rectOf(b);
+      path(`M ${s.cx} ${s.top} C ${s.cx} ${s.top - 90}, ${t.cx} ${t.bottom + 90}, ${t.cx} ${t.bottom}`,
+           "#f0649c", true);
+      if (txt) label((s.cx + t.cx) / 2, (s.top + t.bottom) / 2, txt, "#f0879c");
+    }
+    for (const [a, b, txt] of selectEdges) {
+      const s = rectOf(a), t = rectOf(b);
+      path(`M ${s.cx} ${s.top} C ${s.cx} ${s.top - 120}, ${t.cx} ${t.bottom + 120}, ${t.cx} ${t.bottom}`,
+           "#7c5cff", true);
+      if (txt) label((s.cx + t.cx) / 2, (s.top + t.bottom) / 2, txt, "#b9a8ff");
+    }
+  }
+
+  window.addEventListener("load", draw);
+  window.addEventListener("resize", draw);
+</script>
+
+</body>
+</html>
