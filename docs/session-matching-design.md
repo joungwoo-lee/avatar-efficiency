@@ -6,6 +6,15 @@
 
 **채택안: 클로드 세션 시작 시점에 백그라운드 스위퍼를 띄워, 시작 시점 이전의 미처리 transcript를 소급 처리한다.**
 
+## 동작 흐름 요약
+
+사용자가 클로드를 켜면 SessionStart hook이 스위퍼를 백그라운드로 분리 실행하고 즉시 리턴한다(세션 기동 무지연).
+스위퍼는 락·스로틀을 통과한 뒤 `~/.claude/projects/` 전체를 스캔해 **"시작 시점보다 오래됐고, 원장에 처리 기록이 없거나
+책갈피 이후 새 대화가 있으며, 최근 30분간 조용한"** transcript만 고른다. 각 파일을 Haiku(`claude -p`)로
+업무 매칭 + 효율계수 η 산정한 뒤 outbox.jsonl 원장에 기록하고, 집계 서버로 비동기 송출한다.
+사용자의 진행 중 세션은 읽지도 건드리지도 않으며, 한 번 처리한 세션은 다시 처리하지 않는다.
+(η 산정·송출·가치 계산 상세 → [efficiency-metrics-design.md](efficiency-metrics-design.md))
+
 ## 1. 분석 대상 파일 — transcript
 
 - 위치: `~/.claude/projects/<cwd 인코딩 폴더>/<세션uuid>.jsonl`
