@@ -1,0 +1,16 @@
+{
+  "projectsDir": "%USERPROFILE%\\.claude\\projects",
+  "outboxPath": "%USERPROFILE%\\.sweeper\\outbox.jsonl",
+  "lockPath": "%USERPROFILE%\\.sweeper\\sweep.lock",
+  "analysisCwd": "%USERPROFILE%\\.sweeper\\analysis",
+  "avatarsPath": "<repo>\\avatars.sample.json",
+  "serverUrl": "http://127.0.0.1:18220",
+  "throttleHours": 4,
+  "idleGuardMinutes": 30,
+  "gapCapMinutes": 15,
+  "inProgressStaleHours": 1,
+  "minSessionHours": 0.1,
+  "model": "haiku",
+  "claudeCmd": "claude",
+  "excerpt": { "lastMessages": 12, "maxChars": 400, "firstPromptMaxChars": 1500 }
+}

@@ -1,0 +1,7 @@
+{
+  "_comment": "가치 산출 단가. ratePerHour = 사람 시간당 단가(KRW, PM Plan 배분액÷기간에서 도출). 토큰 단가는 API 정가 환산 기회비용 — 구독제여도 이 기준으로 일관 유지.",
+  "ratePerHour": 60000,
+  "supervisionRatePerHour": 12000,
+  "usdToKrw": 1400,
+  "pricingPerMTokUSD": { "input": 1.0, "output": 5.0, "cacheRead": 0.1, "cacheCreation": 1.25 }
+}

@@ -1,0 +1,58 @@
+{
+  "schemaVer": 1,
+  "avatars": [
+    {
+      "avatarId": "kim-seolgye",
+      "loginId": "skim",
+      "script": "자동차용 반도체 팹리스 ADAS SoC팀. 디지털 설계·검증 담당. RTL 코딩, 린트/CDC, 합성, UVM 검증, ISO 26262 문서 작업을 수행한다.",
+      "roles": [
+        {
+          "id": "rtl-design",
+          "name": "RTL 설계 엔지니어",
+          "weight": 0.6,
+          "script": "ADAS SoC 디지털 블록 설계. Verilog/SystemVerilog RTL 작성, 린트·CDC 클린업, 합성·타이밍 마감.",
+          "tasks": [
+            {
+              "id": "t1",
+              "name": "CAN-FD IP RTL 설계",
+              "weight": 0.5,
+              "script": "CAN-FD 프로토콜 엔진, 비트 타이밍 레지스터, AXI4-Lite 버스 인터페이스, 클록 게이팅. 산출물: Verilog RTL. 앵커: 모듈 1개 초안 수작업 ≈ 8h, 인터페이스 연결 ≈ 2h."
+            },
+            {
+              "id": "t2",
+              "name": "린트 · CDC 클린업",
+              "weight": 0.3,
+              "script": "Spyglass 린트 위반 수정, CDC 크로싱 리포트 검토, 폴스패스 정리. 앵커: 린트 위반 1건 수작업 ≈ 5분."
+            },
+            {
+              "id": "t3",
+              "name": "합성 · 타이밍 마감",
+              "weight": 0.2,
+              "script": "합성 스크립트, WNS 0 달성(AEC-Q100 온도 코너), 파워 리포트. 앵커: 타이밍 이터레이션 1회 ≈ 3h."
+            }
+          ]
+        },
+        {
+          "id": "verification",
+          "name": "검증 엔지니어",
+          "weight": 0.4,
+          "script": "기능검증과 ISO 26262 기능안전. UVM 테스트벤치, 커버리지, FMEDA/안전 문서.",
+          "tasks": [
+            {
+              "id": "t4",
+              "name": "UVM 테스트벤치 · 회귀",
+              "weight": 0.6,
+              "script": "UVM 시퀀스/스코어보드 작성, 기능 커버리지 클로징, 야간 회귀 스위트. 앵커: 시퀀스 1종 수작업 ≈ 1h, 커버리지 1%p 클로징 ≈ 40분."
+            },
+            {
+              "id": "t5",
+              "name": "ISO 26262 기능안전 문서",
+              "weight": 0.4,
+              "script": "FMEDA 작성(ASIL-B), 안전 매뉴얼, 안전 분석 문서. 앵커: FMEDA 블록 1개 ≈ 4h."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
