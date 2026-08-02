@@ -26,10 +26,13 @@ function buildPrompt(avatar, excerpt) {
     "",
     "## 출력 규칙",
     "JSON 하나만 출력. 다른 텍스트 금지. 스키마:",
-    '{ "taskId": "t1" | null, "roleId": "rtl-design" | null, "confidence": 0~1,',
+    '{ "workSummary": "이 세션이 실제로 수행한 일 1~2문장 (매칭과 무관하게 항상 작성)",',
+    '  "taskId": "t1" | "misc", "roleId": "rtl-design" | null, "confidence": 0~1,',
     '  "manualHoursEst": 숫자(사람이 이 세션의 산출물을 수작업으로 만들 때 예상 시간, 시간 단위),',
     '  "quality": 0~1(완료도: 미완·재작업 필요시 할인), "rationale": "한 문장" }',
-    "어느 업무에도 해당하지 않으면(잡담·무관 작업) taskId와 roleId를 null로. 억지 매칭 금지.",
+    '어느 업무에도 해당하지 않으면 taskId를 "misc"(기타 업무)로, roleId는 null로 하되',
+    "workSummary에 실제 한 일을 구체적으로 적어라 — 신규 업무 후보 설명으로 쓰인다.",
+    "manualHoursEst·quality는 misc여도 산정하라. 억지 매칭 금지.",
   ].join("\n");
 }
 
@@ -47,7 +50,7 @@ function matchSession(cfg, avatar, excerpt) {
   if (process.env.HAIKU_MOCK === "1") {
     return JSON.parse(
       process.env.HAIKU_MOCK_RESULT ||
-        '{"taskId":"t1","roleId":"rtl-design","confidence":0.9,"manualHoursEst":8,"quality":0.95,"rationale":"mock"}'
+        '{"workSummary":"mock 작업","taskId":"t1","roleId":"rtl-design","confidence":0.9,"manualHoursEst":8,"quality":0.95,"rationale":"mock"}'
     );
   }
   fs.mkdirSync(cfg.analysisCwd, { recursive: true });

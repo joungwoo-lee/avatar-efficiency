@@ -39,12 +39,17 @@ outbox.jsonl에 먼저 기록한 뒤 집계 서버로 비동기 송출(실패 �
 구조화 출력(JSON 강제) 한 번으로 매칭과 측량을 같이:
 
 ```json
-{ "taskId": "t2", "confidence": 0.9,
-  "manualHoursEst": 10, "quality": 0.95,
-  "eta": 4.8, "rationale": "..." }
+{ "workSummary": "이 세션이 실제로 수행한 일 1~2문장 (항상 작성)",
+  "taskId": "t2", "roleId": "rtl-design", "confidence": 0.9,
+  "manualHoursEst": 10, "quality": 0.95, "rationale": "..." }
 ```
 
-- **"해당 없음" 선택지 필수** — 잡담·무관 세션 억지 매칭 방지. 미매칭이면 η 산정 스킵, 해당 업무는 기준값 1.0 유지
+- **workSummary 필수 (Clio식 요약)** — 매칭 여부와 무관하게 세션이 실제 수행한 일을 1~2문장으로 요약.
+  분류 안정화 + 감사(audit) 기록 + 아래 misc의 신규 업무 설명을 겸함
+- **억지 매칭 금지 — 미매칭은 버리지 않고 `taskId:"misc"`(기타 업무)로 송신**.
+  workSummary가 신규 업무 후보 설명이 됨. misc는 E 가중합에 미포함(트리 비중이 없으므로),
+  서버가 아바타별 misc 세션 수·최근 요약을 노출해 **아바타 정의에 업무 추가 제안 재료**로 씀.
+  η는 misc에도 참고용으로 산정. 트리에 없는 업무는 여전히 기준값 1.0 유지
 
 ### η = 수작업 예상시간 ÷ 세션 실제시간 (품질 보정)
 
@@ -64,6 +69,7 @@ outbox.jsonl에 먼저 기록한 뒤 집계 서버로 비동기 송출(실패 �
 ```json
 { "sessionUuid": "44db9999-…", "loginId": "skim",
   "avatarId": "kim-seolgye", "roleId": "rtl-design", "taskId": "t2",
+  "workSummary": "Spyglass 린트 위반 128건 자동수정",
   "eta": 4.8, "quality": 0.95, "manualHoursEst": 10, "sessionHoursActive": 2.0,
   "confidence": 0.9, "tokens": { "input": 120000, "output": 8500, "cacheRead": 90000 },
   "matchedAt": "2026-08-02T21:00:00+09:00", "cwd": "C--Users-joung-…", "schemaVer": 1 }

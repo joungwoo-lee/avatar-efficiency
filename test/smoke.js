@@ -71,9 +71,10 @@ async function main() {
     AE_SERVER_URL: `http://127.0.0.1:${PORT}`,
     AE_FORCE: "1",
     HAIKU_MOCK: "1",
-    HAIKU_MOCK_RESULT: '{"taskId":"t2","roleId":"rtl-design","confidence":0.92,"manualHoursEst":10,"quality":0.95,"rationale":"린트 자동수정 세션"}',
+    HAIKU_MOCK_RESULT: '{"workSummary":"Spyglass 린트 자동수정","taskId":"t2","roleId":"rtl-design","confidence":0.92,"manualHoursEst":10,"quality":0.95,"rationale":"린트 자동수정 세션"}',
   };
-  const sweep = () => execFileSync("node", [path.join(ROOT, "sweeper", "sweep.js")], { env, encoding: "utf8" });
+  const sweep = (extra = {}) =>
+    execFileSync("node", [path.join(ROOT, "sweeper", "sweep.js")], { env: { ...env, ...extra }, encoding: "utf8" });
 
   try {
     // 1) 첫 스윕: 매칭 + 송출
@@ -101,6 +102,21 @@ async function main() {
     out = sweep();
     console.log(out);
     assert(/1 candidate/.test(out) && /η=/.test(out), "새 턴 append 후 재매칭 (증분 감지)");
+
+    // 4) 미매칭 세션 → misc(기타 업무)로 workSummary 달아 송신
+    const uuid2 = "22222222-3333-4444-5555-666666666666";
+    makeTranscript(path.join(projectsDir, uuid2 + ".jsonl"), 1);
+    out = sweep({
+      HAIKU_MOCK_RESULT:
+        '{"workSummary":"사내 위키 정리 및 회의록 요약","taskId":"misc","roleId":null,"confidence":0.4,"manualHoursEst":2,"quality":1,"rationale":"업무 트리에 없음"}',
+    });
+    console.log(out);
+    assert(/misc\(기타\)/.test(out), "미매칭 세션이 misc로 처리됨");
+    assert(new RegExp("sent " + uuid2.slice(0, 4)).test(out), "misc 레코드도 서버 송신됨");
+    const eff2 = await get(`http://127.0.0.1:${PORT}/efficiency`);
+    const m = eff2.avatars[0].misc;
+    assert(m.sessions === 1 && /위키/.test(m.recentSummaries[0]), `서버 misc 집계 (${m.recentSummaries[0]})`);
+    assert(eff2.avatars[0].efficiency === eff1.avatars[0].efficiency, "misc는 E 가중합에 미포함 (E 불변)");
 
     console.log("\nSMOKE OK");
   } finally {

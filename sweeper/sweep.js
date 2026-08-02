@@ -76,28 +76,28 @@ async function main() {
       }
 
       const hours = Math.max(activeHours(records, cfg.gapCapMinutes), cfg.minSessionHours);
-      const matched = !!match.taskId;
-      const record = matched
-        ? {
-            sessionUuid: cand.uuid,
-            loginId,
-            avatarId: avatar.avatarId,
-            roleId: match.roleId,
-            taskId: match.taskId,
-            confidence: match.confidence,
-            manualHoursEst: match.manualHoursEst,
-            quality: match.quality,
-            sessionHoursActive: Math.round(hours * 100) / 100,
-            eta: Math.round(((match.manualHoursEst / hours) * match.quality) * 100) / 100,
-            tokens: sumTokens(records),
-            cwd: cand.dir,
-            matchedAt: new Date().toISOString(),
-            rationale: match.rationale,
-            schemaVer: 1,
-          }
-        : null; // "해당 없음" — η 산정 스킵, 업무는 기준값 1.0 유지 (서버 미송출)
+      // 미매칭도 버리지 않는다: taskId="misc"(기타 업무)로 workSummary를 달아 송신 — 신규 업무 제안 재료
+      const taskId = match.taskId && match.taskId !== "null" ? match.taskId : "misc";
+      const record = {
+        sessionUuid: cand.uuid,
+        loginId,
+        avatarId: avatar.avatarId,
+        roleId: taskId === "misc" ? null : match.roleId,
+        taskId,
+        workSummary: match.workSummary,
+        confidence: match.confidence,
+        manualHoursEst: match.manualHoursEst,
+        quality: match.quality,
+        sessionHoursActive: Math.round(hours * 100) / 100,
+        eta: Math.round(((match.manualHoursEst / hours) * match.quality) * 100) / 100,
+        tokens: sumTokens(records),
+        cwd: cand.dir,
+        matchedAt: new Date().toISOString(),
+        rationale: match.rationale,
+        schemaVer: 1,
+      };
       ledger.finalize(cand.uuid, endOffset, record);
-      log(`${cand.uuid} → ${matched ? `${match.roleId}/${match.taskId} η=${record.eta}` : "unmatched"}`);
+      log(`${cand.uuid} → ${taskId === "misc" ? "misc(기타)" : `${match.roleId}/${taskId}`} η=${record.eta}`);
     }
 
     await sendPending(cfg, ledger, log);

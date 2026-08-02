@@ -55,6 +55,11 @@ function computeEfficiency(avatar, records) {
     if (!byTask.has(r.taskId)) byTask.set(r.taskId, []);
     byTask.get(r.taskId).push(r);
   }
+  // 기타 업무(misc): 트리에 없는 실제 일 — E 가중합엔 미포함, 신규 업무 제안 재료로 노출
+  const misc = [];
+  for (const r of records.values()) {
+    if (r.avatarId === avatar.avatarId && r.taskId === "misc") misc.push(r);
+  }
   let E = 0;
   const roles = [];
   let totalV = 0, totalC = 0, totalTokens = 0;
@@ -83,6 +88,11 @@ function computeEfficiency(avatar, records) {
     avatarId: avatar.avatarId,
     efficiency: round(E),
     roles,
+    misc: {
+      sessions: misc.length,
+      recentSummaries: misc.slice(-5).map((r) => r.workSummary).filter(Boolean),
+      note: "업무 트리에 없는 작업 — 아바타 정의에 신규 업무 추가 후보",
+    },
     value: {
       savedValueKRW: Math.round(totalV),
       tokenCostKRW: Math.round(totalC),

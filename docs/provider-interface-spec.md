@@ -56,7 +56,7 @@
 | `loginId` | string | ✔ | OS(Windows) 로그인 계정명. **문서 내 유일** (아바타 선택 키, §2) |
 | `script` (아바타) | string | ✔ | 이 사람의 업무 범위 한 문단. 저지 프롬프트의 최상위 컨텍스트 |
 | `costAllocation` | object | – | PM Plan 배분. `amount`(배분액)·`currency`·`share`(프로젝트 내 비중)·`plannedHours`(기간 환산 시간 — 시간당 단가 ρ = amount ÷ plannedHours 도출용) |
-| `roles[].id`, `tasks[].id` | string | ✔ | 아바타 내 유일, `[a-z0-9-]+`, **변경 금지** (η 이력이 이 id로 귀속됨) |
+| `roles[].id`, `tasks[].id` | string | ✔ | 아바타 내 유일, `[a-z0-9-]+`, **변경 금지** (η 이력이 이 id로 귀속됨). **`misc`는 예약어** — provider 사용 금지 (미매칭 세션의 기타 업무 라벨) |
 | `roles[].weight` | number | ✔ | 아바타 내 역할 비중. **합 = 1.0 (±0.001)** |
 | `tasks[].weight` | number | ✔ | 역할 내 업무 비중. **역할별 합 = 1.0 (±0.001)** |
 | `roles[].script` | string | ✔ | 역할 설명 1~2문장 |
@@ -118,8 +118,9 @@ provider가 정의한 id들이 결과 레코드의 라벨로 되돌아온다. �
   "sessionUuid": "44db9999-…",          ← 멱등 upsert 키 (재전송·재매칭 중복 해소)
   "loginId": "skim",
   "avatarId": "kim-seolgye",
-  "roleId": "rtl-design",
-  "taskId": "t1",
+  "roleId": "rtl-design",                ← misc(기타 업무)면 null
+  "taskId": "t1",                        ← 미매칭 세션은 "misc" — 버려지지 않고 항상 송신됨
+  "workSummary": "세션이 실제 수행한 일 1~2문장 (misc의 신규 업무 설명 겸용)",
   "confidence": 0.9,
   "manualHoursEst": 10,
   "quality": 0.95,
