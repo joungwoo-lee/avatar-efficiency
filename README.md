@@ -2,6 +2,7 @@
 
 아바타 효율성 파이프라인 구현. 설계 문서: [docs/](docs/)
 ([session-matching-design.md](docs/session-matching-design.md) · [efficiency-metrics-design.md](docs/efficiency-metrics-design.md) · 구조도 [상세](docs/avatar-structure-map.html)/[조망](docs/avatar-overview-map.html))
+외부 시스템 연동: [provider-interface-spec.md](docs/provider-interface-spec.md) (+ [avatars.schema.json](docs/avatars.schema.json)) — 아바타·역할·업무 정의 공급 계약과 결과 수신 API.
 
 클로드 세션 종료 후, 다음 클로드 기동 시점(SessionStart)에 백그라운드 스위퍼가:
 Windows 로그인 ID로 **아바타 선별** → 미처리 transcript를 골라 **Haiku(`claude -p`, 구독)로 업무 매칭 + 효율계수 η 산정**
