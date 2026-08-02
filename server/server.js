@@ -3,12 +3,22 @@
 // 설계: efficiency-metrics-design.md §3~4
 const http = require("http");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
+const IS_PKG = !!process.pkg; // pkg 스냅샷은 읽기전용 — 쓰기 경로는 홈 기준
+const DATA_DIR = path.join(os.homedir(), ".sweeper");
 const PORT = Number(process.env.AE_SERVER_PORT || 18220);
-const DATA = process.env.AE_RECORDS_PATH || path.join(__dirname, "data", "records.jsonl");
-const AVATARS = process.env.AE_AVATARS_PATH || path.join(__dirname, "..", "avatars.sample.json");
-const VALUE = JSON.parse(fs.readFileSync(path.join(__dirname, "value-config.json"), "utf8"));
+const DATA =
+  process.env.AE_RECORDS_PATH ||
+  (IS_PKG ? path.join(DATA_DIR, "records.jsonl") : path.join(__dirname, "data", "records.jsonl"));
+const AVATARS =
+  process.env.AE_AVATARS_PATH ||
+  (IS_PKG ? path.join(DATA_DIR, "avatars.json") : path.join(__dirname, "..", "avatars.sample.json"));
+const userValuePath = path.join(DATA_DIR, "value-config.json");
+const VALUE = JSON.parse(
+  fs.readFileSync(fs.existsSync(userValuePath) ? userValuePath : path.join(__dirname, "value-config.json"), "utf8")
+);
 
 fs.mkdirSync(path.dirname(DATA), { recursive: true });
 
@@ -121,4 +131,10 @@ const server = http.createServer((req, res) => {
   json(res, 404, { error: "not found" });
 });
 
-server.listen(PORT, "127.0.0.1", () => console.log(`[server] listening on 127.0.0.1:${PORT}, data=${DATA}`));
+function start() {
+  server.listen(PORT, "127.0.0.1", () => console.log(`[server] listening on 127.0.0.1:${PORT}, data=${DATA}`));
+}
+
+if (require.main === module) start();
+
+module.exports = { start };

@@ -1,11 +1,19 @@
 {
   "name": "avatar-efficiency",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "아바타 효율성 파이프라인 — SessionStart 스위퍼가 Claude transcript를 Haiku로 업무 매칭·효율계수(η) 산정 후 집계 서버로 송출",
+  "bin": { "avatar-efficiency": "bin/main.js" },
   "scripts": {
     "sweep": "node sweeper/sweep.js",
     "server": "node server/server.js",
-    "test": "node test/smoke.js"
+    "test": "node test/smoke.js",
+    "build": "powershell -NoProfile -ExecutionPolicy Bypass -File build/build.ps1"
+  },
+  "pkg": {
+    "assets": [
+      "avatars.sample.json",
+      "server/value-config.json"
+    ]
   }
 }

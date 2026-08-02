@@ -25,25 +25,45 @@ server/value-config.json    가치 단가 (rate, 토큰 정가 환산)
 test/smoke.js               전 구간 스모크 (mock Haiku + 실서버, dedup·증분 검증)
 ```
 
-## 설치 / 실행
+## 사용자 설치 — 바이너리 한 번 실행이 전부
+
+Node·git 불필요. 빌드된 바이너리(`dist/`, 빌드 산출물은 git 미포함 — 릴리즈/사내 배포로 전달)를 받아 1회 실행:
 
 ```powershell
-# 1. 아바타 정의 준비 (외부 모듈 자리 — 지금은 파일 계약)
-copy avatars.sample.json avatars.json   # loginId를 이 PC 계정으로 수정
-# config.json avatarsPath를 avatars.json으로 변경
-
-# 2. 집계 서버
-node server/server.js                    # 127.0.0.1:18220
-
-# 3. 훅 설치
-powershell -File hook\install.ps1        # schtasks 등록 + settings.json 스니펫 안내
-
-# 수동 1회 실행 (스로틀 무시)
-$env:AE_FORCE="1"; node sweeper\sweep.js
-
-# 집계 조회
-curl http://127.0.0.1:18220/efficiency
+.\avatar-efficiency-win-x64.exe        # (인자 없음 = setup)
 ```
+```bash
+./avatar-efficiency-linux-x64          # WSL — WSL 자체 ~/.claude 세션 분석용
+```
+
+setup 1회가 자동으로:
+1. 자가 설치 — `%LOCALAPPDATA%\avatar-efficiency\` (linux: `~/.local/share/avatar-efficiency/`)로 복사
+2. `~/.sweeper/config.json` + `~/.sweeper/avatars.json` 템플릿 생성 (**로그인 ID 자동 감지**)
+3. `~/.claude/settings.json`에 SessionStart hook **자동 병합** (백업 생성)
+4. Windows 작업 스케줄러 태스크 등록 (env 비상속 실행 경로)
+
+이후 사용자가 할 일은 `~/.sweeper/avatars.json`의 역할·업무 script를 본인 업무로 채우는 것 하나.
+클로드를 켤 때마다 지난 세션이 자동 분석된다. 다른 명령: `sweep [--force]` · `server` · `version`.
+
+## 빌드 시스템
+
+```powershell
+npm run build          # build/build.ps1
+```
+- `@yao-pkg/pkg` 크로스 빌드: `dist/avatar-efficiency-win-x64.exe` + `dist/avatar-efficiency-linux-x64`(WSL)
+- linux 타깃은 `--public` 필수 — 호스트(win V8) 바이트코드를 linux V8이 거부(실측)
+- 빌드 후 자동 스모크: win exe로 mock 스윕 1회 실행해 **pkg 스냅샷 경로 함정 실검증** (쓰기 경로는 전부 `~/.sweeper` 실디스크)
+- `dist/`는 .gitignore — 바이너리는 커밋하지 않음
+
+## 레포 모드 (개발자)
+
+```powershell
+node server/server.js                    # 집계 서버 127.0.0.1:18220
+powershell -File hook\install.ps1        # schtasks 등록 + settings.json 스니펫 안내
+$env:AE_FORCE="1"; node sweeper\sweep.js # 수동 1회 실행 (스로틀 무시)
+curl http://127.0.0.1:18220/efficiency   # 집계 조회
+```
+아바타 정의: 기본 `avatars.sample.json` (바이너리 모드는 `~/.sweeper/avatars.json`), `AE_AVATARS_PATH`로 오버라이드.
 
 ## 테스트
 

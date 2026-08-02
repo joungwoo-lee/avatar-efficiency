@@ -1,4 +1,6 @@
 node_modules/
 server/data/
 test/.tmp/
+build/.tmp-exe/
+dist/
 *.lock
