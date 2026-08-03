@@ -5,6 +5,7 @@
     uvicorn api:app --host 0.0.0.0 --port 8000   (org-function 폴더에서)
 
 엔드포인트:
+    GET  /columns                원본 테이블의 실제 열 이름 목록 (columns 매핑 작성용)
     POST /build                  원본 SSOT DB → 로컬 조직기능 DB 재구축
     GET  /functions              team/group/part 쿼리파라미터로 기능 목록
     GET  /functions/{org_name}   조직명 하나로 레벨 자동판별 조회
@@ -20,6 +21,7 @@ from core import (
     build_org_function_db,
     get_org_functions,
     get_org_functions_by_name,
+    list_source_columns,
 )
 
 app = FastAPI(title="org-function API", version="1.0.0")
@@ -27,10 +29,19 @@ app = FastAPI(title="org-function API", version="1.0.0")
 
 class BuildRequest(BaseModel):
     source_table: Optional[str] = None
+    # 논리 역할 → 원본 테이블의 실제 열 이름 (GET /columns 로 확인 가능)
     # 예: {"team": "팀", "group": "그룹", "part": "파트",
     #      "function1": "Function1", "function2": "Function2"}
     columns: Optional[Dict[str, str]] = None
     db_path: str = DEFAULT_DB_PATH
+
+
+@app.get("/columns")
+def columns(table: Optional[str] = None):
+    try:
+        return {"table": table, "columns": list_source_columns(table)}
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=f"환경변수 누락: {e}")
 
 
 @app.post("/build")

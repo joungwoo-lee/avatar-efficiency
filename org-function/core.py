@@ -5,12 +5,17 @@
   1. build_org_function_db()  : 원본 SSOT DB를 읽어 조직별 기능 로컬 DB(SQLite)를 생성
   2. get_org_functions()      : 조직명(팀/그룹/파트, 일부 생략 가능)으로 기능 목록 반환
 
+열 지정 방식: MySQL 등 RDB는 스프레드시트처럼 1행 값이 라벨이 아니라
+테이블 스키마에 열 이름이 정의되어 있다. 따라서 columns 매핑에는
+**원본 테이블의 실제 열 이름**(SHOW COLUMNS / information_schema 로 확인)을 넣는다.
+열 이름을 모르면 list_source_columns() 로 조회할 수 있다.
+
 원본 DB 접속 정보는 .env 에서 읽는다:
   SSOT_DB_IP, SSOT_DB_PORT, SSOT_DB_DBNAME, SSOT_DB_ID, SSOT_DB_PW
   SSOT_DB_DIALECT (선택, 기본 "mysql+pymysql". postgresql+psycopg2 등 SQLAlchemy dialect)
   SSOT_DB_TABLE   (선택, 원본 테이블명 기본값)
   SSOT_COL_TEAM / SSOT_COL_GROUP / SSOT_COL_PART / SSOT_COL_FUNC1 / SSOT_COL_FUNC2
-                  (선택, 열 라벨 기본값 — 함수 인자가 우선)
+                  (선택, 열 이름 기본값 — 함수 인자가 우선)
 """
 
 import os
@@ -18,7 +23,7 @@ import sqlite3
 from typing import Dict, List, Optional
 
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 
 DEFAULT_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "org_functions.sqlite")
 
@@ -68,7 +73,9 @@ def build_org_function_db(
 
     Args:
         source_table: 원본 테이블명. 생략 시 .env 의 SSOT_DB_TABLE.
-        columns: 원본 시트 1행 라벨(=DB 열 이름) 매핑.
+        columns: 논리 역할 → 원본 테이블의 **실제 열 이름** 매핑.
+            (스프레드시트의 1행 라벨이 아니라 DB 스키마의 열 이름.
+             모르면 list_source_columns() 로 확인.)
             {"team": "팀", "group": "그룹", "part": "파트",
              "function1": "Function1", "function2": "Function2"}
             생략된 키는 .env 의 SSOT_COL_* 값으로 채운다.
@@ -91,9 +98,18 @@ def build_org_function_db(
     cols = {**env_cols, **(columns or {})}
     missing = [k for k, v in cols.items() if not v]
     if missing:
-        raise ValueError(f"열 라벨 미지정: {missing} (columns 인자 또는 SSOT_COL_* 환경변수 필요)")
+        raise ValueError(f"열 이름 미지정: {missing} (columns 인자 또는 SSOT_COL_* 환경변수 필요)")
 
     engine = _source_engine(env_file)
+
+    # 지정한 열 이름이 실제 스키마에 있는지 선검증 (오타 시 SQL 에러보다 명확한 메시지)
+    actual = {c["name"] for c in inspect(engine).get_columns(source_table)}
+    unknown = [f"{k}={v!r}" for k, v in cols.items() if v not in actual]
+    if unknown:
+        raise ValueError(
+            f"테이블 {source_table!r} 에 없는 열: {unknown}. "
+            f"실제 열 목록: {sorted(actual)}"
+        )
     q = engine.dialect.identifier_preparer.quote
     order = ["team", "group", "part", "function1", "function2"]
     select_cols = ", ".join(q(cols[k]) for k in order)
@@ -119,6 +135,21 @@ def build_org_function_db(
     finally:
         con.close()
     return len(rows)
+
+
+def list_source_columns(
+    source_table: Optional[str] = None,
+    env_file: Optional[str] = None,
+) -> List[str]:
+    """원본 테이블의 실제 열 이름 목록 조회 (columns 매핑 작성용).
+
+    MySQL 의 SHOW COLUMNS / information_schema.columns 와 같은 정보를
+    SQLAlchemy inspect 로 dialect 무관하게 가져온다.
+    """
+    load_dotenv(env_file, override=False)
+    source_table = source_table or os.environ["SSOT_DB_TABLE"]
+    engine = _source_engine(env_file)
+    return [c["name"] for c in inspect(engine).get_columns(source_table)]
 
 
 def get_org_functions(
