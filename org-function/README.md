@@ -15,7 +15,7 @@
 |---|---|
 | `core.py` | 핵심 함수 2개: `build_org_function_db()`, `get_org_functions()` (+ `get_org_functions_by_name()`, `list_source_columns()`) |
 | `api.py` | FastAPI REST API (`/columns`, `/build`, `/functions`) |
-| `.env.example` | DB 접속·열 라벨 설정 예시 → `.env`로 복사해 사용 |
+| `.env.example` | DB 접속·열 이름 설정 예시 → `.env`로 복사해 사용 |
 | `requirements.txt` | 의존성 |
 
 ## 동작 원리
@@ -63,6 +63,10 @@ get_org_functions(team="플랫폼팀", group="인프라그룹", part="네트워�
 get_org_functions_by_name("인프라그룹")
 ```
 
+공통 선택 인자: 모든 함수는 `env_file="경로"`(기본: 자동 탐색된 `.env`)를,
+빌드/조회 함수는 `db_path="경로"`(기본: 이 폴더의 `org_functions.sqlite`)를 받는다.
+`source_table`·`columns` 를 생략하면 `.env`의 `SSOT_DB_TABLE`·`SSOT_COL_*` 값을 쓴다.
+
 반환 예:
 
 ```json
@@ -86,6 +90,12 @@ curl "localhost:8000/columns?table=org_master"
 # DB 재구축 (columns 생략 시 .env의 SSOT_COL_* 사용)
 curl -X POST localhost:8000/build -H "Content-Type: application/json" \
   -d '{"source_table": "org_master"}'
+
+# DB 재구축 — columns 명시 버전
+curl -X POST localhost:8000/build -H "Content-Type: application/json" \
+  -d '{"source_table": "org_master",
+       "columns": {"team": "팀", "group": "그룹", "part": "파트",
+                   "function1": "Function1", "function2": "Function2"}}'
 
 # 레벨별 조회 (team/group/part 임의 조합)
 curl "localhost:8000/functions?team=플랫폼팀"
