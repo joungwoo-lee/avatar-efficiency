@@ -1,0 +1,3 @@
+.env
+org_functions.sqlite
+__pycache__/
