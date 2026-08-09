@@ -117,6 +117,53 @@ def test_rates_not_in_prompt():
     print("ok test_rates_not_in_prompt")
 
 
+def test_compat_schema():
+    from compat import CounterfactualEstimator
+    ce = CounterfactualEstimator(llm=MockLLM([GOOD]))
+    r = ce.estimate_task("제목", "맥락", "PM", ["mail-draft"], "상세")
+    assert r["error"] is None
+    approx(r["human_min"], 20.0)
+    approx(r["agent_ai_min"], 2.27)
+    approx(r["agent_human_min"], 5.2)
+    approx(r["agent_min"], 7.47)
+    approx(r["saved_min"], 12.53)
+    approx(r["speedup"], 20.0 / 7.47, 0.01)
+    # flat map + ai_io
+    assert r["human_breakdown"]["read"] == 4.0   # 800*0.005
+    assert r["agent_breakdown"]["ai_io"]["output_words"] == 300
+    print("ok test_compat_schema")
+
+
+def test_compat_merges_same_primitive():
+    merged = json.loads(json.dumps(GOOD))
+    merged["hitl"].append({"primitive": "verify", "count": 1})  # machine verify 1.0 + hitl 3.0
+    from compat import CounterfactualEstimator
+    ce = CounterfactualEstimator(llm=MockLLM([merged]))
+    r = ce.estimate_task("t", "c", "r", [], "d")
+    approx(r["agent_breakdown"]["verify"], 4.0)
+    print("ok test_compat_merges_same_primitive")
+
+
+def test_compat_error_no_raise():
+    from compat import CounterfactualEstimator
+    ce = CounterfactualEstimator(llm=MockLLM([{"x": 1}, {"y": 2}]))  # 2회 검증 실패
+    r = ce.estimate_task("t", "c", "r", [], "d")
+    assert r["error"] is not None and "ValueError" in r["error"]
+    assert r["human_min"] is None
+    print("ok test_compat_error_no_raise")
+
+
+def test_hitl_residual_work_primitives():
+    """구 시스템 호환: hitl 카드가 잔여 직접작업 primitive를 수용해야 함."""
+    residual = json.loads(json.dumps(GOOD))
+    residual["hitl"].append({"primitive": "draft", "count": 100})  # 사람이 직접 100단어 작성
+    est = EffortEstimator(MockLLM([residual]))
+    r = est.estimate("dummy")
+    approx(r["agent"]["hitl"]["minutes"], 5.2 + 100 * 0.05)
+    assert not any("draft" in n for n in r["confidence_notes"])  # 폐기 안 됨
+    print("ok test_hitl_residual_work_primitives")
+
+
 def test_live():
     from onprem_llm_sim import OnpremLLM
     spec = (_HERE / "examples" / "sample_spec.txt").read_text(encoding="utf-8")
@@ -139,6 +186,10 @@ if __name__ == "__main__":
     test_empty_hitl_warns()
     test_double_failure_raises()
     test_rates_not_in_prompt()
+    test_compat_schema()
+    test_compat_merges_same_primitive()
+    test_compat_error_no_raise()
+    test_hitl_residual_work_primitives()
     if "--live" in sys.argv:
         test_live()
     print("all tests passed")

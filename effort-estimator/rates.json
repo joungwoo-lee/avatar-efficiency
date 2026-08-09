@@ -28,7 +28,12 @@
     "review":      { "unit": "word_count",    "min_per_unit": 0.006 },
     "approve":     { "unit": "approval_count","min_per_unit": 1.0 },
     "correct":     { "unit": "correction_count","min_per_unit": 4.0 },
-    "verify":      { "unit": "evidence_count","min_per_unit": 3.0 }
+    "verify":      { "unit": "evidence_count","min_per_unit": 3.0 },
+    "draft":       { "unit": "word_count",    "min_per_unit": 0.05 },
+    "edit":        { "unit": "word_count",    "min_per_unit": 0.02 },
+    "data_entry":  { "unit": "record_count",  "min_per_unit": 0.5 },
+    "execute":     { "unit": "operation_count","min_per_unit": 2.0 },
+    "decide":      { "unit": "decision_count","min_per_unit": 5.0 }
   },
   "ai_io": {
     "input_words_min_per_word": 0.00002,

@@ -57,7 +57,7 @@ def build_prompt(spec_text, rates):
 
 1. human: AI를 전혀 쓰지 않는 기준 숙련자가 합리적 최단 경로로 수행할 때의 행동과 수량
 2. agent: AI 에이전트(연결된 스킬 사용)가 기계로 수행하는 행동과 수량
-3. hitl: agent 경로에서 사람이 반드시 수행하는 행동(지시 작성, 출력 검토, 승인, 수정지시, 수동검증)과 수량
+3. hitl: agent 경로에서 사람이 수행하는 모든 행동과 수량 — 감독 행동(지시 작성, 출력 검토, 승인, 수정지시, 수동검증)뿐 아니라, 에이전트가 수행할 수 없어 사람이 직접 마저 해야 하는 잔여 작업(직접 작성 draft, 수정 edit, 입력 data_entry, 실행 execute, 판단 decide)도 반드시 포함하라
 
 규칙:
 - 두 경로는 같은 업무 범위·품질·검증 수준을 만족해야 한다. agent 경로에서 검증을 생략하지 마라.
@@ -150,13 +150,15 @@ def trajectory_minutes(actions, card):
 
 
 def ai_io_minutes(ai_io, rates):
+    """반환: {"input_words", "output_words", "minutes"}."""
     r = rates["ai_io"]
     try:
         inp = float(ai_io.get("input_words", 0) or 0)
         out = float(ai_io.get("output_words", 0) or 0)
     except (TypeError, ValueError):
-        return 0.0
-    return round(inp * r["input_words_min_per_word"] + out * r["output_words_min_per_word"], 2)
+        inp = out = 0.0
+    minutes = round(inp * r["input_words_min_per_word"] + out * r["output_words_min_per_word"], 2)
+    return {"input_words": inp, "output_words": out, "minutes": minutes}
 
 
 class EffortEstimator:
@@ -183,9 +185,9 @@ class EffortEstimator:
 
         human_min, human_bd = trajectory_minutes(parsed["human"], self.rates["human"])
         agent_traj_min, agent_bd = trajectory_minutes(parsed["agent"], self.rates["agent"])
-        io_min = ai_io_minutes(parsed["ai_io"], self.rates)
+        io = ai_io_minutes(parsed["ai_io"], self.rates)
         rf = float(self.rates.get("agent_revision_factor", 1.0))
-        machine_min = round((agent_traj_min + io_min) * rf, 2)
+        machine_min = round((agent_traj_min + io["minutes"]) * rf, 2)
         hitl_min, hitl_bd = trajectory_minutes(parsed["hitl"], self.rates["hitl"])
 
         leverage = round(human_min / hitl_min, 2) if hitl_min > 0 else None
@@ -205,7 +207,7 @@ class EffortEstimator:
                     "minutes": machine_min,
                     "hours": round(machine_min / 60, 2),
                     "breakdown": agent_bd,
-                    "ai_io_minutes": io_min,
+                    "ai_io": io,
                     "revision_factor": rf,
                 },
                 "hitl": {

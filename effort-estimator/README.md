@@ -14,6 +14,7 @@
 
 ```
 estimator.py        핵심: 프롬프트 생성 → LLM 1회 호출(+검증실패 시 1회 재시도) → 수량×요율 환산
+compat.py           구 시스템(CounterfactualEstimator.estimate_task) drop-in 어댑터 (INTEGRATION.md §7)
 rates.json          primitive 요율표 (cold-start seed, confidence C — 실측으로 보정할 것)
 onprem_llm_sim.py   OnpremLLM.complete_json(prompt, max_tokens)->dict 시뮬 (cursor-proxy 백엔드)
 test_estimator.py   단위테스트(mock) + --live 프록시 실호출 테스트
