@@ -1,8 +1,8 @@
 # effort-estimator 설계 근거 (기능·기술 배경·정당화)
 
 대상 독자: 이 모듈의 산정 방식이 신뢰할 만한지 판단해야 하는 사람(도입 결정자, 감사자, 후임 개발자).
-사용법은 [README.md](README.md), 통합 절차는 [INTEGRATION.md](INTEGRATION.md),
-전체 설계는 [../docs/effort-estimation/task_agentization_effort_estimator_design.md](../docs/effort-estimation/task_agentization_effort_estimator_design.md) (이하 TAEE 설계서).
+사용법은 [README.md](../README.md), 통합 절차는 [INTEGRATION.md](INTEGRATION.md),
+전체 설계는 [docs/effort-estimation/task_agentization_effort_estimator_design.md](../../docs/effort-estimation/task_agentization_effort_estimator_design.md) (이하 TAEE 설계서).
 
 ---
 

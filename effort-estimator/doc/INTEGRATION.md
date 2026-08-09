@@ -2,7 +2,7 @@
 
 이 문서는 **기존 시스템(mm_app)에서 구 `CounterfactualEstimator`를 본 모듈로 교체하는
 작업을 수행하는 AI/개발자를 위한 실행 절차**다. 이 문서만으로 통합을 완주할 수 있어야 한다.
-배경 설계는 [README.md](README.md), 설계서는 `../docs/effort-estimation/`.
+배경 설계는 [README.md](../README.md), 설계서는 `../../docs/effort-estimation/`.
 
 교체 대상: `mm_app` `counterfactual.py`의
 `CounterfactualEstimator.estimate_task(title, context, role, skill_names, detail) -> dict`
