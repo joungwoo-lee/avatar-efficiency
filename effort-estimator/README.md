@@ -1,6 +1,7 @@
 # effort-estimator — 사전 에이전트화 에포트 추정기 (TAEE Phase 1 MVP)
 
 설계: [../docs/effort-estimation/task_agentization_effort_estimator_design.md](../docs/effort-estimation/task_agentization_effort_estimator_design.md)
+· 기능/기술 배경/정당화: [DESIGN.md](DESIGN.md) · 통합 런북: [INTEGRATION.md](INTEGRATION.md)
 
 **입력**: `할일+역할+작업+스킬` 작업 지침서 자유 텍스트
 **출력**: `human_only`(사람 AI 미사용 에포트) · `agent.machine`(기계 에포트) · `agent.hitl`(에이전트 운용에 필요한 사람 에포트) + leverage/automation share
