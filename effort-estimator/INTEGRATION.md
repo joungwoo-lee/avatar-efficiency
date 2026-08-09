@@ -1,143 +1,162 @@
-# effort-estimator 인테그레이션 스펙 (AI 통합용)
+# effort-estimator 인테그레이션 런북 (통합 수행 AI용)
 
-대상: 이 모듈을 호스트 시스템(mm_app 등)에 통합하는 AI/개발자.
-설계 배경 불필요 — 이 문서만으로 통합 가능해야 함. 상세는 [README.md](README.md).
+이 문서는 **기존 시스템(mm_app)에서 구 `CounterfactualEstimator`를 본 모듈로 교체하는
+작업을 수행하는 AI/개발자를 위한 실행 절차**다. 이 문서만으로 통합을 완주할 수 있어야 한다.
+배경 설계는 [README.md](README.md), 설계서는 `../docs/effort-estimation/`.
 
-## 1. 제공 함수
+교체 대상: `mm_app` `counterfactual.py`의
+`CounterfactualEstimator.estimate_task(title, context, role, skill_names, detail) -> dict`
+— 본 모듈 `compat.py`가 같은 시그니처·같은 반환 스키마를 제공한다.
+
+---
+
+## Step 1. 소스 가져오기
+
+```bash
+git clone https://github.com/joungwoo-lee/avatar-efficiency.git   # 또는 기존 클론 git pull
+```
+
+`effort-estimator/` 폴더에서 다음 5개 파일을 mm_app 안에 **`effort_estimator/`
+(하이픈 아님, 언더스코어)** 이름의 폴더로 복사한다:
+
+```
+estimator.py  compat.py  rates.json  __init__.py  onprem_llm_sim.py
+```
+
+- 폴더명이 `effort_estimator`(언더스코어)여야 Python import가 된다. 하이픈이면 실패.
+- `onprem_llm_sim.py`는 테스트용 — 운영에 불필요하면 복사 후 제외 가능.
+- `test_estimator.py`, `examples/`도 복사하면 Step 4 검증을 그 자리에서 돌릴 수 있다.
+
+## Step 2. LLM 주입
+
+**반드시 실물 LLM을 명시 주입한다.** 자동 감지는 없다
+(실환경 `mm_app/onprem-llm/`은 하이픈 폴더라 import 불가 — 미주입 시 시뮬레이터가 잡힌다).
 
 ```python
-from estimator import EffortEstimator
+from effort_estimator import CounterfactualEstimator
 
-est = EffortEstimator(llm)          # llm: 아래 §2 계약 객체
-result = est.estimate(spec_text)    # spec_text: str → result: dict (§4)
+# 구 counterfactual.py가 OnpremLLM 인스턴스를 만들던 기존 방식을 그대로 재사용해 주입
+ce = CounterfactualEstimator(llm=onprem_llm_instance)
 ```
 
-- 구 시스템(`CounterfactualEstimator.estimate_task`) 자리에 그대로 꽂으려면 §7의 `compat.py` 사용.
-- 순수 Python 3.8+, 외부 패키지 의존 없음(stdlib만).
-- 파일 의존: `estimator.py` + 같은 폴더의 `rates.json` (경로 커스텀: `EffortEstimator(llm, rates_path=...)`).
-- 상태 없음·스레드당 인스턴스 자유. 1회 estimate = LLM 1~2회 호출(검증 실패 시에만 2회).
+llm 계약 (실물이 이미 만족함): `complete_json(prompt: str, max_tokens: int) -> dict`
+(파싱 완료된 dict 반환. JSON 문자열 아님.)
 
-## 2. LLM 의존성 계약 (호스트가 주입)
+## Step 3. 호출부 교체
+
+구 클래스와 이름·시그니처가 같으므로 **import와 생성부만 바꾼다**:
 
 ```python
-class YourLLM:
-    def complete_json(self, prompt: str, max_tokens: int) -> dict: ...
+# 구:  from counterfactual import CounterfactualEstimator
+# 신:
+from effort_estimator import CounterfactualEstimator
+ce = CounterfactualEstimator(llm=...)          # 생성자: (llm=None, rates_path=..., max_tokens=2000)
+r = ce.estimate_task(title, context, role, skill_names, detail)   # 호출부 변경 없음
 ```
 
-- 반환은 파싱 완료된 dict (JSON 문자열 아님).
-- 온프렘 실환경: `mm_app/onprem-llm/onprem_llm.py`의 `OnpremLLM` 그대로 주입.
-- 로컬/테스트: 동봉 `onprem_llm_sim.OnpremLLM()` (OpenAI 호환 endpoint,
-  env `AE_LLM_BASE` 기본 `http://127.0.0.1:18741/v1`, `AE_LLM_MODEL` 기본 `gpt-5-mini`).
-- max_tokens는 2000이면 충분 (`EffortEstimator(llm, max_tokens=...)`로 조정).
+구 생성자 시그니처가 위와 다르면(예: 인자 없이 내부 생성) 생성부 한 줄만 맞춰 수정.
+`skill_names`는 list 또는 str 모두 허용.
 
-## 3. 입력
+## Step 4. 검증 (순서대로, 전부 통과해야 완료)
 
-`spec_text: str` — 자유 텍스트 작업 지침서. 권장 포함 요소(누락 시 정확도 하락, 실패 아님):
-
-```
-업무 제목 / 할 일 / 업무 상세 / 완료조건 / 소속 역할 / 연결된 스킬
-+ 수량 단서(단어수·문서수·항목수·검증건수)  ← count 근거가 되므로 가장 중요
+```bash
+# 4-1. 오프라인 단위테스트 (네트워크·LLM 불필요, mock)
+cd effort_estimator && python test_estimator.py        # "all tests passed" 확인
 ```
 
-## 4. 출력 스키마
+```python
+# 4-2. 실물 LLM 스모크 — 작은 업무 1건
+r = ce.estimate_task("메일 회신 초안 작성", "부서장 승인 요청", "PM",
+                     ["mail-draft", "summarize"], "첨부 보고서(약 800단어) 검토 후 회신(200단어) 작성")
+assert r["error"] is None, r["error"]
+for k in ("human_min", "agent_min", "agent_human_min", "agent_ai_min",
+          "saved_min", "speedup", "human_breakdown", "agent_breakdown", "rationale"):
+    assert k in r, f"missing key: {k}"
+assert r["agent_human_min"] > 0            # hitl 0이면 프롬프트/모델 점검
+assert abs(r["agent_min"] - (r["agent_human_min"] + r["agent_ai_min"])) < 0.01
+```
+
+```text
+# 4-3. 구현체 대조 — 구 시스템을 아직 지우기 전이라면
+같은 입력 3~5건을 구/신 양쪽에 넣고 human_min·agent_min 자릿수(order of magnitude)가
+비슷한지 확인. 2배 이상 계통 차이면 Step 5 요율 이관 미완이 원인일 가능성이 높다.
+```
+
+## Step 5. 요율 이관 (정확도 — 필수 권장)
+
+구 `counterfactual.py`의 `PRIMITIVES` dict에 실측/튜닝된 min/unit 값이 있으면,
+`rates.json`의 seed 값을 **구 값으로 덮어쓴다** (동일 primitive 이름 매칭, human 카드 우선).
+rates.json은 cold-start seed(confidence C)라 구 튜닝값이 있으면 그쪽이 더 정확하다.
+
+주의: 값을 **rates.json에만** 넣는다. 프롬프트(`build_prompt`)에 요율을 넣으면 안 된다(§금지).
+
+## Step 6. 정리
+
+- 구 클래스는 삭제하지 말고 이름만 바꿔 보존(예: `CounterfactualEstimatorLegacy`) — 롤백용.
+- 롤백 = Step 3의 import 한 줄을 되돌리면 끝. 데이터 마이그레이션 없음.
+
+---
+
+## 반환 스키마 (구 계약 유지 + 부가 키)
 
 ```jsonc
 {
-  "human_only": { "minutes": 187.5, "hours": 3.12, "breakdown": [/* §4.1 */] },
-  "agent": {
-    "minutes": 79.2, "hours": 1.32,        // 헤드라인 = machine + hitl 합산
-    "machine": {                           // 기계 활성시간 (ai_io 포함, RF 곱 적용)
-      "minutes": 29.2, "hours": 0.49,
-      "breakdown": [/* §4.1 */],
-      "ai_io": { "input_words": 8500, "output_words": 2400, "minutes": 3.6 },
-      "revision_factor": 1.0
-    },
-    "hitl": {                              // 에이전트 운용에 필요한 사람 시간
-      "minutes": 50.0, "hours": 0.83, "breakdown": [/* §4.1 */]
-    }
-  },
-  "metrics": {
-    "human_labor_leverage": 3.75,   // human_only/hitl. hitl=0이면 null
-    "automation_share": 0.733       // 1 - hitl/human_only. human=0이면 null
-  },
-  "rationale": "LLM의 수량 산정 근거 문장",
-  "confidence": "C (cold-start seed rates, 미보정)",
-  "confidence_notes": ["폐기·경고 목록. 비어있지 않으면 저신뢰 처리 권장"]
+  "error": null,                    // 실패 시 문자열. 예외를 raise하지 않음 (구 계약 동일)
+  "human_min": 12.5,
+  "agent_min": 4.2,                 // = agent_human_min + agent_ai_min
+  "agent_human_min": 3.8,           // 사람 시간: 감독(지시·검토·승인·수정지시·수동검증) + 잔여 직접작업
+  "agent_ai_min": 0.4,              // 기계 시간 (LLM 생성 ai_io 포함, revision factor 곱 적용)
+  "saved_min": 8.3,                 // human_min - agent_min
+  "speedup": 2.98,                  // human_min / agent_min (agent_min=0이면 null)
+  "human_breakdown": {"search": 6.0, "read": 6.5},     // primitive→분 flat map
+  "agent_breakdown": {"draft": 2.0, "verify": 1.8,     // 기계·사람 동명 primitive는 합산
+                      "ai_io": {"input_words": 120, "output_words": 400, "minutes": 0.6}},
+  "rationale": "...",
+  "confidence": "C (...)",          // 부가 키 — 구 소비측은 무시 가능, 저장 권장
+  "confidence_notes": []            // 비어있지 않으면 저신뢰 처리 권장
 }
 ```
 
-§4.1 breakdown 항목: `{"primitive": str, "count": float, "unit": str, "minutes": float}`
+## 구 대비 의미 변화 (교체 시 인지)
 
-주의: `agent.minutes`는 machine+hitl 단순 합산 헤드라인. 효율 지표 계산·저장 시에는
-내부 `machine.minutes`/`hitl.minutes` 세부값을 함께 보존할 것 — 사람 시간(hitl)과
-기계 시간은 다른 자원이며, leverage는 hitl 기준으로만 계산된다.
+| 항목 | 구 | 신규 |
+|---|---|---|
+| `agent_human_min` | agent 리스트 내 사람 잔여개입 | 감독 행동 + 잔여 직접작업(draft/edit/data_entry/execute/decide). 감독 오버헤드가 추가 계상되어 구보다 커질 수 있음(더 정확) |
+| `speedup` | human/agent_min | 동일 정의. 내부 지표 `human_labor_leverage`(human÷hitl)와는 **다른 지표** — 혼동 금지 |
+| 요율 | 코드 내 `PRIMITIVES` | 외부 `rates.json` 3카드(human/agent/hitl) + ai_io |
+| 프롬프트 | TAXONOMY 노출 | 요율 미노출 (count 역산 오염 방지) |
+| LLM 호출 | 1회 고정 | 1회 + 스키마 검증 실패 시 1회 자동 재시도 (최악 2회) |
 
-## 5. 오류 모드
+## 오류 모드
 
 | 상황 | 동작 |
 |---|---|
-| LLM 출력 스키마 불량 | 오류 내용 첨부해 자동 1회 재호출 |
-| 재호출도 불량 | `ValueError` raise — 호출측에서 catch |
-| 미등록 primitive·음수 count | 해당 항목만 폐기, `confidence_notes`에 기록 (raise 안 함) |
-| hitl 빈 배열 | hitl=0으로 계산 + notes 경고, leverage=null |
-| LLM 통신 실패 | llm 객체의 예외 그대로 전파 (시뮬은 `RuntimeError`) |
+| LLM 출력 스키마 불량 | 자동 1회 재호출 → 그래도 불량이면 `error` 필드에 기록 (raise 안 함) |
+| 미등록 primitive·음수 count | 해당 항목만 폐기, `confidence_notes`에 기록 |
+| hitl 빈 배열 | agent_human_min=0 + notes 경고 |
+| LLM 통신 실패 | `error` 필드에 예외 문자열 |
 
-## 6. 통합 체크리스트
+## 심화 사용 (신규 스키마 직접 사용 시)
 
-1. `estimator.py`+`rates.json` 복사 또는 서브모듈 참조.
-2. 호스트 LLM을 §2 계약으로 래핑해 주입.
-3. `python test_estimator.py` (mock, 네트워크 불필요) 통과 확인.
-4. 출력 저장 시 `confidence`·`confidence_notes` 동반 저장 (숫자만 떼어 쓰지 말 것).
-5. 운영 후 `rates.json` min_per_unit을 실측 trajectory로 보정 — 보정 전 절대값은 비교 용도로만.
-
-## 7. 구 시스템 교체 (CounterfactualEstimator drop-in)
-
-기존 `mm_app` `counterfactual.py`의 `CounterfactualEstimator`를 대체하려면
-**`compat.py`를 쓴다** — 구 시그니처·구 반환 스키마 그대로:
+compat 없이 세부 구조(count·unit 포함 breakdown, 시간·hours 병기)가 필요하면:
 
 ```python
-from compat import CounterfactualEstimator
-
-ce = CounterfactualEstimator()            # llm 미지정: onprem_llm 자동 import, 없으면 시뮬
-ce = CounterfactualEstimator(llm=OnpremLLM())   # 명시 주입 (권장)
-r = ce.estimate_task(title, context, role, skill_names, detail)
+from effort_estimator import EffortEstimator
+r = EffortEstimator(llm).estimate(spec_text)   # spec_text: 자유 텍스트 지침서
+# r = { human_only: {minutes, hours, breakdown[]},
+#       agent: { minutes, hours,
+#                machine: {minutes, breakdown[], ai_io{}, revision_factor},
+#                hitl:    {minutes, breakdown[]} },
+#       metrics: {human_labor_leverage, automation_share},
+#       rationale, confidence, confidence_notes }
 ```
 
-반환(구 스키마 유지 + 부가 키 2개):
+검증 실패 2회 시 `ValueError` raise (compat과 달리 예외 사용).
 
-```jsonc
-{
-  "error": null,                    // 실패 시 문자열, raise 안 함 (구 계약 유지)
-  "human_min": 12.5,
-  "agent_min": 4.2,                 // = agent_human_min + agent_ai_min
-  "agent_human_min": 3.8,           // 신규 hitl (감독 + 잔여 직접작업)
-  "agent_ai_min": 0.4,              // 신규 machine (ai_io 포함)
-  "saved_min": 8.3,                 // human_min - agent_min (완료시간 절감 기준)
-  "speedup": 2.98,                  // human_min / agent_min
-  "human_breakdown": {"search": 6.0, "read": 6.5},          // primitive→분 flat map
-  "agent_breakdown": {"draft": 2.0, "verify": 1.8,          // machine·hitl 동명 primitive는 합산
-                      "ai_io": {"input_words": 120, "output_words": 400, "minutes": 0.6}},
-  "rationale": "...",
-  "confidence": "...", "confidence_notes": [...]            // 부가 키 — 무시 가능, 저장 권장
-}
-```
-
-구 대비 의미 변화 (교체 시 인지할 것):
-
-| 항목 | 구 | 신규(compat) |
-|---|---|---|
-| `agent_human_min` | agent 리스트 내 사람 잔여개입 | hitl 카드 = 감독(instruct/review/approve/correct/verify) **+ 잔여 직접작업(draft/edit/data_entry/execute/decide)** — 감독 오버헤드가 추가 계상되므로 구보다 커질 수 있음(더 정확) |
-| `speedup` | human/agent_min | 동일 정의 유지. 신규 지표 `human_labor_leverage`(human÷hitl)와 **다른 지표** — 혼동 금지 |
-| 요율 | 코드 내 `PRIMITIVES` dict | `rates.json`. 구 dict에 실측 튜닝값이 있으면 rates.json의 seed를 **구 값으로 덮어쓸 것** |
-| 실패 | error 필드 | 동일 (compat이 예외를 error 문자열로 변환) |
-
-교체 시 확인 항목 (이쪽에서 확인 불가했던 가정):
-1. 구 `CounterfactualEstimator.__init__` 시그니처 — compat은 `(llm=None, rates_path=..., max_tokens=2000)`. 다르면 생성부만 수정.
-2. `agent_breakdown["ai_io"]` 내부 필드를 소비하는 코드가 있으면 `{input_words, output_words, minutes}` 형식과 대조.
-3. 구 소비측이 `human_breakdown`에 없는 키를 기대하는지 (신규 primitive 어휘: search/read/classify/decide/draft/edit/data_entry/execute/verify/communicate).
-
-## 8. 금지 사항
+## 금지 사항
 
 - 프롬프트(`build_prompt`)에 `rates.json` 요율값 노출 금지 — count 역산 오염.
   (`test_rates_not_in_prompt`가 회귀 감시.)
 - LLM에게 시간(분·시)을 직접 출력시키는 프롬프트 개조 금지 — 수량만.
+- 출력 저장 시 `agent_human_min`/`agent_ai_min` 세부값을 버리고 `agent_min`만 저장하지 말 것
+  — 사람 시간과 기계 시간은 다른 자원.

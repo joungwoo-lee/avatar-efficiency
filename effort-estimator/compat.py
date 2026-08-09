@@ -17,7 +17,10 @@
 
 예외를 raise하지 않는다 — 실패 시 error 필드에 문자열, 수치는 None.
 """
-from estimator import EffortEstimator, DEFAULT_RATES_PATH
+try:  # 패키지로 복사된 경우 (effort_estimator/)
+    from .estimator import EffortEstimator, DEFAULT_RATES_PATH
+except ImportError:  # 폴더를 직접 sys.path에 놓고 쓰는 경우 (개발·테스트)
+    from estimator import EffortEstimator, DEFAULT_RATES_PATH
 
 _SPEC_TEMPLATE = """업무 제목: {title}
 업무 맥락: {context}
@@ -43,14 +46,16 @@ def _flat(breakdown):
 
 
 class CounterfactualEstimator:
-    """llm 미지정 시: 실환경 onprem_llm.OnpremLLM 우선, 없으면 시뮬레이터."""
+    """실환경에서는 llm에 실물 OnpremLLM 인스턴스를 명시 주입할 것. 미지정 시 시뮬레이터."""
 
     def __init__(self, llm=None, rates_path=DEFAULT_RATES_PATH, max_tokens=2000):
         if llm is None:
+            # 실환경 경로(mm_app/onprem-llm)는 하이픈 폴더라 자동 import 불가 —
+            # 실환경에서는 반드시 llm을 명시 주입할 것. 미주입 시 시뮬레이터 사용.
             try:
-                from onprem_llm import OnpremLLM        # 실환경 (mm_app/onprem-llm)
+                from .onprem_llm_sim import OnpremLLM
             except ImportError:
-                from onprem_llm_sim import OnpremLLM    # 로컬/테스트 시뮬
+                from onprem_llm_sim import OnpremLLM
             llm = OnpremLLM()
         self._est = EffortEstimator(llm, rates_path=rates_path, max_tokens=max_tokens)
 
