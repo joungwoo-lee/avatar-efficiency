@@ -4,3 +4,5 @@ test/.tmp/
 build/.tmp-exe/
 dist/
 *.lock
+__pycache__/
+*.pyc
