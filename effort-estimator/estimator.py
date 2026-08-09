@@ -191,6 +191,7 @@ class EffortEstimator:
         leverage = round(human_min / hitl_min, 2) if hitl_min > 0 else None
         automation_share = round(1 - hitl_min / human_min, 3) if human_min > 0 else None
 
+        agent_total = round(machine_min + hitl_min, 2)
         return {
             "human_only": {
                 "minutes": human_min,
@@ -198,14 +199,20 @@ class EffortEstimator:
                 "breakdown": human_bd,
             },
             "agent": {
-                "machine_minutes": machine_min,
-                "machine_hours": round(machine_min / 60, 2),
-                "hitl_minutes": hitl_min,
-                "hitl_hours": round(hitl_min / 60, 2),
-                "breakdown_machine": agent_bd,
-                "breakdown_hitl": hitl_bd,
-                "ai_io_minutes": io_min,
-                "revision_factor": rf,
+                "minutes": agent_total,
+                "hours": round(agent_total / 60, 2),
+                "machine": {
+                    "minutes": machine_min,
+                    "hours": round(machine_min / 60, 2),
+                    "breakdown": agent_bd,
+                    "ai_io_minutes": io_min,
+                    "revision_factor": rf,
+                },
+                "hitl": {
+                    "minutes": hitl_min,
+                    "hours": round(hitl_min / 60, 2),
+                    "breakdown": hitl_bd,
+                },
             },
             "metrics": {
                 "human_labor_leverage": leverage,
@@ -223,8 +230,9 @@ def _format_report(result):
     a = result["agent"]
     m = result["metrics"]
     lines.append(f"Human-only effort : {h['minutes']:>8.1f} min ({h['hours']} h)")
-    lines.append(f"Agent machine     : {a['machine_minutes']:>8.1f} min ({a['machine_hours']} h)")
-    lines.append(f"Agent HITL(human) : {a['hitl_minutes']:>8.1f} min ({a['hitl_hours']} h)")
+    lines.append(f"Agent effort      : {a['minutes']:>8.1f} min ({a['hours']} h)")
+    lines.append(f"  - machine       : {a['machine']['minutes']:>8.1f} min ({a['machine']['hours']} h)")
+    lines.append(f"  - hitl(human)   : {a['hitl']['minutes']:>8.1f} min ({a['hitl']['hours']} h)")
     if m["human_labor_leverage"] is not None:
         lines.append(f"Labor leverage    : {m['human_labor_leverage']}x")
     if m["automation_share"] is not None:

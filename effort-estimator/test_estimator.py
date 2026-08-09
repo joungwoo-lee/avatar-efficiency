@@ -55,9 +55,10 @@ def test_math():
     approx(r["human_only"]["minutes"], 20.0)
     # agent traj: 800*0.0005 + 200*0.002 + 2*0.5 = 0.4 + 0.4 + 1.0 = 1.8
     # ai_io: 1000*0.00002 + 300*0.0015 = 0.02 + 0.45 = 0.47
-    approx(r["agent"]["machine_minutes"], 2.27)
+    approx(r["agent"]["machine"]["minutes"], 2.27)
     # hitl: 1*3.0 + 200*0.006 + 1*1.0 = 5.2
-    approx(r["agent"]["hitl_minutes"], 5.2)
+    approx(r["agent"]["hitl"]["minutes"], 5.2)
+    approx(r["agent"]["minutes"], 7.47)  # machine + hitl 합산 헤드라인
     approx(r["metrics"]["human_labor_leverage"], 20.0 / 5.2, 0.01)
     print("ok test_math")
 
@@ -88,7 +89,7 @@ def test_empty_hitl_warns():
     no_hitl["hitl"] = []
     est = EffortEstimator(MockLLM([no_hitl]))
     r = est.estimate("dummy")
-    assert r["agent"]["hitl_minutes"] == 0
+    assert r["agent"]["hitl"]["minutes"] == 0
     assert r["metrics"]["human_labor_leverage"] is None
     assert any("hitl" in n for n in r["confidence_notes"])
     print("ok test_empty_hitl_warns")
@@ -122,9 +123,9 @@ def test_live():
     est = EffortEstimator(OnpremLLM())
     r = est.estimate(spec)
     assert r["human_only"]["minutes"] > 0
-    assert r["agent"]["machine_minutes"] > 0
-    assert r["agent"]["hitl_minutes"] > 0, "라이브 응답에 hitl 없음"
-    assert r["human_only"]["minutes"] > r["agent"]["hitl_minutes"], "leverage < 1 — 수량 이상"
+    assert r["agent"]["machine"]["minutes"] > 0
+    assert r["agent"]["hitl"]["minutes"] > 0, "라이브 응답에 hitl 없음"
+    assert r["human_only"]["minutes"] > r["agent"]["hitl"]["minutes"], "leverage < 1 — 수량 이상"
     print("ok test_live")
     print(json.dumps(r, ensure_ascii=False, indent=2))
 

@@ -44,10 +44,14 @@ class YourLLM:
 {
   "human_only": { "minutes": 187.5, "hours": 3.12, "breakdown": [/* §4.1 */] },
   "agent": {
-    "machine_minutes": 29.2, "machine_hours": 0.49,   // 기계 활성시간 (ai_io 포함, RF 곱 적용)
-    "hitl_minutes": 50.0,    "hitl_hours": 0.83,      // 에이전트 운용에 필요한 사람 시간
-    "breakdown_machine": [/* §4.1 */], "breakdown_hitl": [/* §4.1 */],
-    "ai_io_minutes": 3.6, "revision_factor": 1.0
+    "minutes": 79.2, "hours": 1.32,        // 헤드라인 = machine + hitl 합산
+    "machine": {                           // 기계 활성시간 (ai_io 포함, RF 곱 적용)
+      "minutes": 29.2, "hours": 0.49,
+      "breakdown": [/* §4.1 */], "ai_io_minutes": 3.6, "revision_factor": 1.0
+    },
+    "hitl": {                              // 에이전트 운용에 필요한 사람 시간
+      "minutes": 50.0, "hours": 0.83, "breakdown": [/* §4.1 */]
+    }
   },
   "metrics": {
     "human_labor_leverage": 3.75,   // human_only/hitl. hitl=0이면 null
@@ -61,8 +65,9 @@ class YourLLM:
 
 §4.1 breakdown 항목: `{"primitive": str, "count": float, "unit": str, "minutes": float}`
 
-주의: "AI 에이전트 에포트"를 한 값으로 쓰려면 machine_minutes가 아니라
-**(machine_minutes, hitl_minutes) 쌍**을 유지할 것. hitl을 버리면 효율 과대평가.
+주의: `agent.minutes`는 machine+hitl 단순 합산 헤드라인. 효율 지표 계산·저장 시에는
+내부 `machine.minutes`/`hitl.minutes` 세부값을 함께 보존할 것 — 사람 시간(hitl)과
+기계 시간은 다른 자원이며, leverage는 hitl 기준으로만 계산된다.
 
 ## 5. 오류 모드
 
