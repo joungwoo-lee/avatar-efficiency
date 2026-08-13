@@ -1,21 +1,24 @@
-# Claude Code 트레젝토리 기반 결과물 산정 및 Human Equivalent Effort 측정 설계
+# OBHE (Outcome-Based Human Effort): Claude Code 트레젝토리 기반 결과물 복원 및 인간 작업량 측정 설계
 
 ## 1. 목적
 
-과거 Claude Code 세션의 트레젝토리 파일 1개 이상을 입력받아 사용자 PC에서 로컬 코드를 실행하고, 해당 세션들이 실제로 생성·수정한 최종 산출물을 최대한 deterministic하게 확인한다.
+**OBHE(Outcome-Based Human Effort)**는 AI Agent가 실제로 남긴 최종 유효 결과를 기준으로, 동일한 결과를 숙련된 사람이 AI 없이 만들었다면 필요한 작업량과 시간을 추정하는 방법론이다.
 
-확정된 산출물은 LLM에 입력하여 다음 순서로 사람 기준 작업량으로 환산한다.
+본 설계는 과거 Claude Code 세션의 trajectory(JSONL) 파일 1개 이상을 입력받아 **사용자 PC에서 로컬 코드를 실행하여 해당 세션이 생성·수정한 산출물을 복원·확정**하고, 그 결과물을 사람 기준 작업량으로 환산하는 것을 목표로 한다.
 
-**트레젝토리 → 로컬 산출물 복원/확정 → 완료 결과 단위 분할 → 결과별 인간 행동량 추정 → 행동량 × 인간 시간요율 → Human Equivalent Effort**
+전체 흐름은 다음과 같다.
+
+**trajectory → 로컬 산출물 복원/확정 → 완료 결과 단위 분할 → 결과별 인간 행동량 추정 → 행동량 × 인간 시간요율 → OBHE**
 
 핵심 원칙은 다음과 같다.
 
-- **산출물 탐색과 Git diff는 LLM을 사용하지 않는다.**
-- LLM은 **최종 산출물의 의미를 해석하고 인간 작업량으로 변환하는 단계**에만 사용한다.
+- **GitHub/GitLab 등 원격 저장소 업로드는 필요하지 않다.** 모든 artifact 탐색은 사용자 PC에서 로컬로 수행한다.
+- **로컬 Git도 필수는 아니다.** 있으면 before/after 상태를 검증하는 강한 증거로 사용한다.
+- 산출물 탐색, snapshot 비교, hash 비교, diff 생성은 LLM을 사용하지 않는다.
+- LLM은 **최종 산출물을 완료 결과로 분해하고 인간 행동량으로 변환하는 의미론 단계**에만 사용한다.
 - 최종 시간은 LLM이 직접 추측하지 않고 **행동량 × 실측 Human Rate**로 계산한다.
 - AI가 만들었다가 폐기한 목업·중간안·시행착오는 최종 산출물에서 제거한다.
-- 여러 세션이 하나의 작업을 이어서 수행한 경우 세션별 변경량의 합이 아니라 **전체 작업의 최종 net result**를 측정한다.
-
+- 여러 세션이 하나의 작업을 이어서 수행한 경우 세션별 변경량을 합산하지 않고 **전체 작업의 최종 net result**를 측정한다.
 ---
 
 ## 2. 전체 구조
@@ -24,30 +27,29 @@
 [Claude Code trajectory 1..N]
               |
               v
-+-----------------------------------+
-| Local Trajectory / Artifact Engine|
-| 사용자 PC에서 실행                |
-+-----------------------------------+
++---------------------------------------+
+| Local Artifact Reconstruction Engine  |
+| 사용자 PC에서만 실행                  |
++---------------------------------------+
               |
               | 1. 세션/프로젝트 식별
-              | 2. 수정 경로 추출
-              | 3. Git 상태/이력 조사
-              | 4. before/after 복원
-              | 5. net diff 계산
+              | 2. Write/Edit/Bash 변경 경로 추출
+              | 3. checkpoint/snapshot/filesystem 탐색
+              | 4. 로컬 Git이 있으면 추가 검증
+              | 5. before/after 및 final net artifact 확정
               v
        [Artifact Manifest]
        - 작업 요구사항
-       - 최종 변경 파일
-       - 생성/수정/삭제
-       - net diff
-       - binary artifact
-       - 추출 근거
-       - confidence
+       - 생성/수정/삭제 파일
+       - final content / net diff
+       - 변경 증거(source)
+       - transient/excluded artifact
+       - reconstruction confidence
               |
               v
-+-----------------------------------+
-| LLM Human Workload Estimator      |
-+-----------------------------------+
++---------------------------------------+
+| LLM Outcome & Workload Estimator      |
++---------------------------------------+
               |
               | 1. 완료 결과 단위 분할
               | 2. 각 결과별 최소 인간 행동
@@ -56,58 +58,82 @@
        [Human Action Ledger]
               |
               v
-+-----------------------------------+
-| Human Rate Engine                 |
-+-----------------------------------+
++---------------------------------------+
+| Empirical Human Rate Engine           |
++---------------------------------------+
               |
               v
-     [Human Equivalent Effort]
+       [OBHE / Human Equivalent Effort]
 ```
 
+### 산출물 복원의 기본 철학
+
+OBHE는 **Snapshot-first, Git-assisted** 구조를 사용한다.
+
+- snapshot/checkpoint가 있으면 그것으로 before/after를 복원한다.
+- Git이 로컬에 있으면 commit/diff/status를 추가 증거로 사용한다.
+- Git이 없어도 trajectory의 직접 편집 기록, checkpoint, 현재 filesystem, file hash/timestamp를 조합해 산출물을 복원한다.
+- 원격 Git 서버로 push하는 과정은 어떤 경우에도 필요하지 않다.
 ---
 
-## 3. 입력
+## 3. 입력과 증거 우선순위
 
 ### 3.1 필수 입력
 
 - Claude Code trajectory JSONL 파일 1개 이상
-- trajectory가 수행되었던 사용자 PC의 프로젝트/저장소
+- trajectory가 실행되었던 사용자 PC 또는 해당 프로젝트 파일에 접근 가능한 로컬 환경
 
-### 3.2 있으면 정확도가 크게 올라가는 입력
+trajectory에 working directory가 남아 있고 해당 경로가 현재도 존재한다면 사용자가 별도 repository 경로를 입력하지 않아도 자동 탐색할 수 있다.
 
-- 작업 시작 commit
-- 작업 종료 commit
-- 작업 당시 branch
-- Git repository
-- Claude Code checkpoint
-- 작업 직후의 working tree snapshot
+### 3.2 선택 입력
+
+다음은 필수가 아니며, 존재할수록 historical artifact 복원 정확도가 높아진다.
+
+- Claude Code checkpoint / rewind snapshot
+- OBHE가 사전에 저장한 before/after local snapshot
+- 작업 직후의 project directory backup
+- 로컬 Git repository (commit/push 여부와 무관)
+- 작업 시작/종료 commit 또는 branch (있으면 사용)
+- 별도 filesystem snapshot / backup
+
+**GitHub/GitLab에 push되었는지는 관계없다.** 로컬 `.git`만 존재해도 Git 정보는 사용할 수 있다.
 
 ### 3.3 trajectory에서 deterministic하게 추출할 정보
 
-가능한 경우 다음을 JSONL에서 직접 추출한다.
+가능한 경우 JSONL에서 다음을 직접 추출한다.
 
 - session ID
 - working directory / project
 - timestamp
 - user message
 - tool call / tool result
-- Write 대상
-- Edit 대상
+- Write 대상과 작성 내용
+- Edit 대상과 변경 내용
 - NotebookEdit 대상
 - Bash command
 - Read/Grep/Glob으로 접근한 파일
-- Git 관련 command
+- Git command가 있다면 commit/branch 정보
 - 명시적으로 생성·삭제·이동한 경로
 
-Claude Code 세션은 프롬프트, tool call, tool result, 응답을 포함하는 대화 기록을 저장하지만 파일시스템 자체를 저장하는 것은 아니다. 따라서 trajectory는 **변경의 증거와 작업 의도**이고, 파일의 최종 상태는 가능하면 Git이나 당시 filesystem에서 별도로 복원해야 한다.
+Claude Code session은 대화와 tool 사용 기록을 보존하지만 filesystem 자체와 동일하지 않다. 따라서 trajectory는 **변경을 찾기 위한 증거**이며, 최종 artifact는 가능한 로컬 상태 증거를 조합해 별도로 확정한다.
 
-또한 Claude Code의 transcript JSONL 내부 형식은 버전에 따라 변경될 수 있으므로 parser는 고정 JSON schema 하나에 강결합하지 않고 **version adapter + tolerant parser** 구조로 만든다.
+### 3.4 Artifact Evidence 우선순위
 
+동일 작업에 여러 증거가 존재하면 다음 순서로 신뢰한다.
+
+1. **OBHE before/after snapshot**: 측정 시스템이 사전에 저장한 완전한 로컬 snapshot
+2. **Claude checkpoint**: 직접 file-edit tool 변경의 before-state 복원
+3. **로컬 Git before/after**: commit, diff, status, reflog 등
+4. **trajectory의 Write/Edit/NotebookEdit 기록 + 현재 파일**
+5. **Bash command에서 추출한 변경 후보 + 현재 filesystem/hash/timestamp**
+6. 증거가 부족하면 `PARTIAL` 또는 `UNRECOVERABLE`
+
+중요한 점은 특정 수단 하나를 필수화하지 않고 **여러 독립 증거를 합쳐 final artifact를 결정**하는 것이다.
 ---
 
 ## 4. 로컬 산출물 탐색 방법
 
-### 4.1 1차: trajectory에서 직접 수정 경로 추출
+### 4.1 trajectory에서 직접 수정 경로 추출
 
 LLM 없이 JSON parser로 다음 tool call을 찾는다.
 
@@ -115,7 +141,7 @@ LLM 없이 JSON parser로 다음 tool call을 찾는다.
 - Edit
 - NotebookEdit
 
-각 세션에서 얻은 경로를 합친다.
+각 세션의 경로를 합친다.
 
 ```text
 DirectTouchedPaths =
@@ -124,188 +150,192 @@ DirectTouchedPaths =
   ∪ NotebookEdit paths
 ```
 
-예:
+이 단계는 가장 높은 신뢰도의 **직접 변경 후보**를 제공한다.
 
-```text
-session_1:
-  Edit  src/auth.ts
-  Write src/token.ts
+가능하면 tool input에서 Write content, Edit old/new string 또는 patch도 함께 보존한다. 이것은 Git이 없어도 변경 결과를 재구성하는 증거가 된다.
 
-session_2:
-  Edit  src/auth.ts
-  Write tests/auth.test.ts
+### 4.2 Bash에 의한 변경 후보 추출
 
-DirectTouchedPaths:
-  src/auth.ts
-  src/token.ts
-  tests/auth.test.ts
-```
-
-이 단계는 높은 신뢰도의 **직접 변경 경로**를 제공한다.
-
-### 4.2 2차: Bash에 의한 변경 후보 추출
-
-Bash는 다음과 같은 방식으로 파일을 변경할 수 있다.
+Bash는 다음과 같이 file-edit tool을 거치지 않고 파일을 바꿀 수 있다.
 
 ```text
 echo ... > file
 sed -i ...
-cp
-mv
-rm
+cp / mv / rm
 python generate.py
 npm run build
 make
 code generator
 ```
 
-Claude Code checkpoint도 Bash가 만든 파일 변경을 완전히 추적하지 않으므로 trajectory의 Write/Edit 목록만으로 전체 산출물을 판단해서는 안 된다.
+Bash command를 parser/heuristic으로 분석하여 다음을 `BashCandidatePaths`로 기록한다.
 
-Bash command는 LLM 없이 parser/heuristic으로 다음을 추출한다.
-
-- 명시적인 output path
 - redirect 대상
-- cp/mv/rm 대상
-- generator의 output option
-- Git command
-- build/output directory
+- cp/mv/rm source 및 destination
+- output option
+- build/generated directory
+- 실행한 script가 명시적으로 가리키는 output
 
-이 결과는 `BashCandidatePaths`로 기록하며 직접 Write/Edit보다 낮은 confidence를 부여한다.
+Bash command만으로 실제 변경 여부를 확정하지 않고 snapshot/filesystem/Git evidence와 교차검증한다.
 
----
+### 4.3 checkpoint / snapshot을 통한 before-after 복원
 
-## 5. Git을 이용한 실제 최종 산출물 확정
+사용 가능한 경우 가장 먼저 파일 snapshot을 이용한다.
 
-### 5.1 핵심 원칙
+- Claude checkpoint가 있으면 직접 Write/Edit/NotebookEdit로 변경된 파일의 이전 내용을 복원한다.
+- OBHE collector가 저장한 before/after snapshot이 있으면 Git 없이도 정확한 net diff를 계산한다.
+- directory snapshot이라면 path, hash, size를 먼저 비교하고 변경된 파일만 content diff한다.
 
-**trajectory가 “어디를 건드렸는지” 알려주고, Git이 “결국 무엇이 남았는지” 확인한다.**
+### 4.4 현재 filesystem과 대조
 
-세션마다 diff를 합산하지 않는다.
+과거 세션 이후 해당 파일이 더 이상 수정되지 않았다면 현재 파일은 최종 artifact의 strong evidence가 될 수 있다.
 
-여러 세션이 같은 작업을 이어서 수행했다면:
+다음 정보를 비교한다.
 
-```text
-전체 작업 시작 상태
-        ↓
- session 1
- session 2
- session 3
-        ↓
-전체 작업 종료 상태
-```
+- trajectory timestamp
+- file modification time
+- current hash
+- checkpoint hash
+- trajectory의 마지막 Write/Edit 결과
 
-의 **시작 상태와 종료 상태 사이 net diff**만 계산한다.
+세션 이후 다른 수정 가능성이 있으면 confidence를 낮춘다.
 
-따라서:
+### 4.5 로컬 Git은 보조 검증으로 사용
 
-- 만들었다가 삭제한 파일
-- 구현했다가 원복한 코드
-- 실패한 prototype
-- 중간 리팩터링
-
-등은 최종 변경에 남지 않으면 자동으로 제외된다.
-
-### 5.2 Base State 결정 우선순위
-
-정확한 base commit은 다음 우선순위로 결정한다.
-
-1. 사용자가 명시적으로 제공한 base commit
-2. trajectory에서 확인되는 작업 시작 HEAD
-3. trajectory의 Git command에서 확인되는 commit/branch
-4. 작업 시작 timestamp와 Git reflog/history를 이용한 best-effort 추정
-5. 판단 불가
-
-Base State를 확정할 수 없으면 결과에 반드시 confidence를 낮춰 표시한다.
-
-### 5.3 End State 결정 우선순위
-
-1. 사용자가 제공한 end commit/snapshot
-2. trajectory에서 작업 종료 후 생성된 commit
-3. 작업 직후의 working tree가 현재도 유지되는 경우 현재 filesystem
-4. checkpoint/snapshot으로 복원 가능한 경우 해당 상태
-5. 판단 불가
-
-**과거 세션 이후 저장소가 계속 수정되었고 당시 변경이 commit이나 snapshot으로 남아 있지 않다면 trajectory만으로 당시 최종 filesystem을 완전히 복원하는 것은 불가능할 수 있다.**
-
-이 경우 시스템은 결과를 만들어내지 말고 `historical_state_unavailable`로 표시한다.
-
----
-
-## 6. Git 기반 Artifact Manifest 생성
-
-Git 저장소라면 기본적으로 다음을 수집한다.
+로컬 `.git`이 있으면 다음을 추가로 사용한다.
 
 ```bash
-git diff --name-status <BASE> <END>
-git diff <BASE> <END> -- <paths...>
-```
-
-작업 종료 상태가 uncommitted working tree라면 추가로:
-
-```bash
-git diff <BASE>
+git status --porcelain
+git diff --name-status
+git diff
 git ls-files --others --exclude-standard
 ```
 
-을 사용한다.
+base/end commit을 아는 경우에는 commit 간 diff를 사용한다.
 
-삭제, 신규, 수정, rename을 구분한다.
+```bash
+git diff --name-status <BASE> <END>
+git diff <BASE> <END>
+```
 
-### 6.1 trajectory와 Git 결과 결합
+**원격 저장소로 push하거나 commit할 필요는 없다.** 현재 작업 tree의 uncommitted change도 Git으로 확인할 수 있다.
+---
+
+## 5. 실제 최종 산출물 확정
+
+### 5.1 핵심 원칙
+
+**trajectory가 변경 후보를 알려주고, 로컬 상태 증거가 결국 무엇이 남았는지를 확인한다.**
+
+세션별 수정량을 더하지 않는다. 여러 세션이 하나의 일을 이어 수행했다면 시작 상태와 종료 상태 사이의 **최종 net artifact**만 측정한다.
+
+따라서 다음은 최종 artifact에 남지 않으면 자동 제외한다.
+
+- 만들었다가 삭제한 파일
+- 구현 후 원복한 코드
+- 실패한 prototype
+- 중간 리팩터링
+- 동일 결과의 반복 생성
+
+### 5.2 Before State 결정 우선순위
+
+1. OBHE가 저장한 작업 시작 snapshot
+2. Claude checkpoint의 최초 file snapshot
+3. 로컬 Git의 작업 시작 commit/HEAD
+4. trajectory의 Read 결과 + Edit old-value 등으로 재구성 가능한 이전 상태
+5. local backup / filesystem snapshot
+6. 판단 불가
+
+### 5.3 End State 결정 우선순위
+
+1. OBHE가 저장한 작업 종료 snapshot
+2. trajectory 종료 직후 checkpoint / filesystem snapshot
+3. 로컬 Git의 종료 commit 또는 작업 tree
+4. trajectory의 마지막 Write/Edit 결과와 현재 파일이 일치하는 경우 현재 filesystem
+5. 판단 불가
+
+과거 trajectory 이후 파일이 계속 변경됐고 before/end를 복원할 snapshot, checkpoint, local Git 이력이 모두 없다면 당시 final artifact를 완전히 복원할 수 없을 수 있다. 이 경우 억지로 확정하지 않고 confidence를 낮추거나 측정에서 제외한다.
+
+---
+
+## 6. Artifact Reconstruction과 분류
+
+각 변경 파일에 대해 여러 증거를 결합한다.
 
 ```text
 DirectTouchedPaths
 BashCandidatePaths
-GitChangedPaths
+CheckpointChangedPaths
+SnapshotChangedPaths
+LocalGitChangedPaths
+CurrentFilesystemEvidence
 ```
 
-를 비교한다.
+권장 classification:
 
 | 분류 | 조건 | 신뢰도 |
 |---|---|---|
-| DIRECT_NET | trajectory 직접 수정 + 최종 diff에 존재 | 매우 높음 |
-| BASH_NET | Bash 후보 + 최종 diff에 존재 | 높음 |
-| GIT_NET | trajectory에는 없으나 작업구간 최종 diff에 존재 | 중간 |
-| TRANSIENT | trajectory에는 있으나 최종 diff에서 사라짐 | 최종 산출물 제외 |
-| UNRESOLVED | 변경 증거는 있으나 historical state 복원 불가 | 낮음/측정 제외 |
+| SNAPSHOT_NET | before/after snapshot으로 net change 확정 | 매우 높음 |
+| CHECKPOINT_NET | checkpoint + final file로 직접 편집 변경 확정 | 높음 |
+| LOCAL_GIT_NET | 로컬 Git diff로 net change 확정 | 매우 높음 |
+| DIRECT_NET | trajectory 직접 수정 + 최종 content 일치 | 높음 |
+| BASH_NET | Bash 후보 + filesystem/snapshot에서 실제 변경 확인 | 중간~높음 |
+| TRANSIENT | trajectory에서 변경했으나 final state에서 사라짐 | 최종 산출물 제외 |
+| UNRESOLVED | 변경 증거는 있으나 final state 복원 불가 | 낮음/자동 측정 제외 |
 
-`GIT_NET`은 사용자의 수동 변경이나 다른 동시 세션 변경일 가능성이 있으므로 자동 포함하지 않고 세션 시간, 경로 연관성, Git command 등의 규칙으로 attribution confidence를 계산한다.
+여러 증거가 같은 변경을 지지하면 confidence를 높인다.
 
 ---
 
-## 7. 비 Git 산출물
+## 7. Git이 전혀 없는 프로젝트
 
-Git repository가 아니거나 binary artifact가 있는 경우에도 동일한 원리를 적용한다.
+Git이 없어도 OBHE는 동작한다.
 
-가능한 경우:
+### 과거 작업
 
-- 파일 생성/수정 timestamp
-- file hash
-- trajectory의 Write/Edit/Bash path
-- 디렉터리 스냅샷
-- backup/checkpoint
-- 파일 크기
-- before/after hash
+가능한 증거를 다음처럼 조합한다.
 
-를 이용한다.
+```text
+trajectory Write/Edit patch
+        +
+Claude checkpoint
+        +
+현재 파일 / backup
+        +
+file hash / timestamp
+        +
+Bash path heuristic
+        ↓
+Artifact Reconstruction
+```
 
-텍스트 파일은 before/after content diff를 만든다.
+### 앞으로 측정할 작업
 
-PDF, 이미지, PPTX, XLSX 등 binary file은:
+OBHE local collector가 세션 시작/종료 시점에 프로젝트 변경 파일의 snapshot 또는 content-addressed backup을 자동 저장한다.
 
-- 파일 경로
-- 생성/변경 여부
-- before hash
-- after hash
-- 최종 파일 자체
+권장 최소 저장 항목:
 
-를 Artifact Manifest에 포함한다.
+```text
+session/job ID
+project root
+path
+before hash
+after hash
+before content 또는 binary backup
+after content 또는 binary backup
+change type(created/modified/deleted/renamed)
+timestamp
+trajectory file reference
+```
 
+이 구조를 사용하면 Git이 전혀 없는 프로젝트에서도 정확한 net artifact를 계산할 수 있다.
+
+즉 OBHE에서 Git은 **필수 저장 계층이 아니라 선택적 검증 계층**이다.
 ---
 
 ## 8. Artifact Manifest
 
-로컬 단계의 출력은 LLM에 바로 trajectory 전체를 넘기는 것이 아니라 **정규화된 Artifact Manifest**로 만든다.
+로컬 단계의 출력은 LLM에 trajectory 전체를 그대로 넘기는 것이 아니라 **여러 로컬 증거를 통합한 정규화된 Artifact Manifest**로 만든다.
 
 예:
 
@@ -313,9 +343,9 @@ PDF, 이미지, PPTX, XLSX 등 binary file은:
 {
   "job_id": "job-001",
   "sessions": ["s1", "s2", "s3"],
-  "repository": "/workspace/project",
-  "base_state": "abc123",
-  "end_state": "def456",
+  "project_root": "/workspace/project",
+  "before_state": {"source": "checkpoint", "id": "cp-001"},
+  "end_state": {"source": "local_filesystem", "captured_at": "..."},
   "task_requests": [
     "OAuth 로그인과 token refresh를 구현해줘"
   ],
@@ -324,6 +354,7 @@ PDF, 이미지, PPTX, XLSX 등 binary file은:
       "path": "src/auth.ts",
       "status": "modified",
       "attribution": "DIRECT_NET",
+      "evidence_sources": ["trajectory_edit", "checkpoint", "current_hash"],
       "diff": "...",
       "confidence": 0.99
     },
@@ -331,6 +362,7 @@ PDF, 이미지, PPTX, XLSX 등 binary file은:
       "path": "src/token.ts",
       "status": "created",
       "attribution": "DIRECT_NET",
+      "evidence_sources": ["trajectory_edit", "checkpoint", "current_hash"],
       "content": "...",
       "confidence": 0.99
     },
@@ -338,6 +370,7 @@ PDF, 이미지, PPTX, XLSX 등 binary file은:
       "path": "tests/auth.test.ts",
       "status": "created",
       "attribution": "DIRECT_NET",
+      "evidence_sources": ["trajectory_edit", "checkpoint", "current_hash"],
       "content": "...",
       "confidence": 0.99
     }
@@ -567,58 +600,47 @@ trajectory_3
       ↓
 session metadata 추출
       ↓
-동일 repo / branch / 시간연속성 기준 grouping
+project path / session relation / 시간 연속성 기준 grouping
       ↓
-전체 job의 base/end state 결정
+전체 job의 before/end evidence 결정
       ↓
-한 번의 net artifact 계산
+한 번의 final net artifact 계산
 ```
 
 세션별 결과를 각각 사람시간으로 계산한 뒤 합산하지 않는다.
 
-그렇게 하면:
-
-- 같은 파일 반복 수정
-- 실패 후 재시도
-- 목업 반복 생성
-- 세션 간 원복
-
-이 모두 사람 작업량으로 중복 계산되는 문제가 발생하기 때문이다.
-
+동일 파일이 여러 세션에서 반복 수정되어도 최종 상태에 남은 변경만 계산한다. Git이 있으면 local history를 보조 증거로 쓰고, Git이 없으면 checkpoint/snapshot/trajectory evidence를 세션 간 연결한다.
 ---
 
-## 14. 과거 trajectory 처리의 한계
+## 14. 과거 trajectory 처리의 한계와 신뢰도
 
-Claude Code session은 대화 기록을 저장하지만 filesystem snapshot 자체는 아니다.
+Claude Code session은 conversation/tool history이지 filesystem 전체 snapshot은 아니다. 따라서 historical artifact의 정확도는 **당시 상태 증거가 얼마나 남아 있는가**에 의해 결정된다.
 
-따라서 다음 상황에서는 당시 결과물의 정확한 복원이 어려울 수 있다.
+다음 상황에서는 정확한 복원이 어려울 수 있다.
 
-- 당시 변경을 commit하지 않음
-- 현재 working tree가 이미 다른 작업으로 변경됨
-- checkpoint/snapshot도 없음
-- Bash 또는 외부 프로그램이 파일을 만들었지만 그 흔적이 현재 사라짐
-- 다른 사용자/세션이 같은 repo를 동시에 수정함
+- 당시 checkpoint/snapshot이 없음
+- trajectory의 직접 Write/Edit 외에 Bash/외부 프로그램이 많은 파일을 변경함
+- 세션 이후 동일 파일이 계속 수정됨
+- backup이나 local Git history가 없음
+- 다른 사용자/세션이 같은 파일을 동시에 수정함
 
-이때 시스템은 추정 결과를 사실처럼 확정하지 않는다.
-
-권장 상태:
+권장 reconstruction status:
 
 ```text
 EXACT
-  base/end가 확정되고 net artifact 복원 가능
+  before/end snapshot 또는 명확한 local Git/checkpoint 조합으로 net artifact 확정
 
 HIGH_CONFIDENCE
-  대부분 복원되지만 일부 attribution 불확실
+  직접 tool 기록과 최종 파일이 일치하며 일부 보조 증거가 존재
 
 PARTIAL
-  일부 파일만 복원 가능
+  변경 파일 일부는 확정했지만 전체 historical state는 불완전
 
 UNRECOVERABLE
-  당시 최종 산출물 상태를 복원할 근거가 부족
+  당시 최종 산출물을 특정할 충분한 증거가 없음
 ```
 
-Human Equivalent Effort 계산은 기본적으로 `EXACT` 또는 `HIGH_CONFIDENCE`만 자동 승인한다.
-
+Human Equivalent Effort 자동 계산은 기본적으로 `EXACT`와 `HIGH_CONFIDENCE`에 적용한다. `PARTIAL`은 부분값임을 명시하고, `UNRECOVERABLE`은 산정하지 않는다.
 ---
 
 ## 15. 왜 trajectory 자체의 작업량을 세지 않는가
@@ -657,17 +679,18 @@ trajectory의 역할은:
 | 세션 grouping | 규칙/metadata | X |
 | 수정 경로 탐색 | tool-call parser | X |
 | Bash 후보 분석 | parser/heuristic | X |
-| Git base/end 탐색 | Git command | X |
-| 최종 net diff | Git | X |
+| checkpoint/snapshot 탐색 | local filesystem | X |
+| hash/content 비교 | deterministic diff | X |
+| 로컬 Git 검증(있는 경우) | Git command | X |
+| final artifact reconstruction | evidence resolver | X |
 | artifact manifest | local code | X |
 | 완료 결과 단위 분할 | semantic reasoning | O |
 | 인간 행동 선택 | semantic reasoning | O |
 | 행동 workload 산정 | artifact reasoning | O |
 | 시간요율 적용 | deterministic calculator | X |
-| 최종 Human Effort | deterministic calculator | X |
+| 최종 OBHE | deterministic calculator | X |
 
-즉 **LLM은 의미론이 필요한 중간 한 구간에만 사용한다.**
-
+즉 **LLM은 semantic decomposition에만 사용하고 artifact 복원과 시간계산에는 사용하지 않는다.**
 ---
 
 ## 17. 권장 구현 모듈
@@ -679,25 +702,36 @@ trajectory_ingestor
   - session metadata
 
 session_grouper
-  - repo/cwd
+  - project/cwd
   - timestamp
-  - branch
   - session relation
 
 path_extractor
   - Write/Edit/NotebookEdit
   - Bash candidate
-  - Git commands
+  - optional Git commands
 
-git_state_resolver
-  - base commit
-  - end commit
-  - reflog/history fallback
+checkpoint_resolver
+  - Claude checkpoint 탐색
+  - before-state 복원
+
+snapshot_manager
+  - OBHE local before/after snapshot
+  - content hash / binary backup
+
+filesystem_evidence_resolver
+  - current file
+  - mtime/hash
+  - backup/snapshot
+
+local_git_adapter (optional)
+  - status/diff
+  - commit/reflog
+  - untracked files
 
 artifact_resolver
-  - net diff
-  - untracked files
-  - binary files
+  - evidence fusion
+  - final net artifact
   - attribution confidence
 
 artifact_manifest_builder
@@ -711,59 +745,60 @@ human_workload_estimator
   - action ledger
 
 human_rate_engine
-  - rate table
+  - empirical rate table
   - complexity adjustment
   - P50/P80 계산
 
 reporter
-  - Human Equivalent Effort
-  - confidence
+  - OBHE
+  - reconstruction confidence
   - excluded artifacts
   - unresolved items
 ```
-
 ---
 
 ## 18. MVP 권장 범위
 
-초기 버전에서는 범위를 좁힌다.
-
 ### 지원
 
-- Git repository
 - Claude Code JSONL trajectory
 - 1개 또는 여러 세션
-- Write/Edit/NotebookEdit
+- 사용자 PC 로컬 실행
+- Write/Edit/NotebookEdit path 및 patch 추출
+- Claude checkpoint 탐색
+- 현재 filesystem hash/content 비교
 - 기본 Bash path heuristic
-- text source code
+- text source code 및 일반 파일
 - 신규/수정/삭제 파일
-- 작업 시작/종료 commit이 존재하는 경우 우선 지원
+- **Git 없는 프로젝트 지원**
+- 로컬 Git이 있으면 optional diff 검증
 
 ### 후순위
 
-- commit 없이 오래된 working tree 복원
+- 오래된 과거 작업에서 snapshot/checkpoint/Git이 모두 없는 경우의 고급 복원
 - 동시 작업자 attribution
-- 복잡한 Bash generator 추론
+- 복잡한 Bash generator의 output provenance
 - binary 내부 semantic diff
 - remote/network filesystem
-- non-Git project
 
-초기 목적은 **정확하게 복원 가능한 작업부터 높은 신뢰도로 측정하는 것**이다.
-
+MVP의 목표는 Git 사용 여부와 무관하게 **확정 가능한 artifact만 높은 신뢰도로 측정**하는 것이다.
 ---
 
 ## 19. 최종 방법론 요약
 
-방법론을 한 문장으로 정리하면 다음과 같다.
+OBHE를 한 문장으로 정리하면 다음과 같다.
 
-> **Claude Code trajectory는 AI가 한 일을 사람시간으로 세는 데 사용하지 않고, 사용자 PC에서 실제 최종 산출물을 찾아내는 증거로 사용한다. 최종 산출물이 확정되면 이를 독립적으로 완료 판정 가능한 결과 단위로 나누고, 각 결과를 숙련된 사람이 만들기 위해 필요한 최소 행동과 행동량으로 환산한 뒤, 실제 인간 시간요율을 곱하여 Human Equivalent Effort를 계산한다.**
+> **Claude Code trajectory는 AI의 시행착오량을 사람시간으로 세는 데 사용하지 않고, 사용자 PC에서 실제 최종 산출물을 복원하기 위한 증거로 사용한다. 최종 산출물을 독립 완료 결과로 분해하고, 각 결과를 사람이 만드는 데 필요한 최소 행동과 행동량으로 환산한 뒤 실제 인간 시간요율을 적용하여 Outcome-Based Human Effort를 계산한다.**
 
-전체 계산 흐름:
+전체 흐름:
 
 ```text
 Trajectory 1..N
     ↓
-Local deterministic analysis
+Local evidence extraction
+    ↓
+checkpoint / snapshot / filesystem
+    + optional local Git
     ↓
 Final net artifact
     ↓
@@ -771,20 +806,286 @@ LLM: 완료 결과 분할
     ↓
 LLM: 결과별 인간 행동 + workload
     ↓
-Human Rate Table
+Empirical Human Rate Table
     ↓
-Reference Human Effort
+OBHE
 ```
 
-이 구조의 핵심은 다음 세 가지다.
+핵심은 다음 네 가지다.
 
-1. **AI의 긴 시행착오 경로가 아니라 최종 net result를 측정한다.**
-2. **LLM이 시간을 직접 추측하지 않고 행동량까지만 추론한다.**
-3. **실제 시간은 조직의 human-only 실측 요율로 계산한다.**
+1. **Git/GitHub는 필수가 아니다.** 로컬 snapshot과 trajectory가 기본이며 Git은 있으면 검증에 쓴다.
+2. **AI의 긴 실행경로가 아니라 최종 net result를 측정한다.**
+3. **LLM은 시간을 직접 추측하지 않고 결과와 행동량까지만 추론한다.**
+4. **시간은 human-only 실측 rate로 계산한다.**
+---
+
+## 20. 논문화 시 핵심 선행연구와 OBHE의 차용점
+
+이 방법론을 논문화할 경우 관련 연구를 넓게 나열하기보다, **현재 설계의 실제 구성요소와 직접 연결되는 연구만 인용하는 것이 적절하다.** 핵심 선행연구는 아래 4개이며, AI가 만든 과잉 산출물의 해석을 위해 METR의 Task Substitution 연구를 보조적으로 사용한다.
+
+### 20.1 METR: coding-agent transcript에서 net successful output을 기준으로 인간시간 추정
+
+**Reference**
+
+Amy Deng. *Analyzing coding agent transcripts to upper bound productivity gains from AI agents*. METR Research Note, 2026.  
+https://metr.org/notes/2026-02-17-exploratory-transcript-analysis-for-estimating-time-savings-from-coding-agents/
+
+**이 연구가 한 일**
+
+- 5,305개의 Claude Code transcript를 분석했다.
+- 긴 transcript를 압축하되 code diff를 보존했다.
+- LLM judge가 transcript에서 성공한 작업과 실패한 작업을 구분하고, 숙련 개발자가 AI 없이 **net successful output**을 만드는 시간을 추정했다.
+- failed task, abandoned work, agent setup, agent-induced error correction, 불필요한 verbose planning 등을 인간 counterfactual 시간에서 제외했다.
+- 저자는 개별 transcript를 따로 평가하면 **다른 세션에서 작업이 되돌려졌거나 이전 세션이 실패한 retry인 경우를 놓칠 수 있다**고 명시했다.
+- human estimate 34건과 비교했을 때 LLM time judge에는 대략 2~3배 수준의 오차가 관찰되었다.
+
+**OBHE에서 가져오는 아이디어**
+
+1. **AI trajectory 전체 작업량을 세지 않고 net successful output만 측정한다.**
+2. 실패, 폐기, agent-only overhead, agent가 만든 불필요한 오류수정은 Human Equivalent Effort에서 제거한다.
+3. trajectory는 실제 업무를 관찰할 수 있는 유용한 데이터 소스다.
+
+**OBHE에서 바꾸는 부분**
+
+METR는 compressed transcript와 diff를 LLM에 넣어 **곧바로 인간시간을 추정**한다.
+
+OBHE는 이 부분을 다음처럼 분리한다.
+
+```text
+METR:
+trajectory + diff
+    -> LLM
+    -> human hours
+
+OBHE:
+trajectory
+    -> local deterministic artifact reconstruction
+    -> final cross-session net artifact
+    -> LLM outcome/action workload decomposition
+    -> empirical human rate
+    -> human hours
+```
+
+즉 METR 연구가 지적한 **cross-session undo/retry 문제와 LLM 직접 시간추정 오차**를 줄이기 위해, 최종 artifact 확정과 시간 계산을 LLM 바깥으로 이동한다.
+
+이 연구는 현재 방법론과 가장 가까운 직접 선행연구이므로 **필수 인용 대상**이다.
 
 ---
 
-## 20. 참고
+### 20.2 Epoch AI: 최종 PR/diff를 보고 비-AI 인간 effort를 counterfactual 추정
+
+**Reference**
+
+Jaeho Lee and Thomas Kwa. *Contributions to OpenAI's Codex codebase show signs of AI uplift*. Epoch AI, 2026.  
+https://epoch.ai/data-insights/codex-engineer-effort
+
+**이 연구가 한 일**
+
+- OpenAI Codex repository의 merged PR을 대상으로 숙련 개발자가 AI 없이 동일한 변경을 만드는 데 필요한 시간을 LLM judge로 추정했다.
+- PR title, description, commit message, 변경 파일 및 diff를 effort 판단의 근거로 사용했다.
+- LOC 자체가 아니라 변경의 의미와 복잡도를 함께 판단했다.
+- 저자들은 이 값을 실제 productivity의 확정치가 아니라 **upper bound에 가까운 값**으로 해석한다. AI가 없었다면 개발자는 똑같은 output을 만들지 않고 더 적게 만들거나 다르게 만들 수도 있기 때문이다.
+
+**OBHE에서 가져오는 아이디어**
+
+1. **최종 코드 변경물 자체를 human counterfactual effort 산정의 핵심 근거로 사용한다.**
+2. LOC 같은 단순 물량보다 최종 diff의 의미와 구조를 봐야 한다.
+3. 여러 중간 시도보다 **최종적으로 남은 변경**이 사람 작업량 측정의 기준이 되어야 한다.
+
+**OBHE에서 바꾸는 부분**
+
+Epoch는 최종 PR에서 LLM이 직접 holistic hour estimate를 만든다.
+
+OBHE는:
+
+```text
+final artifact
+    -> 독립 완료 결과
+    -> 결과별 필요한 인간 행동
+    -> 행동별 workload
+    -> 실측 rate
+```
+
+로 분해한다.
+
+따라서 최종 8시간이라는 숫자가 나왔을 때도 어떤 결과와 행동이 얼마를 차지했는지 추적할 수 있다.
+
+이 연구는 **artifact-based human counterfactual effort**라는 문제 정의의 직접 선행연구이므로 필수 인용 대상이다.
+
+---
+
+### 20.3 Wright & Ziegler: 실제 Version Control 데이터로 '표준 개발자 effort'를 학습
+
+**Reference**
+
+Ian Wright and Albert Ziegler. *The standard coder: a machine learning approach to measuring the effort required to produce source code change*. arXiv:1903.02436, 2019.  
+https://arxiv.org/abs/1903.02436
+
+**이 연구가 한 일**
+
+- 실제 개발자들의 Version Control code change와 그들이 투입한 coding time을 사용한다.
+- 다양한 형태의 code change를 단순 LOC가 아니라 실제 개발자 행동 데이터에서 학습한 **Standard Coding Hours**라는 effort 척도로 환산한다.
+- 핵심 개념은 특정 개인의 속도가 아니라, 실제 개발자 집단의 경험적 데이터로 구성된 **standard coder**가 해당 변경을 만드는 데 필요한 시간이다.
+
+**OBHE에서 가져오는 아이디어**
+
+1. 사람 effort의 최종 scale은 LLM의 상식 추정이 아니라 **실제 human-only 작업 데이터로 calibration**해야 한다.
+2. 개인 한 명의 속도가 아니라 일정한 기준 숙련도를 대표하는 **Reference Human**을 정의해야 한다.
+3. 단순 LOC보다 실제 변경의 구조와 실제 인간 노동시간의 관계가 더 적절한 effort 근거다.
+
+**OBHE에서 바꾸는 부분**
+
+Standard Coder는 code change 전체를 입력으로 effort를 직접 학습한다.
+
+OBHE는 code change를 먼저 semantic outcome과 human action workload로 분해하고, 조직의 human-only 데이터를 **행동별 rate calibration**에 사용한다.
+
+즉 이 연구의 특정 ML 모델을 가져오는 것이 아니라:
+
+> **"artifact effort의 시간축은 실제 인간 작업 데이터로 교정해야 한다"**
+
+는 측정 원칙을 가져온다.
+
+이 연구는 Human Rate Engine의 경험적 calibration 근거로 필수 인용 가치가 있다.
+
+---
+
+### 20.4 Kaplan & Anderson: 행동량 × 단위시간의 계산 구조
+
+**Reference**
+
+Robert S. Kaplan and Steven R. Anderson. *Time-Driven Activity-Based Costing*. Harvard Business School Working Paper No. 04-045, 2003.  
+https://www.hbs.edu/faculty/Pages/item.aspx?num=15805
+
+**이 연구가 한 일**
+
+Time-Driven Activity-Based Costing(TDABC)은 업무에 소요되는 자원을 계산할 때:
+
+- 어떤 activity가 얼마나 발생했는지
+- 그 activity 한 단위에 표준적으로 얼마의 시간이 필요한지
+
+를 사용한다.
+
+또한 모든 activity를 동일한 고정시간으로 처리하지 않고, 작업 특성에 따라 시간이 달라지는 경우 **time equation**으로 추가시간을 반영한다.
+
+**OBHE에서 가져오는 아이디어**
+
+Human Rate Engine의 계산 구조를 그대로 이 원리로 둔다.
+
+```text
+Human Action Effort
+    = Workload Quantity
+    x Standard Human Time Rate
+    x Complexity Adjustment
+```
+
+예:
+
+```text
+검증시간
+    = 기본시간
+    + 검증 항목 수 x 항목별 시간
+    + 고위험 항목 수 x 추가 검증시간
+```
+
+**OBHE에서 바꾸는 부분**
+
+TDABC는 원래 조직 원가계산 방법론이다.
+
+본 연구에서는 금전원가가 아니라 **counterfactual human labor time**을 계산하기 위한 rate engine으로만 그 계산 원리를 차용한다.
+
+즉 AI 평가 연구의 직접 선행연구라기보다, OBHE의 **행동량→시간 환산식에 대한 방법론적 근거**다.
+
+---
+
+### 20.5 보조 근거: METR Task Substitution — AI가 만든 산출량과 실제 가치 증가를 동일시하면 안 됨
+
+**Reference**
+
+Tom Cunningham and Parker Whitfill. *Task Substitution and Uplift*. METR, 2026.  
+https://metr.org/blog/2026-05-08-task-substitution-and-uplift/
+
+**이 연구가 한 일**
+
+AI가 특정 업무를 싸게 만들면 사람은 과거에는 하지 않았을 작업까지 새로 수행하게 된다. 이 때문에 AI 도입 후 수행된 업무 전체를 예전 인간 시간으로 환산한 `uplift on new tasks`가 실제 가치 증가보다 훨씬 크게 보일 수 있음을 설명한다. METR은 이런 경우를 “Cadillac task” 문제로 설명한다.
+
+**OBHE에서 가져오는 아이디어**
+
+최종 artifact에 존재한다는 이유만으로 모든 추가 산출물을 Reference Human Effort의 분모에 넣으면 안 된다.
+
+따라서 결과를 두 범주로 구분한다.
+
+```text
+Required / Accepted Outcome
+    -> Reference Human Effort에 포함
+
+AI-enabled Optional Expansion
+    -> 별도 Output Expansion으로 기록
+    -> 기본 productivity 배수에는 자동 포함하지 않음
+```
+
+단, optional output이 실제 사용자 가치로 채택되었다면 이를 무조건 폐기해서도 안 된다. 이 경우 `core task efficiency`와 `additional value/output`을 별도로 보고하는 것이 맞다.
+
+이 연구는 Human Rate 계산 자체의 근거가 아니라 **산출물 과장 방지 및 지표 해석의 근거**로만 사용한다.
+
+---
+
+## 21. 선행연구 대비 OBHE의 위치
+
+핵심 차이는 다음과 같다.
+
+| 방법 | 관측 입력 | Human effort 산정 | 주요 한계 / 본 연구의 개선 |
+|---|---|---|---|
+| METR transcript analysis | agent transcript + diff | LLM이 net successful output의 시간을 직접 추정 | cross-session undo/retry와 직접 time-judge 오차 → 로컬 artifact 재구성 + rate engine |
+| Epoch Codex effort | merged PR + diff | LLM이 비-AI engineer 시간을 직접 추정 | output replication upper-bound → outcome 분해 + action workload |
+| Standard Coder | VCS code change + human labor data | ML로 standard coder hours 추정 | 코드 전용 직접 모델 → 실제 인간 데이터 calibration 원칙을 action rate로 확장 |
+| TDABC | activity quantity + unit time | time equation | AI 연구 아님 → human action rate 계산 엔진으로 사용 |
+| OBHE | trajectory + local artifact evidence + final artifact | outcome → human action workload → empirical rate | 최종 산출물과 인간시간 사이의 중간 계산 근거를 명시적으로 남김 |
+
+본 연구의 방법론적 novelty를 과장해서는 안 된다. 각각의 구성 아이디어는 기존에 존재한다.
+
+본 연구가 새롭게 결합하는 부분은 다음과 같다.
+
+1. **agent trajectory를 인간 effort 자체로 세지 않고 historical artifact attribution에 사용**
+2. **여러 agent session에 걸친 실제 최종 net artifact를 snapshot/checkpoint/filesystem과 선택적 local Git을 이용해 로컬에서 deterministic하게 복원**
+3. **최종 artifact를 독립 완료 결과로 semantic decomposition**
+4. **각 결과를 human action workload로 변환**
+5. **LLM direct hour estimate 대신 empirical Human Rate Engine으로 시간 환산**
+6. **AI의 transient work와 optional output expansion을 core human-equivalent effort에서 분리**
+
+즉 논문의 주장은 “새로운 effort estimation 이론을 처음 만들었다”가 아니라:
+
+> **trajectory-based AI productivity estimation에서 local final-artifact reconstruction, semantic workload decomposition, empirical human-rate calibration을 결합하여 직접 LLM 시간추정보다 감사 가능하고 보정 가능한 OBHE를 만든다**
+
+로 잡는 것이 안전하다.
+
+---
+
+## 22. 이번 논문의 핵심 레퍼런스에서 굳이 제외하는 연구
+
+관련 있어 보이더라도 현재 설계에서 실제 방법을 가져오지 않는 연구는 핵심 reference로 억지로 넣지 않는다.
+
+- **COSMIC / Function Point**
+  - 기능 크기 측정 규칙을 실제 알고리즘에 적용하지 않으므로 현재 설계의 직접 근거가 아니다.
+  - 향후 Outcome decomposition을 COSMIC functional process로 구현한다면 그때 포함한다.
+
+- **Process Mining**
+  - 현재 방법은 human event log에서 reference process를 자동 발견하지 않는다.
+  - 향후 human-only 로그에서 실제 행동경로를 학습할 경우 포함한다.
+
+- **HIE / Human-in-the-loop effort 연구**
+  - AI 사용 중의 validation/oversight 비용을 계산하는 데는 관련되지만, 본 문서의 핵심인 **final artifact 기반 비-AI human effort** 산정에는 직접 사용하지 않는다.
+  - 향후 AI Actual Effort까지 하나의 종합 효율식으로 합칠 때 별도 관련연구로 넣는다.
+
+- **CodeBERT 기반 effort estimation**
+  - artifact에서 effort를 예측한다는 점은 관련되지만, 현재 목적에는 실제 VCS와 human labor time을 사용한 Standard Coder가 더 직접적인 선행연구다.
+
+- **Anthropic의 Claude conversation productivity estimation**
+  - LLM으로 인간시간을 직접 추정하는 비교 baseline으로는 의미가 있다.
+  - 다만 현재 방법의 핵심 구성요소를 직접 차용하지 않으므로, 실험에서 `Direct LLM Time Estimate` baseline을 둘 경우에만 관련연구로 추가하는 것이 적절하다.
+
+---
+
+## 23. 구현 참고: Claude Code 공식 문서
 
 Claude Code 공식 문서:
 
@@ -798,4 +1099,4 @@ Claude Code 공식 문서:
 - session transcript는 대화와 tool 사용 기록을 보존하지만 filesystem 자체를 보존하지 않는다.
 - transcript JSONL 내부 형식은 버전에 따라 바뀔 수 있다.
 - Claude의 직접 편집 도구로 발생한 변경과 Bash/외부 도구에 의한 변경은 추적 특성이 다르다.
-- checkpoint는 version control의 대체물이 아니므로 historical artifact 복원에는 Git을 우선 사용한다.
+- checkpoint는 filesystem 전체 또는 version control의 대체물이 아니다. OBHE는 checkpoint, local snapshot, filesystem evidence를 기본으로 결합하고, local Git이 존재하면 추가 검증 수단으로 사용한다. 원격 push는 필요하지 않다.
