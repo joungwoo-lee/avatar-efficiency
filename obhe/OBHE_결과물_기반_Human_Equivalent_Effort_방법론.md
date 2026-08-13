@@ -1,336 +1,801 @@
-# 결과물 기반 Human Equivalent Effort 측정 방법론 (OBHE)
+# Claude Code 트레젝토리 기반 결과물 산정 및 Human Equivalent Effort 측정 설계
 
-## 1. 개요 — 무엇을 재는가
+## 1. 목적
 
-질문은 하나다.
+과거 Claude Code 세션의 트레젝토리 파일 1개 이상을 입력받아 사용자 PC에서 로컬 코드를 실행하고, 해당 세션들이 실제로 생성·수정한 최종 산출물을 최대한 deterministic하게 확인한다.
 
-> **"AI가 만든 이 결과물, 사람이 혼자 만들었다면 몇 시간 걸렸을까?"**
+확정된 산출물은 LLM에 입력하여 다음 순서로 사람 기준 작업량으로 환산한다.
 
-이 시간을 재면 AI가 얼마나 일을 줄여줬는지 계산할 수 있다. 그런데 AI가 만든
-분량을 그대로 사람 시간으로 바꾸면 안 된다. AI는 필요 없는 것까지 잔뜩 만들기
-때문에 — 만들다 버린 시도, 중간 산출물, 아무도 안 읽을 분량 — 그걸 다 사람이
-만든 셈 치면 AI가 실제보다 훨씬 대단해 보인다.
+**트레젝토리 → 로컬 산출물 복원/확정 → 완료 결과 단위 분할 → 결과별 인간 행동량 추정 → 행동량 × 인간 시간요율 → Human Equivalent Effort**
 
-그래서 OBHE(Outcome-Based Human Effort)는 이렇게 잰다.
+핵심 원칙은 다음과 같다.
 
-> **주어진 최종 결과물과 동일한 요구사항·기능·품질 상태를, 해당 업무에 숙련된
-> 사람이 AI 없이 정상적인 작업방식으로 달성하는 데 필요한 person-hours**
-
-가장 중요한 원칙 하나:
-
-> **LLM에게 "몇 시간 걸리냐"를 직접 묻지 않는다.** LLM은 "무슨 일을 몇 개
-> 해야 했나"만 답하고, 시간은 사람의 실제 작업 데이터로 만든 **단가표**가 정한다.
-> LLM의 시간 감각에는 체계적인 편향이 있다는 것이 여러 연구의 결론이기 때문이다 (§7).
+- **산출물 탐색과 Git diff는 LLM을 사용하지 않는다.**
+- LLM은 **최종 산출물의 의미를 해석하고 인간 작업량으로 변환하는 단계**에만 사용한다.
+- 최종 시간은 LLM이 직접 추측하지 않고 **행동량 × 실측 Human Rate**로 계산한다.
+- AI가 만들었다가 폐기한 목업·중간안·시행착오는 최종 산출물에서 제거한다.
+- 여러 세션이 하나의 작업을 이어서 수행한 경우 세션별 변경량의 합이 아니라 **전체 작업의 최종 net result**를 측정한다.
 
 ---
 
-## 2. 전체 파이프라인
+## 2. 전체 구조
 
-처리는 크게 둘로 나뉜다. **LLM이 하는 일(1턴)** 과 **코드가 하는 일(LLM 없음)**.
-
+```text
+[Claude Code trajectory 1..N]
+              |
+              v
++-----------------------------------+
+| Local Trajectory / Artifact Engine|
+| 사용자 PC에서 실행                |
++-----------------------------------+
+              |
+              | 1. 세션/프로젝트 식별
+              | 2. 수정 경로 추출
+              | 3. Git 상태/이력 조사
+              | 4. before/after 복원
+              | 5. net diff 계산
+              v
+       [Artifact Manifest]
+       - 작업 요구사항
+       - 최종 변경 파일
+       - 생성/수정/삭제
+       - net diff
+       - binary artifact
+       - 추출 근거
+       - confidence
+              |
+              v
++-----------------------------------+
+| LLM Human Workload Estimator      |
++-----------------------------------+
+              |
+              | 1. 완료 결과 단위 분할
+              | 2. 각 결과별 최소 인간 행동
+              | 3. 행동별 workload 계산
+              v
+       [Human Action Ledger]
+              |
+              v
++-----------------------------------+
+| Human Rate Engine                 |
++-----------------------------------+
+              |
+              v
+     [Human Equivalent Effort]
 ```
-최종 결과물(artifact)
-   │
-   ▼  ① LLM 1턴: 프롬프트 1회 전송 → JSON 응답 1회
-행동 장부(Human Action Ledger): "무슨 일을 몇 개 했어야 하나" + 근거
-   │
-   ▼  ② 코드: LLM 개입 없음
-단가표(rate card) 곱셈 → 고쳐쓰기 비용 가산 → 시간 범위(P50/P80) + 신뢰도
+
+---
+
+## 3. 입력
+
+### 3.1 필수 입력
+
+- Claude Code trajectory JSONL 파일 1개 이상
+- trajectory가 수행되었던 사용자 PC의 프로젝트/저장소
+
+### 3.2 있으면 정확도가 크게 올라가는 입력
+
+- 작업 시작 commit
+- 작업 종료 commit
+- 작업 당시 branch
+- Git repository
+- Claude Code checkpoint
+- 작업 직후의 working tree snapshot
+
+### 3.3 trajectory에서 deterministic하게 추출할 정보
+
+가능한 경우 다음을 JSONL에서 직접 추출한다.
+
+- session ID
+- working directory / project
+- timestamp
+- user message
+- tool call / tool result
+- Write 대상
+- Edit 대상
+- NotebookEdit 대상
+- Bash command
+- Read/Grep/Glob으로 접근한 파일
+- Git 관련 command
+- 명시적으로 생성·삭제·이동한 경로
+
+Claude Code 세션은 프롬프트, tool call, tool result, 응답을 포함하는 대화 기록을 저장하지만 파일시스템 자체를 저장하는 것은 아니다. 따라서 trajectory는 **변경의 증거와 작업 의도**이고, 파일의 최종 상태는 가능하면 Git이나 당시 filesystem에서 별도로 복원해야 한다.
+
+또한 Claude Code의 transcript JSONL 내부 형식은 버전에 따라 변경될 수 있으므로 parser는 고정 JSON schema 하나에 강결합하지 않고 **version adapter + tolerant parser** 구조로 만든다.
+
+---
+
+## 4. 로컬 산출물 탐색 방법
+
+### 4.1 1차: trajectory에서 직접 수정 경로 추출
+
+LLM 없이 JSON parser로 다음 tool call을 찾는다.
+
+- Write
+- Edit
+- NotebookEdit
+
+각 세션에서 얻은 경로를 합친다.
+
+```text
+DirectTouchedPaths =
+    Write paths
+  ∪ Edit paths
+  ∪ NotebookEdit paths
 ```
 
-| 단계 | 하는 일 | 처리 주체 |
+예:
+
+```text
+session_1:
+  Edit  src/auth.ts
+  Write src/token.ts
+
+session_2:
+  Edit  src/auth.ts
+  Write tests/auth.test.ts
+
+DirectTouchedPaths:
+  src/auth.ts
+  src/token.ts
+  tests/auth.test.ts
+```
+
+이 단계는 높은 신뢰도의 **직접 변경 경로**를 제공한다.
+
+### 4.2 2차: Bash에 의한 변경 후보 추출
+
+Bash는 다음과 같은 방식으로 파일을 변경할 수 있다.
+
+```text
+echo ... > file
+sed -i ...
+cp
+mv
+rm
+python generate.py
+npm run build
+make
+code generator
+```
+
+Claude Code checkpoint도 Bash가 만든 파일 변경을 완전히 추적하지 않으므로 trajectory의 Write/Edit 목록만으로 전체 산출물을 판단해서는 안 된다.
+
+Bash command는 LLM 없이 parser/heuristic으로 다음을 추출한다.
+
+- 명시적인 output path
+- redirect 대상
+- cp/mv/rm 대상
+- generator의 output option
+- Git command
+- build/output directory
+
+이 결과는 `BashCandidatePaths`로 기록하며 직접 Write/Edit보다 낮은 confidence를 부여한다.
+
+---
+
+## 5. Git을 이용한 실제 최종 산출물 확정
+
+### 5.1 핵심 원칙
+
+**trajectory가 “어디를 건드렸는지” 알려주고, Git이 “결국 무엇이 남았는지” 확인한다.**
+
+세션마다 diff를 합산하지 않는다.
+
+여러 세션이 같은 작업을 이어서 수행했다면:
+
+```text
+전체 작업 시작 상태
+        ↓
+ session 1
+ session 2
+ session 3
+        ↓
+전체 작업 종료 상태
+```
+
+의 **시작 상태와 종료 상태 사이 net diff**만 계산한다.
+
+따라서:
+
+- 만들었다가 삭제한 파일
+- 구현했다가 원복한 코드
+- 실패한 prototype
+- 중간 리팩터링
+
+등은 최종 변경에 남지 않으면 자동으로 제외된다.
+
+### 5.2 Base State 결정 우선순위
+
+정확한 base commit은 다음 우선순위로 결정한다.
+
+1. 사용자가 명시적으로 제공한 base commit
+2. trajectory에서 확인되는 작업 시작 HEAD
+3. trajectory의 Git command에서 확인되는 commit/branch
+4. 작업 시작 timestamp와 Git reflog/history를 이용한 best-effort 추정
+5. 판단 불가
+
+Base State를 확정할 수 없으면 결과에 반드시 confidence를 낮춰 표시한다.
+
+### 5.3 End State 결정 우선순위
+
+1. 사용자가 제공한 end commit/snapshot
+2. trajectory에서 작업 종료 후 생성된 commit
+3. 작업 직후의 working tree가 현재도 유지되는 경우 현재 filesystem
+4. checkpoint/snapshot으로 복원 가능한 경우 해당 상태
+5. 판단 불가
+
+**과거 세션 이후 저장소가 계속 수정되었고 당시 변경이 commit이나 snapshot으로 남아 있지 않다면 trajectory만으로 당시 최종 filesystem을 완전히 복원하는 것은 불가능할 수 있다.**
+
+이 경우 시스템은 결과를 만들어내지 말고 `historical_state_unavailable`로 표시한다.
+
+---
+
+## 6. Git 기반 Artifact Manifest 생성
+
+Git 저장소라면 기본적으로 다음을 수집한다.
+
+```bash
+git diff --name-status <BASE> <END>
+git diff <BASE> <END> -- <paths...>
+```
+
+작업 종료 상태가 uncommitted working tree라면 추가로:
+
+```bash
+git diff <BASE>
+git ls-files --others --exclude-standard
+```
+
+을 사용한다.
+
+삭제, 신규, 수정, rename을 구분한다.
+
+### 6.1 trajectory와 Git 결과 결합
+
+```text
+DirectTouchedPaths
+BashCandidatePaths
+GitChangedPaths
+```
+
+를 비교한다.
+
+| 분류 | 조건 | 신뢰도 |
 |---|---|---|
-| 1 | 진짜 쓰인 것만 남긴다 | LLM 1턴 |
-| 2 | 두 가지 시간을 구분한다 | LLM 1턴 |
-| 3 | 결과물을 알맹이 단위로 센다 | LLM 1턴 |
-| 4 | 사람이 밟았을 길을 그린다 | LLM 1턴 |
-| 5 | 각 일의 양과 근거를 적는다 | LLM 1턴 |
-| 6 | 양 × 단가로 시간을 낸다 | 코드 |
-| 7 | 사람다운 비용을 더한다 | 코드 (+ 프롬프트 규칙) |
-| 8 | 답은 범위로 준다 | 코드 |
+| DIRECT_NET | trajectory 직접 수정 + 최종 diff에 존재 | 매우 높음 |
+| BASH_NET | Bash 후보 + 최종 diff에 존재 | 높음 |
+| GIT_NET | trajectory에는 없으나 작업구간 최종 diff에 존재 | 중간 |
+| TRANSIENT | trajectory에는 있으나 최종 diff에서 사라짐 | 최종 산출물 제외 |
+| UNRESOLVED | 변경 증거는 있으나 historical state 복원 불가 | 낮음/측정 제외 |
 
-단계 1~5는 **한 번의 프롬프트**에 모두 지시되고, 한 번의 JSON 응답에 모두 담겨
-나온다. 단계 6~8은 그 응답을 받아 코드가 계산한다.
+`GIT_NET`은 사용자의 수동 변경이나 다른 동시 세션 변경일 가능성이 있으므로 자동 포함하지 않고 세션 시간, 경로 연관성, Git command 등의 규칙으로 attribution confidence를 계산한다.
 
 ---
 
-## 3. 단계별 처리 — 무엇을, 어떻게
+## 7. 비 Git 산출물
 
-### 단계 1 — 진짜 쓰인 것만 남긴다
+Git repository가 아니거나 binary artifact가 있는 경우에도 동일한 원리를 적용한다.
 
-**쉬운 설명**: AI가 만들다 버린 것, 중간 산출물, 아무도 안 읽을 분량은 계산에서
-뺀다. 최종 결과를 달성하는 데 실제로 필요했던 것만 남긴다. 이것이 첫 번째
-과장 제거 장치다.
+가능한 경우:
 
-**LLM 처리**: 프롬프트에 결과물 원문과 함께 이런 지시가 들어간다 —
-"AI 시행착오·중간 산출물·불필요한 잉여 산출물은 제외하고, 실제로 필요했던
-기능적 완료 단위만 추려라." LLM은 응답 JSON의 `outcomes` 목록으로 답한다.
+- 파일 생성/수정 timestamp
+- file hash
+- trajectory의 Write/Edit/Bash path
+- 디렉터리 스냅샷
+- backup/checkpoint
+- 파일 크기
+- before/after hash
 
-```json
-"outcomes": [
-  {"unit": "검증된 사실", "quantity": 34, "evidence": "본문 수치 인용"},
-  {"unit": "분석 결론", "quantity": 6, "evidence": "결론 section"}
-]
-```
+를 이용한다.
 
-### 단계 2 — 두 가지 시간을 구분한다
+텍스트 파일은 before/after content diff를 만든다.
 
-**쉬운 설명**: "저 결과물을 통째로 따라 만드는 시간"과 "같은 목적을 사람답게
-달성하는 시간"은 다르다. AI가 100페이지를 썼어도 의사결정에 필요한 건
-20페이지라면, 100페이지 작성 시간을 분모에 넣으면 안 된다. 효율 계산에는
-후자(정상 달성 시간)를 쓴다.
+PDF, 이미지, PPTX, XLSX 등 binary file은:
 
-**LLM 처리**: 같은 프롬프트가 장부를 **두 벌** 요구한다.
+- 파일 경로
+- 생성/변경 여부
+- before hash
+- after hash
+- 최종 파일 자체
 
-- `reference_ledger`: 같은 목적·품질을 사람이 정상적으로 달성하는 경로 → **RHE**
-- `replication_ledger`: 결과물을 잉여 분량까지 거의 그대로 복제하는 경로 → **HRE**
-
-두 벌의 시간 차이(HRE ÷ RHE)가 **Output Inflation** — AI가 필요 이상으로
-만들어 효율이 부풀려진 정도다.
-
-### 단계 3 — 결과물을 알맹이 단위로 센다
-
-**쉬운 설명**: 페이지 수, 파일 수, 코드 줄 수로 세지 않는다. "확인된 사실 31개,
-비교 대상 8개, 결론 6개, 차트 5개, testcase 120개"처럼 **완료된 기능의 개수**로
-센다.
-
-**LLM 처리**: 프롬프트 규칙으로 강제한다 — "quantity는 결과물에서 셀 수 있는
-실제 수량(section 수, 주장 수, 차트 수 등)에 근거해야 한다. 근거 없는 큰 수를
-지어내지 마라." 단계 1의 `outcomes`와 단계 5의 장부 수량이 모두 이 규칙을 따른다.
-
-### 단계 4 — 사람이 밟았을 길을 그린다
-
-**쉬운 설명**: "자료 찾고 → 읽고 → 비교하고 → 결정하고 → 쓰고 → 검토한다."
-AI가 실제로 일한 방식이 아니라, **숙련된 사람이 정상적으로 밟았을 일 순서**를
-복원한다. 기준이 되는 사람은 "그 업무를 혼자 해낼 수 있는 평균적인 숙련자"다.
-
-**LLM 처리**: 프롬프트에 **행동 카탈로그**가 들어간다 — 사용 가능한 행동의
-이름, 설명, 세는 단위, 어려움 조건(driver) 목록. 행동은 9가지 분류(H1~H9, §5)
-아래 정의된다. **시간 단가는 절대 카탈로그에 싣지 않는다** — 단가를 보면 LLM이
-그럴듯한 총시간에 맞춰 수량을 역산하는 오염이 생기기 때문이다. LLM은 카탈로그에
-있는 행동만 골라 장부를 만들고, 카탈로그 밖 행동을 지어내면 코드가 걸러낸다.
-
-### 단계 5 — 각 일의 양과 근거를 적는다
-
-**쉬운 설명**: "분석 2시간"이라고 뭉뚱그리면 나중에 따질 수가 없다. "확인할
-주장 31개 — 본문의 수치 인용에서 셌음"처럼 **양과 출처**를 행마다 남긴다.
-최종 답이 틀렸을 때 어느 행이 과대추정인지 역추적할 수 있다.
-
-**LLM 처리**: 장부의 각 행이 다음 형식으로 나온다. `evidence`는 필수다.
-
-```json
-{"outcome": "시장분석 보고서", "action": "verify_claim", "quantity": 31,
- "drivers": [], "evidence": "본문의 수치 포함 주장 31건",
- "role": "reviewer", "confidence": "B"}
-```
-
-### 단계 6 — 양 × 단가로 시간을 낸다 (코드, LLM 없음)
-
-**쉬운 설명**: 일마다 단가표가 있다. "주장 1개 확인 = 3분, 논문 1편 파악 =
-12분." 어려움 조건이 붙으면 추가 시간이 붙는다: "다중출처 확인 필요 +4분."
-
-**처리 방식**: LLM 응답을 받은 코드가 행마다 계산한다.
-
-```
-시간 = 수량 × (기본 단가 + 어려움 조건별 추가 단가의 합)
-```
-
-단가표는 코드 밖 외부 파일이며, 조직의 human-only 실측 데이터로 바꿔야 한다 (§5).
-
-### 단계 7 — 사람다운 비용을 더한다 (코드 + 프롬프트 규칙)
-
-**쉬운 설명**: 사람도 자기 결과물을 검토하고, 사람도 초안을 고쳐 쓴다. 이걸
-빼먹으면 사람 시간이 과소평가된다. 단, AI가 저지른 오류를 고치는 시간은 사람
-몫이 아니므로 넣지 않는다.
-
-**처리 방식** 두 갈래:
-- **검증**: 프롬프트 규칙으로 "검증 행동을 반드시 독립 행동으로 장부에 포함하라"고
-  강제한다. 그래도 빠져 있으면 코드가 경고를 낸다.
-- **고쳐쓰기(Expected Human Rework)**: 코드가 작성·분석류 행동 시간에 일정
-  비율(단가표에 정의)을 곱해 가산한다.
-
-### 단계 8 — 답은 범위로 준다 (코드)
-
-**쉬운 설명**: "정확히 17.3시간"은 거짓 정밀도다. "보통 15시간, 넉넉히
-21시간, 믿을 만한 정도 B"처럼 준다.
-
-**처리 방식**: 코드가 P50(중앙값)과 P80(보수적 값)을 함께 계산하고, 신뢰도는
-세 요소 — 결과 추출 신뢰도(LLM 응답의 자기평가), 경로 복원 신뢰도, 단가표
-신뢰도 — 중 **최악값**으로 정한다.
+를 Artifact Manifest에 포함한다.
 
 ---
 
-## 4. LLM 프롬프트: 들어가는 것과 나오는 것
+## 8. Artifact Manifest
 
-**한 턴에 들어가는 것** (순서대로):
+로컬 단계의 출력은 LLM에 바로 trajectory 전체를 넘기는 것이 아니라 **정규화된 Artifact Manifest**로 만든다.
 
-1. **역할 지시** — "너는 인간 작업경로 복원 엔진이다."
-2. **작업 지시** — 단계 1(잉여물 제외한 결과 추출), 단계 2(장부 두 벌),
-   단계 4(사람의 정상 경로 복원)를 그대로 지시.
-3. **규칙** — 시간·분·시급 출력 금지 / 수량은 셀 수 있는 근거 기반, 행마다
-   evidence 필수 / 검증 행동 반드시 포함 / 카탈로그 밖 행동·조건 사용 금지.
-4. **행동 카탈로그** — 행동 이름, 분류(H1~H9), 설명, 세는 단위, 어려움 조건
-   라벨. **단가는 없음.**
-5. (선택) 요구사항·배경 텍스트.
-6. **결과물 원문.**
-
-**한 턴에 나오는 것** — JSON 하나:
+예:
 
 ```json
 {
-  "outcomes":           [ ... 단계 1·3: 알맹이 단위 목록 ... ],
-  "reference_ledger":   [ ... 단계 2·4·5: 정상 경로 장부 ... ],
-  "replication_ledger": [ ... 단계 2: 통째 복제 경로 장부 ... ],
-  "outcome_confidence": "A|B|C",
-  "rationale": "복원 근거 한 문단"
+  "job_id": "job-001",
+  "sessions": ["s1", "s2", "s3"],
+  "repository": "/workspace/project",
+  "base_state": "abc123",
+  "end_state": "def456",
+  "task_requests": [
+    "OAuth 로그인과 token refresh를 구현해줘"
+  ],
+  "artifacts": [
+    {
+      "path": "src/auth.ts",
+      "status": "modified",
+      "attribution": "DIRECT_NET",
+      "diff": "...",
+      "confidence": 0.99
+    },
+    {
+      "path": "src/token.ts",
+      "status": "created",
+      "attribution": "DIRECT_NET",
+      "content": "...",
+      "confidence": 0.99
+    },
+    {
+      "path": "tests/auth.test.ts",
+      "status": "created",
+      "attribution": "DIRECT_NET",
+      "content": "...",
+      "confidence": 0.99
+    }
+  ],
+  "excluded_transient_paths": [
+    "src/oauth-prototype.ts"
+  ],
+  "unresolved": []
 }
 ```
 
-**응답을 받은 뒤 코드가 하는 일**: 카탈로그에 없는 행동·조건 삭제(환각 방어)
-→ 단가 곱셈(단계 6) → 고쳐쓰기 가산(단계 7) → 범위·신뢰도 리포트(단계 8).
+`task_requests`는 trajectory의 user message에서 deterministic하게 추출한다.
 
-**품질을 더 보장하는 확장(선택)**: 위 1턴을 2턴으로 나눌 수 있다 — 턴1에서
-"무엇이 달성됐나"만 추출하고, 턴2에서 그 추출 결과만 입력으로 경로를 복원한다.
-잉여물 제거 결과가 독립 산출물로 남아 검사할 수 있고, 턴2가 원문 분량에
-끌려가는 오염도 막힌다. 속도가 우선이면 1턴, 감사 가능성이 우선이면 2턴.
+LLM이 산출물의 필요 여부를 판단할 때 최종 artifact만 보는 것보다 **원래 작업 요청을 같이 제공하는 것이 중요하다.**
 
 ---
 
-## 5. 단가표 (Human Action Rate Card)
+## 9. LLM 단계의 목적
 
-행동은 9가지로 분류한다.
+LLM은 trajectory를 따라가며 AI가 얼마나 많은 일을 했는지 세지 않는다.
 
-| 코드 | 인간 행동 | 의미 |
+LLM이 받는 핵심 입력은:
+
+1. 원래 작업 요청
+2. 최종 Artifact Manifest
+3. 최종 파일/diff
+4. 작업 시작 시 이미 존재했던 입력 또는 before-state
+
+이다.
+
+LLM의 역할은 두 단계지만 실용적으로는 한 번의 호출로 수행한다.
+
+```text
+최종 산출물
+   ↓
+완료 결과 단위 분할
+   ↓
+각 결과의 Human Work Path와 Workload 계산
+```
+
+---
+
+## 10. 통합 LLM 프롬프트
+
+```text
+너의 목적은 AI가 만든 최종 산출물을 기준으로,
+AI 없이 숙련된 사람이 동일한 유효 결과를 만들었다면
+필요했을 인간 작업량을 산출하는 것이다.
+
+[원래 작업 요청]
+{task_requests}
+
+[작업 시작 상태 / 기존 입력]
+{before_state_or_inputs}
+
+[최종 Artifact Manifest]
+{artifact_manifest}
+
+[최종 파일 및 net diff]
+{artifact_contents_and_diffs}
+
+
+반드시 다음 순서로 분석하라.
+
+
+STEP 1. 완료 결과 단위 분할
+
+최종 산출물에서 원래 작업 요청을 충족하는 결과를,
+각각 독립적으로 완료/미완료를 판정할 수 있는 최소 단위로 분할하라.
+
+규칙:
+
+1. 파일 수, LOC, 페이지 수, 표 수 같은 외형으로 나누지 않는다.
+2. '이 결과만 실패하고 다른 결과는 성공할 수 있는가?'가 YES이면 별도 결과로 분리한다.
+3. 원래 작업 요청에 필요하지 않은 추가 산출물은 제외한다.
+4. 최종 net artifact에 남지 않은 목업, 초안, 폐기안, 시행착오는 세지 않는다.
+5. 다른 결과를 만들기 위한 중간재만으로 존재하는 것은 독립 결과로 세지 않는다.
+6. 중복 표현은 하나의 결과로 합친다.
+7. 각 결과가 최종 artifact의 어느 부분에서 확인되는지 근거를 명시한다.
+
+
+STEP 2. 인간 행동 및 작업량 환산
+
+STEP 1의 각 완료 결과에 대해,
+AI 없이 해당 업무에 숙련된 사람이 처음부터 수행했을
+정상적인 최소 작업경로를 계산하라.
+
+사용 가능한 기본 인간 행동:
+
+- 입력 및 맥락 이해
+- 정보 검색
+- 자료 읽기
+- 정보 추출
+- 변환/정규화
+- 분석/비교
+- 계산/실행
+- 설계/판단
+- 작성/구현
+- 검증
+- 최종 정리
+
+규칙:
+
+1. AI가 실제 수행한 시행착오 경로를 재현하지 않는다.
+2. 최종 결과를 만드는 데 반드시 필요한 최소 인간 행동만 포함한다.
+3. before-state에 이미 존재하는 것은 새로 만드는 비용으로 세지 않는다.
+4. 작업 시작 시 이미 제공된 정보는 다시 검색하는 비용으로 세지 않는다.
+5. 각 행동에는 결과물에서 근거를 찾을 수 있는 workload 단위를 붙인다.
+6. workload는 가능한 한 수량화한다.
+   예: 읽어야 하는 코드/문서 범위, 변경 기능 수, interface 수,
+   비교 항목 수, 데이터 항목 수, testcase 수, 검증 항목 수.
+7. 여러 결과가 같은 선행 행동을 공유하면 중복 계산하지 않는다.
+8. 결과물만으로 workload를 판단할 수 없는 항목은 임의로 숫자를 만들지 말고
+   MEASUREMENT_REQUIRED로 표시한다.
+9. 시간은 직접 추정하지 않는다.
+
+
+출력 형식:
+
+[A. Completed Outcomes]
+
+| Outcome ID | 완료 결과 | 완료 판정 기준 | Artifact 근거 |
+|---|---|---|---|
+
+
+[B. Human Action Ledger]
+
+| Action ID | Outcome ID | 인간 행동 | Workload 단위 | Workload | 근거 | Shared |
+|---|---|---|---|---:|---|---|
+
+
+[C. Excluded Outputs]
+
+최종 인간 작업량에 포함하지 않은 중간안, 목업, 불필요한 추가 결과와 이유.
+
+
+[D. Measurement Required]
+
+산출물만으로 작업량을 수량화할 수 없는 항목과 추가로 필요한 정보.
+
+
+중요:
+최종 시간이나 '사람이면 몇 시간' 같은 숫자를 직접 추측하지 마라.
+이 단계는 사람의 행동 종류와 행동량을 산출하는 단계다.
+```
+
+---
+
+## 11. Human Rate Engine
+
+LLM 결과의 `Human Action Ledger`에 조직의 Human Rate Table을 적용한다.
+
+예:
+
+| Action Type | Workload Unit | P50 Rate | P80 Rate |
+|---|---|---:|---:|
+| 코드 읽기 | 100 logical LOC | 8분 | 14분 |
+| interface 분석 | interface 1개 | 12분 | 20분 |
+| 기능 구현 | function point 1개 | 35분 | 60분 |
+| testcase 작성 | case 1개 | 8분 | 15분 |
+| 검증 | assertion 1개 | 2분 | 4분 |
+
+실제 값은 조직의 **human-only 작업 기록**으로 보정해야 한다.
+
+계산:
+
+```text
+Action Effort =
+    Workload
+    × Human Rate
+    × Complexity Adjustment
+```
+
+전체:
+
+```text
+Reference Human Effort =
+    모든 unique action의 effort 합
+    + 정상적인 Human Rework
+```
+
+공통 행동은 한 번만 계산한다.
+
+---
+
+## 12. 요율 적용 예시
+
+LLM 결과:
+
+```text
+O1: OAuth 로그인 구현
+- 기존 인증 구조 이해: 4 module
+- OAuth interface 분석: 3 interface
+- 구현: 2 functional unit
+- testcase: 8 case
+- 검증: 12 assertion
+```
+
+Rate Table이 다음이라면:
+
+```text
+module 이해      10분/module
+interface 분석   15분/interface
+functional unit  40분/unit
+testcase 작성     8분/case
+assertion 검증    2분/assertion
+```
+
+계산기는 단순히 각 workload에 해당 rate를 곱한다.
+
+LLM에게:
+
+> "이 일은 사람이 4시간 걸린다"
+
+라고 묻지 않는다.
+
+---
+
+## 13. 다중 세션 처리
+
+여러 trajectory가 같은 작업을 이어 수행한 경우:
+
+```text
+trajectory_1
+trajectory_2
+trajectory_3
+      ↓
+session metadata 추출
+      ↓
+동일 repo / branch / 시간연속성 기준 grouping
+      ↓
+전체 job의 base/end state 결정
+      ↓
+한 번의 net artifact 계산
+```
+
+세션별 결과를 각각 사람시간으로 계산한 뒤 합산하지 않는다.
+
+그렇게 하면:
+
+- 같은 파일 반복 수정
+- 실패 후 재시도
+- 목업 반복 생성
+- 세션 간 원복
+
+이 모두 사람 작업량으로 중복 계산되는 문제가 발생하기 때문이다.
+
+---
+
+## 14. 과거 trajectory 처리의 한계
+
+Claude Code session은 대화 기록을 저장하지만 filesystem snapshot 자체는 아니다.
+
+따라서 다음 상황에서는 당시 결과물의 정확한 복원이 어려울 수 있다.
+
+- 당시 변경을 commit하지 않음
+- 현재 working tree가 이미 다른 작업으로 변경됨
+- checkpoint/snapshot도 없음
+- Bash 또는 외부 프로그램이 파일을 만들었지만 그 흔적이 현재 사라짐
+- 다른 사용자/세션이 같은 repo를 동시에 수정함
+
+이때 시스템은 추정 결과를 사실처럼 확정하지 않는다.
+
+권장 상태:
+
+```text
+EXACT
+  base/end가 확정되고 net artifact 복원 가능
+
+HIGH_CONFIDENCE
+  대부분 복원되지만 일부 attribution 불확실
+
+PARTIAL
+  일부 파일만 복원 가능
+
+UNRECOVERABLE
+  당시 최종 산출물 상태를 복원할 근거가 부족
+```
+
+Human Equivalent Effort 계산은 기본적으로 `EXACT` 또는 `HIGH_CONFIDENCE`만 자동 승인한다.
+
+---
+
+## 15. 왜 trajectory 자체의 작업량을 세지 않는가
+
+trajectory는 AI의 실제 작업경로를 담고 있다.
+
+그러나 AI는:
+
+- 같은 것을 여러 번 생성
+- 시행착오 반복
+- 불필요한 목업 생성
+- 오류 수정 반복
+
+을 매우 싸게 할 수 있다.
+
+따라서 trajectory의 tool call 수나 생성량을 그대로 사람 작업량으로 환산하면 AI 효율이 크게 과대평가될 수 있다.
+
+trajectory의 역할은:
+
+- 작업 요청 확보
+- 프로젝트와 세션 범위 확인
+- 변경 경로 후보 확보
+- artifact attribution 보조
+
+까지다.
+
+**사람 작업량은 최종 net artifact에서 다시 계산한다.**
+
+---
+
+## 16. 책임 분리
+
+| 단계 | 방법 | LLM 사용 |
 |---|---|---|
-| H1 | Context Acquisition | 관련 자료·기존 상태 이해 |
-| H2 | Information Acquisition | 검색, 조회, 데이터 수집 |
-| H3 | Analysis / Diagnosis | 분석, 비교, 문제 원인 판단 |
-| H4 | Design / Decision | 구조 설계, 접근법 결정 |
-| H5 | Construction / Transformation | 작성, 구현, 모델링, 편집 |
-| H6 | Execution | 계산, simulation, query, 실험 실행 |
-| H7 | Verification | 검토, 테스트, fact-check |
-| H8 | Integration / Finalization | 병합, 정리, 형식화, 최종화 |
-| H9 | Coordination | 필수 승인·협의가 완료조건인 경우 |
+| trajectory 읽기 | JSON/parser | X |
+| 세션 grouping | 규칙/metadata | X |
+| 수정 경로 탐색 | tool-call parser | X |
+| Bash 후보 분석 | parser/heuristic | X |
+| Git base/end 탐색 | Git command | X |
+| 최종 net diff | Git | X |
+| artifact manifest | local code | X |
+| 완료 결과 단위 분할 | semantic reasoning | O |
+| 인간 행동 선택 | semantic reasoning | O |
+| 행동 workload 산정 | artifact reasoning | O |
+| 시간요율 적용 | deterministic calculator | X |
+| 최종 Human Effort | deterministic calculator | X |
 
-단가표 예시 (실제 값은 조직 데이터로 구축):
-
-| 행동 | 기본 단가 | 어려움 조건 예시 |
-|---|---:|---|
-| source 판별 | source당 1분 | 전문자료 +2분 |
-| 논문 핵심 파악 | 논문당 12분 | 수식·방법론 복잡 +8분 |
-| 주장 검증 | claim당 3분 | 다중출처 필요 +4분 |
-| 비교분석 | cell당 2분 | 정성적 판단 +3분 |
-| chart 제작 | chart당 15분 | 데이터 cleaning +20분 |
-| testcase 작성 | case당 10분 | 복잡 edge case +15분 |
-
-단가는 다음 데이터에서 구축하는 것이 바람직하며, 다른 조직의 단가를 그대로
-가져다 쓰면 안 된다.
-
-| 데이터 | 사용 방법 |
-|---|---|
-| 실제 human-only 업무 로그 | 최우선 ground truth |
-| 화면·툴·activity log | 행동시간 자동 추출 |
-| 문서 history, VCS, workflow log | 행동 발생과 duration 추론 |
-| timesheet + 산출물 | 대략적 보정 |
-| 숙련자 추정 | 데이터가 부족한 초기 단계 |
+즉 **LLM은 의미론이 필요한 중간 한 구간에만 사용한다.**
 
 ---
 
-## 6. 세 숫자와 예시 계산
+## 17. 권장 구현 모듈
 
-다음 세 숫자는 반드시 따로 보존한다.
+```text
+trajectory_ingestor
+  - JSONL 읽기
+  - schema adapter
+  - session metadata
 
-| 지표 | 의미 |
-|---|---|
-| HRE | 완성된 AI 결과물을 사람이 그대로 재현할 시간 |
-| RHE | 동일한 유효 결과를 사람이 정상적으로 만드는 시간 — **효율 계산의 분모** |
-| AI Actual Effort | AI 실행 + 사람의 지시·검토 등 실제 든 비용 |
+session_grouper
+  - repo/cwd
+  - timestamp
+  - branch
+  - session relation
 
-예: HRE = 100시간, RHE = 40시간, AI Actual = 20시간이면 —
+path_extractor
+  - Write/Edit/NotebookEdit
+  - Bash candidate
+  - Git commands
 
-- 산출량 그대로 환산: 100 ÷ 20 = **5배**로 보인다 (부풀려진 값)
-- 실제 가치 기준: 40 ÷ 20 = **2배** (현실화된 효율)
+git_state_resolver
+  - base commit
+  - end commit
+  - reflog/history fallback
 
-5배와 2배의 차이가 AI 산출물 증폭에 의한 과장이다.
+artifact_resolver
+  - net diff
+  - untracked files
+  - binary files
+  - attribution confidence
 
-장부와 시간 계산이 합쳐진 최종 형태 예시:
+artifact_manifest_builder
+  - normalized manifest
+  - task requests
+  - before/after evidence
 
-| Human Action | Workload | 추정 시간 |
-|---|---:|---:|
-| 자료 탐색 | 15 source | 0.8h |
-| 자료 이해 | 8 source | 1.7h |
-| 데이터 추출 | 35 item | 1.2h |
-| 비교 분석 | 24 cell | 1.4h |
-| 판단·설계 | 4 decision | 1.8h |
-| 본문 작성 | 6 argument unit | 2.3h |
-| chart 생성 | 5 chart | 1.2h |
-| 사실 검증 | 31 claim | 1.6h |
-| 최종 검토 | 1 artifact | 0.8h |
+human_workload_estimator
+  - LLM prompt
+  - outcome split
+  - action ledger
 
-여기에 고쳐쓰기 비용을 더하면 RHE가 된다.
+human_rate_engine
+  - rate table
+  - complexity adjustment
+  - P50/P80 계산
 
----
-
-## 7. 연구 기반
-
-OBHE는 단일 연구가 아니라 여러 연구에서 검증된 아이디어의 조합이다.
-
-| 연구 | OBHE에서 가져온 것 |
-|---|---|
-| Epoch AI, Codex Engineer Effort (2026) | 최종 결과물에서 "사람이라면 어떻게 했을까"를 역추론하는 접근 |
-| METR Transcript Analysis (2026) | 성공한 결과만 계산하고 AI 시행착오·AI가 만든 오류 수정은 제거 |
-| METR Task Substitution & Uplift (2026) | 불필요·잉여 산출물을 사람 시간에서 분리 (단계 1·2의 근거) |
-| Standard Coder, Wright & Ziegler (2019) | 특정 개인이 아닌 "표준 숙련자"의 시간을 실제 데이터에서 학습 |
-| COSMIC | 기능 단위 측정 + 조직별 단가 보정 (단계 3·6의 근거) |
-| CodeBERT Effort Estimation | 완성 결과물 자체에 effort 신호가 존재한다는 근거 |
-| Anthropic Productivity Estimation | LLM 시간추정의 체계적 편향 → 시간 결정권을 LLM에서 제거 (§1 원칙) |
-| TDABC, Kaplan & Anderson | 수량 × 단가 + 어려움 추가항이라는 계산 구조 (단계 6) |
-| HIE 연구 (2026) | 검증·수정이 주요 effort driver → 검증을 독립 행동으로 강제 (단계 7) |
-
----
-
-## 8. 방법론 자체의 검증
-
-같은 human-only 과거 업무에 대해 다음을 비교하고, 실제 person-hours를 정답으로
-사용한다.
-
-| 모델 | 예측 방식 |
-|---|---|
-| Baseline A | LLM 직접 시간추정 |
-| Baseline B | 크기·복잡도 회귀 |
-| Baseline C | 결과물 ML 추정기 |
-| OBHE | 행동경로 × 단가표 |
-
-비교 지표: 절대 오차, 배수 오차, P50/P80 적중률, 업무 길이에 따른 편향.
-특히 "짧은 업무 과대추정 / 긴 업무 과소추정" 편향이 OBHE에서 줄어드는지 확인한다.
+reporter
+  - Human Equivalent Effort
+  - confidence
+  - excluded artifacts
+  - unresolved items
+```
 
 ---
 
-# 참고문헌 및 출처
+## 18. MVP 권장 범위
 
-1. **Epoch AI — Codex engineer effort estimates**
-   https://epoch.ai/data-insights/codex-engineer-effort
+초기 버전에서는 범위를 좁힌다.
 
-2. **METR — Exploratory transcript analysis for estimating time savings from coding agents**
-   https://metr.org/notes/2026-02-17-exploratory-transcript-analysis-for-estimating-time-savings-from-coding-agents/
+### 지원
 
-3. **METR — Task substitution and uplift**
-   https://metr.org/blog/2026-05-08-task-substitution-and-uplift/
+- Git repository
+- Claude Code JSONL trajectory
+- 1개 또는 여러 세션
+- Write/Edit/NotebookEdit
+- 기본 Bash path heuristic
+- text source code
+- 신규/수정/삭제 파일
+- 작업 시작/종료 commit이 존재하는 경우 우선 지원
 
-4. **Wright & Ziegler — The Standard Coder (2019)**
-   https://arxiv.org/abs/1903.02436
+### 후순위
 
-5. **COSMIC — Estimating with Software Size**
-   https://cosmic-sizing.org/cosmic-sizing/estimating-with-software-size/
+- commit 없이 오래된 working tree 복원
+- 동시 작업자 attribution
+- 복잡한 Bash generator 추론
+- binary 내부 semantic diff
+- remote/network filesystem
+- non-Git project
 
-6. **Tenekeci et al. — Software Effort Estimation with CodeBERT**
-   https://ceur-ws.org/Vol-3852/paper1.pdf
+초기 목적은 **정확하게 복원 가능한 작업부터 높은 신뢰도로 측정하는 것**이다.
 
-7. **Anthropic — Estimating Productivity Gains**
-   https://www.anthropic.com/research/estimating-productivity-gains
+---
 
-8. **Kaplan & Anderson — Time-Driven Activity-Based Costing**
-   https://www.hbs.edu/ris/Publication%20Files/04-045_d62528d4-7931-4ea1-a205-d9683c639d6e.pdf
+## 19. 최종 방법론 요약
 
-9. **HIE Research — Hybrid Intelligence Effort**
-   https://link.springer.com/article/10.1007/s10791-026-10331-6
+방법론을 한 문장으로 정리하면 다음과 같다.
+
+> **Claude Code trajectory는 AI가 한 일을 사람시간으로 세는 데 사용하지 않고, 사용자 PC에서 실제 최종 산출물을 찾아내는 증거로 사용한다. 최종 산출물이 확정되면 이를 독립적으로 완료 판정 가능한 결과 단위로 나누고, 각 결과를 숙련된 사람이 만들기 위해 필요한 최소 행동과 행동량으로 환산한 뒤, 실제 인간 시간요율을 곱하여 Human Equivalent Effort를 계산한다.**
+
+전체 계산 흐름:
+
+```text
+Trajectory 1..N
+    ↓
+Local deterministic analysis
+    ↓
+Final net artifact
+    ↓
+LLM: 완료 결과 분할
+    ↓
+LLM: 결과별 인간 행동 + workload
+    ↓
+Human Rate Table
+    ↓
+Reference Human Effort
+```
+
+이 구조의 핵심은 다음 세 가지다.
+
+1. **AI의 긴 시행착오 경로가 아니라 최종 net result를 측정한다.**
+2. **LLM이 시간을 직접 추측하지 않고 행동량까지만 추론한다.**
+3. **실제 시간은 조직의 human-only 실측 요율로 계산한다.**
+
+---
+
+## 20. 참고
+
+Claude Code 공식 문서:
+
+- Sessions: https://code.claude.com/docs/en/sessions
+- Agent SDK Sessions: https://code.claude.com/docs/en/agent-sdk/sessions
+- Checkpointing: https://code.claude.com/docs/en/checkpointing
+- Agent SDK File Checkpointing: https://code.claude.com/docs/en/agent-sdk/file-checkpointing
+
+설계상 특히 반영한 제약:
+
+- session transcript는 대화와 tool 사용 기록을 보존하지만 filesystem 자체를 보존하지 않는다.
+- transcript JSONL 내부 형식은 버전에 따라 바뀔 수 있다.
+- Claude의 직접 편집 도구로 발생한 변경과 Bash/외부 도구에 의한 변경은 추적 특성이 다르다.
+- checkpoint는 version control의 대체물이 아니므로 historical artifact 복원에는 Git을 우선 사용한다.
