@@ -625,6 +625,9 @@ job마다 before/end evidence 결정 → 한 번의 final net artifact 계산 �
    `grouping_evidence`로 Artifact Manifest에 남겨 grouping 자체를 감사 가능하게 한다.
 5. **임계값**: 범용 설정 파일 하나 겹친 것만으로 무관한 작업이 묶이는 것을 막아야
    하면 min_common을 올린다.
+6. **경로만 사용 (확정)**: grouping 판정에는 파일 경로만 쓴다. 파일 내용(Write
+   content, Edit old/new)은 grouping에 사용하지 않는다 — 내용 대조는 산출물
+   확정 단계에서만 쓴다.
 
 ### 13.2 job 간 이중계산 방지
 
