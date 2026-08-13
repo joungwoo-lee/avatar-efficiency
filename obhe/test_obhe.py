@@ -207,7 +207,7 @@ class TestEndToEnd(unittest.TestCase):
             self.assertGreater(report["rhe_p80_hours"], report["rhe_p50_hours"])
             self.assertTrue(report["auto_approved"])
 
-    def test_no_base_is_unrecoverable(self):
+    def test_no_evidence_is_unrecoverable(self):
         with tempfile.TemporaryDirectory() as d:
             traj = Path(d) / "t.jsonl"
             traj.write_text(json.dumps({"type": "user", "sessionId": "s1",
@@ -217,6 +217,88 @@ class TestEndToEnd(unittest.TestCase):
             man = estimate.build_group_manifest("job-1", groups[0], d, None, None)
             self.assertEqual(man["recovery"], "UNRECOVERABLE")
             self.assertEqual(man["artifacts"], [])
+
+
+class TestNoGit(unittest.TestCase):
+    """Git 없는 프로젝트 (§7): trajectory 기록 + 현재 파일 대조."""
+
+    def _traj_line(self, tool, inp, cwd):
+        return json.dumps({"type": "assistant", "sessionId": "s1", "cwd": cwd,
+                           "timestamp": "2026-08-13T10:00:00Z",
+                           "message": {"content": [{"type": "tool_use",
+                                                    "name": tool, "input": inp}]}})
+
+    def test_write_verified_high_confidence(self):
+        with tempfile.TemporaryDirectory() as d:
+            content = "# 보고서\n1페이지 수정본\n"
+            (Path(d) / "deck.md").write_text(content, encoding="utf-8")
+            traj = Path(d) / "t.jsonl"
+            traj.write_text(self._traj_line(
+                "Write", {"file_path": str(Path(d) / "deck.md"), "content": content}, d),
+                encoding="utf-8")
+            groups = trajectory.group_by_artifacts([trajectory.parse_trajectory(str(traj))])
+            man = estimate.build_group_manifest("job-1", groups[0], d, None, None)
+            self.assertEqual(man["recovery"], "HIGH_CONFIDENCE")
+            self.assertEqual(man["artifacts"][0]["confidence"], 0.95)
+            self.assertIn("current_file_match", man["artifacts"][0]["evidence_sources"])
+
+    def test_edit_only_counts_the_change_not_whole_file(self):
+        # 기존 문서 1군데 수정 — 전체 파일이 아니라 old/new 기록만 diff로 남는다
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "deck.md").write_text(
+                "페이지1 원본\n페이지2 수정본\n페이지3 원본\n" + "기존내용\n" * 50,
+                encoding="utf-8")
+            traj = Path(d) / "t.jsonl"
+            traj.write_text(self._traj_line(
+                "Edit", {"file_path": str(Path(d) / "deck.md"),
+                         "old_string": "페이지2 원본", "new_string": "페이지2 수정본"}, d),
+                encoding="utf-8")
+            groups = trajectory.group_by_artifacts([trajectory.parse_trajectory(str(traj))])
+            man = estimate.build_group_manifest("job-1", groups[0], d, None, None)
+            art = man["artifacts"][0]
+            self.assertEqual(art["status"], "M")  # 신규 작성 아님
+            self.assertIn("페이지2", art["diff"])
+            self.assertNotIn("기존내용", art["diff"])  # 전체 파일이 산출물로 잡히지 않음
+            self.assertEqual(man["recovery"], "HIGH_CONFIDENCE")
+
+    def test_mismatch_is_partial(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "a.md").write_text("세션 이후 다른 내용", encoding="utf-8")
+            traj = Path(d) / "t.jsonl"
+            traj.write_text(self._traj_line(
+                "Write", {"file_path": str(Path(d) / "a.md"), "content": "세션 당시 내용"}, d),
+                encoding="utf-8")
+            groups = trajectory.group_by_artifacts([trajectory.parse_trajectory(str(traj))])
+            man = estimate.build_group_manifest("job-1", groups[0], d, None, None)
+            self.assertEqual(man["recovery"], "PARTIAL")
+            self.assertEqual(man["artifacts"][0]["confidence"], 0.5)
+
+    def test_deleted_file_is_transient(self):
+        with tempfile.TemporaryDirectory() as d:
+            traj = Path(d) / "t.jsonl"
+            traj.write_text(self._traj_line(
+                "Write", {"file_path": str(Path(d) / "proto.md"), "content": "x"}, d),
+                encoding="utf-8")
+            groups = trajectory.group_by_artifacts([trajectory.parse_trajectory(str(traj))])
+            man = estimate.build_group_manifest("job-1", groups[0], d, None, None)
+            self.assertIn("proto.md", man["excluded_transient_paths"])
+            self.assertEqual(man["recovery"], "UNRECOVERABLE")  # 남은 산출물 없음
+
+    def test_no_git_end_to_end(self):
+        with tempfile.TemporaryDirectory() as d:
+            content = "def f():\n    return 1\n"
+            (Path(d) / "m.py").write_text(content, encoding="utf-8")
+            traj = Path(d) / "t.jsonl"
+            traj.write_text(self._traj_line(
+                "Write", {"file_path": str(Path(d) / "m.py"), "content": content}, d),
+                encoding="utf-8")
+            groups = trajectory.group_by_artifacts([trajectory.parse_trajectory(str(traj))])
+            man = estimate.build_group_manifest("job-1", groups[0], d, None, None)
+            rates = _rates()
+            est = workload.estimate_workload(man, SimLLM(), rates)
+            report = rate_engine.build_report(man, est, rates)
+            self.assertGreater(report["rhe_p50_hours"], 0)
+            self.assertTrue(report["auto_approved"])
 
 
 if __name__ == "__main__":

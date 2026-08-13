@@ -11,9 +11,10 @@
 trajectory 1..N + repo
    │
    ▼  로컬 결정론 층 (LLM 미사용)
-   │   trajectory.py  수정 경로·Bash 후보·작업 요청 추출
+   │   trajectory.py  수정 경로·편집 내용·Bash 후보·작업 요청 추출
    │                  + 산출물 겹침 기반 세션→job 그룹핑 (union-find)
-   │   gitstate.py    base~end net diff, attribution, 복원 상태 판정
+   │   gitstate.py    (Git+base 있을 때) base~end net diff, attribution
+   │   fsstate.py     (Git 없을 때) Write/Edit 기록 ↔ 현재 파일 대조 복원
    │   manifest.py    → job별 Artifact Manifest
    ▼
    │  LLM 1회 호출 (workload.py, 방법론 §10 프롬프트)
@@ -30,8 +31,12 @@ RHE P50/P80 리포트
 - **산출물 확정에 LLM을 쓰지 않는다.** 세션별 diff 합산이 아니라 base~end **net diff** —
   만들다 버린 것(TRANSIENT)은 자동 제외.
 - **LLM은 의미 해석 한 구간만** — 완료 결과 분할과 행동량 산정. 시간은 절대 안 정한다.
-- base commit을 확정 못 하면 지어내지 않고 **UNRECOVERABLE**로 멈춘다.
-  자동 승인은 EXACT / HIGH_CONFIDENCE만.
+- **Git은 필수가 아니다 (§7).** base commit + `.git`이 있으면 Git으로 검증하고,
+  없으면 trajectory의 Write content / Edit old·new 기록을 현재 파일과 대조해 복원:
+  일치 → HIGH_CONFIDENCE, 불일치 → PARTIAL(참고치), 증거 없음 → UNRECOVERABLE.
+  Edit 기록은 변경분만 diff로 남으므로 기존 파일 일부 수정이 전체 작성으로
+  과대추산되지 않는다.
+- 증거가 없으면 지어내지 않는다. 자동 승인은 EXACT / HIGH_CONFIDENCE만.
 
 ## 다중 세션 → job 그룹핑 (LLM 미사용)
 
@@ -53,7 +58,8 @@ job마다 OBHE를 따로 낸다.
 | 파일 | 담당 | LLM |
 |---|---|---|
 | `trajectory.py` | JSONL tolerant 파싱, Write/Edit/NotebookEdit 경로, Bash heuristic, 산출물 겹침 job 그룹핑 | X |
-| `gitstate.py` | base/end 확정, net diff, DIRECT_NET/BASH_NET/GIT_NET/TRANSIENT 분류 | X |
+| `gitstate.py` | (Git) base/end 확정, net diff, DIRECT_NET/BASH_NET/GIT_NET/TRANSIENT 분류 | X |
+| `fsstate.py` | (Git 없음) Write/Edit 기록↔현재 파일 대조, pseudo-diff, 복원 상태 판정 | X |
 | `manifest.py` | Artifact Manifest 생성 | X |
 | `workload.py` | §10 프롬프트 생성, 1회 호출, 응답 검증(카탈로그 밖 행동 강등) | O |
 | `rate_engine.py` | 요율 곱셈, rework 가산, 승인 판정, 리포트 | X |
@@ -76,8 +82,9 @@ python estimate.py --trajectory s1.jsonl --base <commit> --manifest-only
 python test_obhe.py
 ```
 
-`--repo` 생략 시 그룹 첫 세션의 cwd 사용. `--end` 생략 시 현재 working tree
-기준(HIGH_CONFIDENCE). `--base` 생략 시 UNRECOVERABLE — 계산하지 않음.
+`--repo` 생략 시 그룹 첫 세션의 cwd 사용. `--end` 생략 시 현재 working tree 기준.
+`--base` 생략 또는 Git 없는 프로젝트면 trajectory+filesystem 증거로 복원(§7) —
+검증되면 HIGH_CONFIDENCE, 아니면 PARTIAL/UNRECOVERABLE.
 
 ## 요율 바꾸는 법
 

@@ -25,6 +25,7 @@ from pathlib import Path
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import fsstate
     import gitstate
     import manifest as manifest_mod
     import rate_engine
@@ -32,7 +33,7 @@ if __package__ in (None, ""):
     import workload
     from sim_llm import SimLLM
 else:
-    from . import gitstate, rate_engine, trajectory, workload
+    from . import fsstate, gitstate, rate_engine, trajectory, workload
     from . import manifest as manifest_mod
     from .sim_llm import SimLLM
 
@@ -58,19 +59,27 @@ def build_group_manifest(job_id, group, repo, base, end,
     """
     sessions = group["sessions"]
     evidence = group.get("grouping_evidence", [])
-    try:
-        states = gitstate.resolve_states(repo, base, end)
-    except gitstate.GitStateError as e:
-        states = {"base": None, "end": None, "recovery": "UNRECOVERABLE", "note": str(e)}
-    if states["recovery"] == "UNRECOVERABLE":
-        return manifest_mod.build_manifest(job_id, sessions, repo, states, [], [], [],
-                                           grouping_evidence=evidence)
-    changed = {p: s for p, s in gitstate.net_diff(repo, states["base"], states["end"]).items()
-               if p not in claimed_elsewhere}
-    artifacts, transient, unresolved = gitstate.classify(
-        _union(sessions, "direct_paths"), _union(sessions, "bash_candidate_paths"),
-        changed, repo, git_net_to_unresolved=exclusive)
-    gitstate.attach_contents(artifacts, repo, states["base"], states["end"])
+
+    # 증거 우선순위 (§3.4): base commit + 로컬 .git이 있으면 Git 검증,
+    # 없으면 trajectory 편집 기록 + 현재 filesystem 대조 (§7 — Git 필수 아님)
+    use_git = bool(base) and (Path(repo) / ".git").exists()
+    if use_git:
+        try:
+            states = gitstate.resolve_states(repo, base, end)
+        except gitstate.GitStateError as e:
+            states = {"base": None, "end": None, "recovery": "UNRECOVERABLE", "note": str(e)}
+        if states["recovery"] == "UNRECOVERABLE":
+            return manifest_mod.build_manifest(job_id, sessions, repo, states, [], [], [],
+                                               grouping_evidence=evidence)
+        changed = {p: s for p, s in
+                   gitstate.net_diff(repo, states["base"], states["end"]).items()
+                   if p not in claimed_elsewhere}
+        artifacts, transient, unresolved = gitstate.classify(
+            _union(sessions, "direct_paths"), _union(sessions, "bash_candidate_paths"),
+            changed, repo, git_net_to_unresolved=exclusive)
+        gitstate.attach_contents(artifacts, repo, states["base"], states["end"])
+    else:
+        states, artifacts, transient, unresolved = fsstate.resolve_without_git(sessions, repo)
     return manifest_mod.build_manifest(job_id, sessions, repo, states, artifacts,
                                        transient, unresolved, grouping_evidence=evidence)
 
@@ -131,7 +140,8 @@ def main(argv=None):
     ap.add_argument("--trajectory", nargs="+", required=True, help="Claude Code JSONL 파일들")
     ap.add_argument("--repo", default=None,
                     help="Git repository 경로 (생략 시 그룹 첫 세션의 cwd)")
-    ap.add_argument("--base", default=None, help="작업 시작 commit (미지정 시 UNRECOVERABLE)")
+    ap.add_argument("--base", default=None,
+                    help="작업 시작 commit (Git 검증용 — 없으면 trajectory+filesystem 증거로 복원)")
     ap.add_argument("--end", default=None, help="작업 종료 commit (미지정 시 현재 working tree)")
     ap.add_argument("--min-common", type=int, default=1,
                     help="같은 job으로 묶는 최소 공통 산출물 경로 수 (기본 1)")

@@ -79,6 +79,7 @@ def parse_trajectory(path):
         "direct_paths": set(),
         "bash_candidate_paths": set(),
         "git_commands": [],
+        "file_ops": [],  # Write/Edit 기록 원본 — Git 없는 복원 증거 (§4.1, §7)
     }
     for rec in _iter_json_lines(path):
         if rec.get("type") == "user" and not rec.get("isMeta"):
@@ -97,6 +98,18 @@ def parse_trajectory(path):
                     p = inp.get("file_path") or inp.get("notebook_path")
                     if p:
                         sess["direct_paths"].add(p)
+                        op = {"tool": name, "path": p}
+                        if name == "Write":
+                            op["content"] = inp.get("content")
+                        elif name == "Edit":
+                            op["old"] = inp.get("old_string")
+                            op["new"] = inp.get("new_string")
+                        elif name == "MultiEdit":
+                            op["edits"] = [{"old": e.get("old_string"), "new": e.get("new_string")}
+                                           for e in inp.get("edits") or []]
+                        elif name == "NotebookEdit":
+                            op["new"] = inp.get("new_source")
+                        sess["file_ops"].append(op)
                 elif name == "Bash" and isinstance(inp.get("command"), str):
                     cmd = inp["command"]
                     sess["bash_candidate_paths"] |= bash_candidate_paths(cmd)
