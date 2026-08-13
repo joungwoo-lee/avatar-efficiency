@@ -1,23 +1,21 @@
 # -*- coding: utf-8 -*-
 """OBHE Layer 1+2 — Outcome Reconstruction + Reference Human Path Generator.
 
-artifact 텍스트 → (LLM) → Outcome Unit + Human Action Ledger.
+artifact 텍스트 → (LLM 1턴) → Outcome Unit + Human Action Ledger.
 
 원칙:
+  - LLM 호출은 1턴이다: 프롬프트 1회 전송, JSON 응답 1회. 행동·수량·evidence가
+    모두 이 응답에 들어 있고, 시간 계산은 전부 LLM 밖(rate_engine)에서 한다.
   - LLM은 행동·수량·complexity driver·evidence만 출력한다. 시간·분·요율 출력 금지 (§11).
   - rate card의 요율(base_min/add_min)은 프롬프트에 절대 노출하지 않는다 —
     수량 역산 오염 방지. 행동 이름·단위·driver 라벨만 노출.
-  - 3중 추정 (§17): judges회 독립 복원 → 수량 median, 행동 채택 다수결,
-    judge 간 편차 과대 시 human_review_required.
   - reference_ledger(정상 인간 경로)와 replication_ledger(AI 산출물 그대로
     복제 경로)를 분리 생성 (§4).
 
 LLM 계약: llm.complete_json(prompt: str, max_tokens: int) -> dict
 """
-import statistics
 
 _MAX_TOKENS = 4000
-_SPREAD_REVIEW_THRESHOLD = 3.0  # judge 간 max/min 수량비가 이를 넘으면 Human Review
 
 
 def _catalog_lines(card):
@@ -101,83 +99,15 @@ def _clean_rows(rows, card):
     return out
 
 
-def _aggregate_judges(ledgers, judges):
-    """행동별 다수결 채택 + 수량 median (§17)."""
-    majority = judges // 2 + 1
-    by_action = {}
-    for ledger in ledgers:
-        seen = set()
-        for r in ledger:
-            key = r["action"]
-            if key in seen:  # 같은 judge가 같은 행동을 중복 제시하면 수량 합산
-                by_action[key]["quantities"][-1] += r["quantity"]
-                continue
-            seen.add(key)
-            slot = by_action.setdefault(key, {"quantities": [], "rows": [], "driver_votes": {}})
-            slot["quantities"].append(r["quantity"])
-            slot["rows"].append(r)
-            for d in r["drivers"]:
-                slot["driver_votes"][d] = slot["driver_votes"].get(d, 0) + 1
-
-    rows, review_required, unanimous = [], False, True
-    for key, slot in by_action.items():
-        votes = len(slot["quantities"])
-        if votes < majority:
-            unanimous = False
-            continue
-        if votes < judges:
-            unanimous = False
-        qty = statistics.median(slot["quantities"])
-        lo, hi = min(slot["quantities"]), max(slot["quantities"])
-        if lo > 0 and hi / lo > _SPREAD_REVIEW_THRESHOLD:
-            review_required = True
-        first = slot["rows"][0]
-        rows.append({
-            "outcome": first["outcome"],
-            "action": key,
-            "quantity": qty,
-            "drivers": sorted(d for d, v in slot["driver_votes"].items() if v >= majority),
-            "evidence": first["evidence"],
-            "role": first["role"],
-            "confidence": first["confidence"],
-        })
-    return rows, review_required, unanimous
-
-
-def restore_paths(artifact_text, llm, card, judges=3, requirement_text=""):
-    """artifact에서 reference/replication ledger를 judges회 복원 후 집계한다."""
+def restore_paths(artifact_text, llm, card, requirement_text=""):
+    """LLM 1턴 호출로 reference/replication ledger를 복원한다."""
     prompt = build_prompt(artifact_text, card, requirement_text)
-    ref_ledgers, rep_ledgers, outcome_confs, outcomes = [], [], [], []
-    for _ in range(max(1, judges)):
-        result = llm.complete_json(prompt, max_tokens=_MAX_TOKENS)
-        ref_ledgers.append(_clean_rows(result.get("reference_ledger"), card))
-        rep_ledgers.append(_clean_rows(result.get("replication_ledger"), card))
-        oc = result.get("outcome_confidence", "C")
-        outcome_confs.append(oc if oc in ("A", "B", "C") else "C")
-        if not outcomes:
-            outcomes = result.get("outcomes") or []
-
-    n = len(ref_ledgers)
-    ref_rows, ref_review, ref_unanimous = _aggregate_judges(ref_ledgers, n)
-    rep_rows, rep_review, _ = _aggregate_judges(rep_ledgers, n)
-
-    review_required = ref_review or rep_review
-    if review_required:
-        path_confidence = "C"
-    elif not ref_unanimous:
-        path_confidence = "B"
-    else:
-        path_confidence = "A"
-
-    # outcome confidence는 judge들 중 최악값 사용
-    outcome_confidence = max(outcome_confs, key=lambda g: {"A": 0, "B": 1, "C": 2}[g])
-
+    result = llm.complete_json(prompt, max_tokens=_MAX_TOKENS)
+    oc = result.get("outcome_confidence", "C")
     return {
-        "outcomes": outcomes,
-        "reference_ledger": ref_rows,
-        "replication_ledger": rep_rows,
-        "outcome_confidence": outcome_confidence,
-        "path_confidence": path_confidence,
-        "human_review_required": review_required,
-        "judge_count": n,
+        "outcomes": result.get("outcomes") or [],
+        "reference_ledger": _clean_rows(result.get("reference_ledger"), card),
+        "replication_ledger": _clean_rows(result.get("replication_ledger"), card),
+        "outcome_confidence": oc if oc in ("A", "B", "C") else "C",
+        "rationale": result.get("rationale", ""),
     }

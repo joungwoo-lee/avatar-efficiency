@@ -82,37 +82,12 @@ class TestReport(unittest.TestCase):
         self.assertEqual(report["confidence"], "C")
 
 
-class TestJudgeAggregation(unittest.TestCase):
-    def test_median_and_majority(self):
-        ledgers = [
-            [{"outcome": "", "action": "verify_claim", "quantity": 15, "drivers": [], "evidence": "", "role": "", "confidence": ""}],
-            [{"outcome": "", "action": "verify_claim", "quantity": 13, "drivers": [], "evidence": "", "role": "", "confidence": ""}],
-            [{"outcome": "", "action": "verify_claim", "quantity": 16, "drivers": [], "evidence": "", "role": "", "confidence": ""},
-             {"outcome": "", "action": "design_decision", "quantity": 1, "drivers": [], "evidence": "", "role": "", "confidence": ""}],
-        ]
-        rows, review, unanimous = ledger_builder._aggregate_judges(ledgers, 3)
-        by = {r["action"]: r for r in rows}
-        self.assertAlmostEqual(by["verify_claim"]["quantity"], 15)  # median(15,13,16)
-        self.assertNotIn("design_decision", by)  # 1/3 → 다수결 탈락 (§17)
-        self.assertFalse(review)
-        self.assertFalse(unanimous)
-
-    def test_spread_triggers_review(self):
-        ledgers = [
-            [{"outcome": "", "action": "verify_claim", "quantity": 5, "drivers": [], "evidence": "", "role": "", "confidence": ""}],
-            [{"outcome": "", "action": "verify_claim", "quantity": 50, "drivers": [], "evidence": "", "role": "", "confidence": ""}],
-            [{"outcome": "", "action": "verify_claim", "quantity": 10, "drivers": [], "evidence": "", "role": "", "confidence": ""}],
-        ]
-        _, review, _ = ledger_builder._aggregate_judges(ledgers, 3)
-        self.assertTrue(review)
-
-
 class TestRestorePaths(unittest.TestCase):
     def test_end_to_end_with_sim(self):
         artifact = "# 보고서\n\n## 분석\n시장 성장률 12% 전망.\n\n| a | b |\n| 1 | 2 |\n"
-        restored = ledger_builder.restore_paths(artifact, SimLLM(), _card(), judges=3)
-        self.assertEqual(restored["judge_count"], 3)
+        restored = ledger_builder.restore_paths(artifact, SimLLM(), _card())
         self.assertTrue(restored["reference_ledger"])
+        self.assertTrue(restored["replication_ledger"])
         # 프롬프트에 요율 필드가 노출되지 않아야 한다 (§11)
         prompt = ledger_builder.build_prompt(artifact, _card())
         self.assertNotIn("base_min", prompt)

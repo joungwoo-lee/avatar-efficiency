@@ -19,15 +19,13 @@ AI가 만든 분량을 그대로 사람 시간으로 바꾸면 안 된다. AI는
 | 5 | 각 일의 양을 센다 | "자료 15건, 확인할 주장 31개"처럼 결과물에서 셀 수 있는 숫자로 남긴다. 나중에 근거를 따질 수 있다 (§7) | LLM **턴2** |
 | 6 | 양 × 단가로 시간을 낸다 | "주장 1개 확인 = 3분"처럼 일마다 단가표가 있고, 어려우면 추가 시간이 붙는다. 단가표는 외부 파일(rate_card.json)이라 조직 데이터로 바꿀 수 있다 (§8·§10) | 코드 |
 | 7 | 사람다운 비용도 넣는다 | 사람도 검토하고, 사람도 고쳐 쓴다. 그 시간을 따로 더한다 (§13·§14) | LLM 턴2(검토 행동 포함) + 코드(고쳐쓰기 시간 가산) |
-| 8 | 세 번 물어서 흔들림을 잡는다 | 4번의 "길 그리기"를 3번 반복해 중간값을 쓴다. 답이 너무 다르면 사람 검토로 넘긴다 (§17) | 코드 (LLM 호출 3회 반복 + 집계) |
-| 9 | 답은 범위로 준다 | "정확히 17.3시간"이 아니라 "보통 15시간, 넉넉히 21시간, 믿을 만한 정도 B" (§18·§19) | 코드 |
+| 8 | 답은 범위로 준다 | "정확히 17.3시간"이 아니라 "보통 15시간, 넉넉히 21시간, 믿을 만한 정도 B" (§18·§19) | 코드 |
 
 **턴1/턴2 표기의 의미**: 품질을 보장하려면 LLM 호출을 두 턴으로 나누는 것이 맞다 —
 **턴1**에서 "무엇이 달성됐나"(1·3단계)만 추출하고, **턴2**에서 그 결과만 입력으로
 "사람의 작업경로"(2·4·5단계)를 복원하는 구조다. 그래야 잉여물 제거 결과가 독립
 산출물로 남아 검사할 수 있고, 턴2가 원문 분량에 끌려가는 오염도 막힌다.
-**실제 구현은 처리 속도를 위해 턴1+턴2를 한 프롬프트(1턴)에 합쳐 처리한다**
-(judge당 1턴 × 기본 3 judge = 총 3턴).
+**실제 구현은 처리 속도를 위해 턴1+턴2를 한 프롬프트에 합쳐, LLM 호출은 총 1턴이다.**
 
 **가장 중요한 규칙**: AI(LLM)에게는 "무슨 일을 몇 개 해야 했나"만 묻는다.
 **시간은 AI가 정하지 않는다** — 사람 데이터로 만든 단가표가 정한다 (§11).
@@ -50,17 +48,16 @@ Artifact → (LLM) Human Action Ledger → rate_card.json → P50/P80 시간
 > Layer 2(사람의 작업경로 복원)를 별도 층으로 둔다. 품질을 보장하려면 이 둘을
 > LLM 2턴으로 분리하는 것이 맞다 — 잉여물 제거 결과가 독립 산출물로 남아 감사
 > 가능하고, 2턴째에 원문 대신 추출된 결과만 주면 잉여 분량에 끌려가는 오염도
-> 차단된다. 본 구현은 **처리 속도를 위해 두 층을 한 프롬프트(1턴)에 합쳤다**
-> (judge당 1턴 × 기본 3 judge = 총 3턴). 1~5단계는 프롬프트 지시로 요청될 뿐
-> 구조적으로 보장되지 않으며, 요율 계산·rework 가산·3중 추정 집계·범위 출력만
-> 코드 레벨에서 보장된다.
+> 차단된다. 본 구현은 **처리 속도를 위해 두 층을 한 프롬프트에 합쳐 LLM 호출이
+> 총 1턴이다.** 1~5단계는 프롬프트 지시로 요청될 뿐 구조적으로 보장되지 않으며,
+> 요율 계산·rework 가산·범위 출력만 코드 레벨에서 보장된다.
 
 ## 구성
 
 | 파일 | 역할 (방법론 §21 Layer) |
 |---|---|
 | `rate_card.json` | **외부 설정**: Human Action 카탈로그(H1~H9) + 요율 + complexity driver + rework 비율 |
-| `ledger_builder.py` | Layer 1+2 — Outcome 추출 + Reference/Replication Human Path 복원, 3중 추정 집계 (§17) |
+| `ledger_builder.py` | Layer 1+2 — Outcome 추출 + Reference/Replication Human Path 복원 (LLM 1턴) |
 | `rate_engine.py` | Layer 3 — time equation 환산, RHE/HRE/Output Inflation/Confidence 계산 |
 | `sim_llm.py` | LLM 미연결 데모용 결정론적 시뮬레이터 |
 | `estimate.py` | CLI |
@@ -72,8 +69,8 @@ Artifact → (LLM) Human Action Ledger → rate_card.json → P50/P80 시간
 # 1) 작성된 ledger로 계산 (LLM 불필요)
 python estimate.py --ledger examples/sample_ledger.json --ai-hours 4
 
-# 2) artifact에서 작업경로 복원(3중 추정) 후 계산
-python estimate.py --artifact path/to/report.md --judges 3 --ai-hours 4
+# 2) artifact에서 작업경로 복원(LLM 1턴) 후 계산
+python estimate.py --artifact path/to/report.md --ai-hours 4
 
 # JSON 출력
 python estimate.py --ledger examples/sample_ledger.json --json report.json
@@ -106,7 +103,7 @@ python test_obhe.py
 
 ## 실제 LLM 연결
 
-`ledger_builder.restore_paths(artifact_text, llm, card, judges=3)` 의 `llm` 에
+`ledger_builder.restore_paths(artifact_text, llm, card)` 의 `llm` 에
 `complete_json(prompt: str, max_tokens: int) -> dict` 계약을 만족하는 클라이언트를 넘기면 된다
 (effort-estimator의 `OnpremLLM` 계약과 동일).
 

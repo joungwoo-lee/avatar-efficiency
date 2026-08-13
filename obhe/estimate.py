@@ -5,8 +5,8 @@
   # 1) 이미 작성된 Human Action Ledger(JSON)로 시간 계산 (LLM 불필요)
   python estimate.py --ledger examples/sample_ledger.json [--ai-hours 20]
 
-  # 2) artifact 파일에서 작업경로 복원(3중 추정) 후 계산 (기본 SimLLM)
-  python estimate.py --artifact path/to/artifact.md [--judges 3] [--ai-hours 20]
+  # 2) artifact 파일에서 작업경로 복원(LLM 1턴) 후 계산 (기본 SimLLM)
+  python estimate.py --artifact path/to/artifact.md [--ai-hours 20]
 
   공통: [--rates rate_card.json] [--json out.json]
 
@@ -74,8 +74,6 @@ def render_report(report, outcomes=None):
     cc = report["confidence_components"]
     out.append(f"\n  Confidence: {report['confidence']}"
                f"  (outcome {cc['outcome']} / path {cc['path']} / rate DB {cc['rate_db']})")
-    if report.get("human_review_required"):
-        out.append("  ** Judge 간 편차 과대 — Human Review Required (§17) **")
     for w in report.get("warnings", []):
         out.append(f"  경고: {w}")
     out.append("=" * 78)
@@ -88,7 +86,6 @@ def main(argv=None):
     src.add_argument("--ledger", help="Human Action Ledger JSON 파일")
     src.add_argument("--artifact", help="최종 결과물 텍스트/마크다운 파일")
     ap.add_argument("--rates", default=None, help="rate card JSON 경로 (기본: obhe/rate_card.json)")
-    ap.add_argument("--judges", type=int, default=3, help="작업경로 복원 반복 횟수 (§17, 기본 3)")
     ap.add_argument("--requirement", default=None, help="요구사항·배경 텍스트 파일 (선택)")
     ap.add_argument("--ai-hours", type=float, default=None, help="AI Actual Effort (시간)")
     ap.add_argument("--json", dest="json_out", default=None, help="리포트 JSON 저장 경로")
@@ -111,15 +108,12 @@ def main(argv=None):
         requirement_text = (Path(args.requirement).read_text(encoding="utf-8")
                             if args.requirement else "")
         restored = ledger_builder.restore_paths(
-            artifact_text, SimLLM(), card,
-            judges=args.judges, requirement_text=requirement_text)
+            artifact_text, SimLLM(), card, requirement_text=requirement_text)
         report = rate_engine.build_report(
             restored["reference_ledger"], card,
             replication_ledger=restored["replication_ledger"],
             ai_actual_hours=args.ai_hours,
-            outcome_confidence=restored["outcome_confidence"],
-            path_confidence=restored["path_confidence"],
-            human_review_required=restored["human_review_required"])
+            outcome_confidence=restored["outcome_confidence"])
         outcomes = restored["outcomes"]
 
     text = render_report(report, outcomes)

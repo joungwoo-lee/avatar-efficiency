@@ -123,7 +123,7 @@ def _worst_confidence(*grades):
 
 def build_report(reference_ledger, card, replication_ledger=None,
                  ai_actual_hours=None, outcome_confidence="B",
-                 path_confidence="B", human_review_required=False):
+                 path_confidence="B"):
     """RHE(P50/P80), HRE, Output Inflation, 현실화 효율, Confidence를 계산한다."""
     ref = price_ledger(reference_ledger, card)
     rep = price_ledger(replication_ledger, card) if replication_ledger else None
@@ -143,7 +143,6 @@ def build_report(reference_ledger, card, replication_ledger=None,
             "path": path_confidence,
             "rate_db": card.get("meta", {}).get("rate_confidence", "C"),
         },
-        "human_review_required": bool(human_review_required),
         "warnings": list(ref["warnings"]),
     }
 
