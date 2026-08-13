@@ -1,6 +1,28 @@
 # OBHE — Outcome-Based Human Effort Estimator
 
 [방법론 문서](./OBHE_결과물_기반_Human_Equivalent_Effort_방법론.md)의 구현.
+
+## 방법론 요약 — 무엇을 어떤 순서로 어떻게
+
+AI 산출량을 그대로 사람시간으로 환산하면 효율이 과대평가된다.
+OBHE는 **최종 유효 결과를 사람이 달성했을 표준 행동량**을 복원해 실측 요율로 환산한다.
+
+| 순서 | 단계 | 무엇을 | 어떻게 |
+|---|---|---|---|
+| 1 | Net Accepted Outcome (§3) | 실제 채택된 결과만 남김 | AI 시행착오·중간 산출물·잉여물 제거 |
+| 2 | HRE/RHE 분리 (§4) | 복제 시간 vs 정상 달성 시간 구분 | 두 경로 별도 계측, Output Inflation = HRE/RHE |
+| 3 | Outcome Unit 분해 (§5) | 결과물을 기능적 완료 단위로 셈 | 페이지·LOC 아닌 검증된 사실·결론·testcase 수 |
+| 4 | Human Path 복원 (§6) | 사람의 정상 작업경로 재구성 | H1~H9 taxonomy 행동 시퀀스로 (AI 실제 경로 아님) |
+| 5 | Workload Driver 계측 (§7) | 행동별 작업량을 결과물에서 셈 | source 수, claim 수, cell 수 등 감사 가능한 수량 |
+| 6 | Rate Card 적용 (§8·§10) | 수량 → 시간 환산 | 시간 = 수량 × (기본 단위시간 + Σ complexity driver), 조직 실측 데이터로 calibration |
+| 7 | 검증·rework 가산 (§13·§14) | 정상 인간 비용 반영 | Verification 독립 행동 강제 + Expected Human Rework 가산 |
+| 8 | 3중 추정 (§17) | 복원 안정성 확보 | 작업경로 N회 복원 → median·다수결, 편차 과대 시 Human Review |
+| 9 | 범위 출력 (§18·§19) | 단일 숫자 대신 범위 | P50/P80 + Confidence, HRE·RHE·AI Actual 세 숫자 보존 |
+
+핵심 원칙: **LLM은 행동과 수량만 추론하고, 시간은 외부 Rate Card(rate_card.json)가 결정한다** (§11).
+
+## 구현 개요
+
 AI 최종 결과물(artifact)에서 **기준 인간 작업경로(Human Action Ledger)** 를 복원하고,
 외부 **Human Action Rate Card** 의 time equation으로 person-hours를 계산한다.
 
