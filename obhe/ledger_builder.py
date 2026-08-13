@@ -6,11 +6,11 @@ artifact 텍스트 → (LLM 1턴) → Outcome Unit + Human Action Ledger.
 원칙:
   - LLM 호출은 1턴이다: 프롬프트 1회 전송, JSON 응답 1회. 행동·수량·evidence가
     모두 이 응답에 들어 있고, 시간 계산은 전부 LLM 밖(rate_engine)에서 한다.
-  - LLM은 행동·수량·complexity driver·evidence만 출력한다. 시간·분·요율 출력 금지 (§11).
+  - LLM은 행동·수량·complexity driver·evidence만 출력한다. 시간·분·요율 출력 금지 (§1·§4).
   - rate card의 요율(base_min/add_min)은 프롬프트에 절대 노출하지 않는다 —
     수량 역산 오염 방지. 행동 이름·단위·driver 라벨만 노출.
   - reference_ledger(정상 인간 경로)와 replication_ledger(AI 산출물 그대로
-    복제 경로)를 분리 생성 (§4).
+    복제 경로)를 분리 생성 (단계 2).
 
 LLM 계약: llm.complete_json(prompt: str, max_tokens: int) -> dict
 """

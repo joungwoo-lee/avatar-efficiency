@@ -2,15 +2,15 @@
   "meta": {
     "version": "0.1.0",
     "organization": "seed",
-    "rate_source": "SME 추정 (cold-start seed, 방법론 §8 예시값 기반)",
+    "rate_source": "SME 추정 (cold-start seed, 방법론 §5 예시값 기반)",
     "rate_confidence": "C",
-    "note": "실제 운영에서는 조직의 human-only 업무 데이터로 재구축할 것 (§9). base_min = 단위당 기본시간(분), driver.add_min = complexity 추가시간(분/단위). 이 파일은 LLM 프롬프트에 요율(분)을 절대 노출하지 않는다 — 행동 이름·단위·driver 라벨만 노출."
+    "note": "실제 운영에서는 조직의 human-only 업무 데이터로 재구축할 것 (§5). base_min = 단위당 기본시간(분), driver.add_min = complexity 추가시간(분/단위). 이 파일은 LLM 프롬프트에 요율(분)을 절대 노출하지 않는다 — 행동 이름·단위·driver 라벨만 노출."
   },
   "p80_factor_default": 1.4,
   "expected_rework": {
     "ratio": 0.12,
     "applies_to_taxonomy": ["H3", "H4", "H5", "H6", "H8"],
-    "note": "Normal Human Rework (§14): 초안→확인→작은 수정→재검증. AI-induced rework는 여기 포함하지 않는다."
+    "note": "Normal Human Rework (단계 7): 초안→확인→작은 수정→재검증. AI-induced rework는 여기 포함하지 않는다."
   },
   "taxonomy": {
     "H1": "Context Acquisition",

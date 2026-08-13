@@ -17,7 +17,7 @@ def _card():
 
 class TestTimeEquation(unittest.TestCase):
     def test_base_rate(self):
-        # verify_claim: claim당 3분 (§8 예시)
+        # verify_claim: claim당 3분 (§5 예시)
         row = rate_engine.price_row({"action": "verify_claim", "quantity": 10}, _card())
         self.assertAlmostEqual(row["p50_min"], 30.0)
         self.assertAlmostEqual(row["p80_min"], 42.0)  # p80_factor_default 1.4
@@ -71,7 +71,7 @@ class TestReport(unittest.TestCase):
         self.assertGreater(report["rhe_p80_hours"], report["rhe_p50_hours"])
         self.assertGreater(report["hre_p50_hours"], report["rhe_p50_hours"])
         self.assertGreater(report["output_inflation"], 1.0)
-        # 겉보기 효율(HRE/AI) > 현실화 효율(RHE/AI) — §18 과장 구조
+        # 겉보기 효율(HRE/AI) > 현실화 효율(RHE/AI) — §6 과장 구조
         self.assertGreater(report["naive_efficiency"], report["realized_efficiency"])
 
     def test_confidence_worst_of_three(self):
@@ -88,7 +88,7 @@ class TestRestorePaths(unittest.TestCase):
         restored = ledger_builder.restore_paths(artifact, SimLLM(), _card())
         self.assertTrue(restored["reference_ledger"])
         self.assertTrue(restored["replication_ledger"])
-        # 프롬프트에 요율 필드가 노출되지 않아야 한다 (§11)
+        # 프롬프트에 요율 필드가 노출되지 않아야 한다 (§4)
         prompt = ledger_builder.build_prompt(artifact, _card())
         self.assertNotIn("base_min", prompt)
         self.assertNotIn("add_min", prompt)

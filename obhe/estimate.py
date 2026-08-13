@@ -56,9 +56,9 @@ def render_report(report, outcomes=None):
             f"  {r['evidence'][:40]}")
     out.append(f"  {'-' * 74}")
     out.append(f"  작업 소계                      P50 {_fmt_h(ref['work_p50_min'])} / P80 {_fmt_h(ref['work_p80_min'])}")
-    out.append(f"  Expected Human Rework (§14)    P50 {_fmt_h(ref['rework_p50_min'])} / P80 {_fmt_h(ref['rework_p80_min'])}")
+    out.append(f"  Expected Human Rework (단계 7)    P50 {_fmt_h(ref['rework_p50_min'])} / P80 {_fmt_h(ref['rework_p80_min'])}")
 
-    out.append("\n[핵심 지표 (§18)]")
+    out.append("\n[핵심 지표 (§6)]")
     out.append(f"  RHE (Reference Human Effort) : P50 {report['rhe_p50_hours']}h / P80 {report['rhe_p80_hours']}h")
     if "hre_p50_hours" in report:
         out.append(f"  HRE (Human Replication Effort): P50 {report['hre_p50_hours']}h")

@@ -4,14 +4,14 @@
 Human Action Ledger(행동 x 수량 x complexity driver)를 rate_card.json의
 time equation으로 환산한다.
 
-  시간 = 수량 x (기본 단위시간 + Σ 적용된 driver 추가시간)   (TDABC, §8·§10)
+  시간 = 수량 x (기본 단위시간 + Σ 적용된 driver 추가시간)   (TDABC, §5)
 
 원칙 (OBHE 방법론 문서 기준):
-  - LLM은 시간을 출력하지 않는다. 시간은 이 엔진만 계산한다 (§11).
-  - 결과는 단일 숫자가 아니라 P50/P80 범위 + Confidence (§17).
-  - Verification(H7)이 ledger에 없으면 경고한다 (§13).
-  - Expected Human Rework를 별도 항목으로 가산한다 (§14).
-  - HRE / RHE / AI Actual Effort 세 숫자를 분리 보존한다 (§18).
+  - LLM은 시간을 출력하지 않는다. 시간은 이 엔진만 계산한다 (§1).
+  - 결과는 단일 숫자가 아니라 P50/P80 범위 + Confidence (단계 8).
+  - Verification(H7)이 ledger에 없으면 경고한다 (단계 7).
+  - Expected Human Rework를 별도 항목으로 가산한다 (단계 7).
+  - HRE / RHE / AI Actual Effort 세 숫자를 분리 보존한다 (§6).
 """
 import json
 from pathlib import Path
@@ -43,7 +43,7 @@ def price_row(row, card):
     """ledger row 1건에 time equation을 적용한다.
 
     row 필수 필드: action, quantity. 선택: drivers(list), outcome, evidence,
-    role, confidence (§12 필드 구조).
+    role, confidence (단계 5 행 형식).
     """
     actions = card["actions"]
     name = row.get("action")
@@ -99,7 +99,7 @@ def price_ledger(rows, card):
 
     warnings = []
     if priced and not any(r["taxonomy"] == "H7" for r in priced):
-        warnings.append("Verification(H7) 행동이 ledger에 없음 — §13 위반 가능. 검증을 독립 행동으로 계측할 것.")
+        warnings.append("Verification(H7) 행동이 ledger에 없음 — 단계 7 위반 가능. 검증을 독립 행동으로 계측할 것.")
 
     return {
         "rows": priced,
@@ -114,7 +114,7 @@ def price_ledger(rows, card):
 
 
 def _worst_confidence(*grades):
-    """§17: Confidence = Outcome/Path/Rate 신뢰도 중 최악값."""
+    """단계 8: Confidence = Outcome/Path/Rate 신뢰도 중 최악값."""
     valid = [g for g in grades if g in _CONFIDENCE_ORDER]
     if not valid:
         return "D"

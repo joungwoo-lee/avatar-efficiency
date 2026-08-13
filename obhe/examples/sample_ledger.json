@@ -1,5 +1,5 @@
 {
-  "_comment": "방법론 §16 시장분석 보고서 예시를 ledger로 옮긴 것. LLM 없이 estimate.py --ledger 로 바로 계산 가능.",
+  "_comment": "방법론 §6 예시 계산을 ledger로 옮긴 것. LLM 없이 estimate.py --ledger 로 바로 계산 가능.",
   "outcomes": [
     { "unit": "검증된 사실", "quantity": 31, "evidence": "본문 수치 인용" },
     { "unit": "비교 대상", "quantity": 8, "evidence": "비교 표" },
