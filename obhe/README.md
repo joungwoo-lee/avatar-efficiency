@@ -64,7 +64,8 @@ job마다 OBHE를 따로 낸다.
 | `workload.py` | §10 프롬프트 생성, 1회 호출, 응답 검증(카탈로그 밖 행동 강등) | O |
 | `rate_engine.py` | 요율 곱셈, rework 가산, 승인 판정, 리포트 | X |
 | `rates.json` | **외부 설정** — 행동 11종 + workload 단위별 P50/P80 요율 + complexity 배수 | — |
-| `sim_llm.py` | LLM 미연결 데모용 | — |
+| `cursor_llm.py` | cursor-proxy(OpenAI 호환) LLM 클라이언트 — 기본 백엔드 | — |
+| `sim_llm.py` | proxy 없이 돌리는 데모용 시뮬레이터 (`--llm sim`) | — |
 | `estimate.py` | CLI | — |
 
 ## 사용법
@@ -101,11 +102,15 @@ python test_obhe.py
 시간 = workload × 단위요율(P50/P80) × complexity. 실측 human-only 데이터가 쌓이면
 값을 교체하고 `meta.rate_confidence`를 올린다.
 
-## 실제 LLM 연결
+## LLM 연결
 
-`workload.estimate_workload(manifest, llm, rates)` 의 `llm` 에
-`complete_json(prompt, max_tokens) -> dict` 클라이언트를 넘기면 된다.
-기본 `SimLLM`은 manifest에서 결정론적으로 장부를 흉내 내는 데모용.
+기본은 **cursor-proxy** (`--llm cursor`, OpenAI 호환 `127.0.0.1:18741`).
+
+- proxy 기동: `C:\Users\joung\opencode-cursor-proxy\proxy-start.ps1`
+- env: `OBHE_LLM_BASE` (기본 `http://127.0.0.1:18741/v1`), `OBHE_LLM_MODEL` (기본 `gpt-5-mini`)
+- `--llm sim`: proxy 없이 파이프라인 데모용 시뮬레이터
+- 다른 백엔드: `workload.estimate_workload(manifest, llm, rates)` 에
+  `complete_json(prompt, max_tokens) -> dict` 클라이언트 주입
 
 ## 리포트 읽는 법
 
