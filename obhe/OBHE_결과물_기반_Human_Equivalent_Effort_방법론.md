@@ -591,21 +591,49 @@ LLM에게:
 
 ## 13. 다중 세션 처리
 
-여러 trajectory가 같은 작업을 이어 수행한 경우:
+여러 trajectory가 입력되면 **어느 세션끼리 하나의 작업(job)으로 이어지는지**를
+LLM 없이 결정론적으로 판정한 뒤, job 단위로 net artifact와 OBHE를 계산한다.
+
+### 13.1 산출물 겹침 기반 세션 grouping
+
+grouping의 1차 기준은 metadata가 아니라 **산출물이 공통인가**다.
 
 ```text
-trajectory_1
-trajectory_2
-trajectory_3
+trajectory_1..N
       ↓
-session metadata 추출
+세션별 산출물 서명 추출
+  = 그 세션이 건드린 경로 집합 (Write/Edit/NotebookEdit + Bash 후보)
+  → working directory 기준 절대경로로 정규화
       ↓
-project path / session relation / 시간 연속성 기준 grouping
+겹침 판정: 두 세션의 서명에 공통 경로가 min_common(기본 1)개 이상이면 연결
       ↓
-전체 job의 before/end evidence 결정
+union-find로 연결요소 계산 → 연결요소 1개 = job 1개
       ↓
-한 번의 final net artifact 계산
+job마다 before/end evidence 결정 → 한 번의 final net artifact 계산 → OBHE
 ```
+
+규칙:
+
+1. **전이 연결**: s1∩s2, s2∩s3이 겹치면 s1과 s3이 직접 겹치지 않아도 같은 job이다
+   — 파일을 옮겨가며 이어서 수행한 작업.
+2. **절대경로 정규화**: 서로 다른 프로젝트의 같은 상대경로(README.md 등)가
+   허위 병합되지 않도록 경로는 cwd 기준 절대경로로 비교한다.
+3. **독립 세션**: 어떤 세션과도 산출물이 겹치지 않으면 독립 job으로 처리한다.
+4. **근거 기록**: 어느 세션 쌍이 어떤 공통 경로 때문에 묶였는지를
+   `grouping_evidence`로 Artifact Manifest에 남겨 grouping 자체를 감사 가능하게 한다.
+5. **임계값**: 범용 설정 파일 하나 겹친 것만으로 무관한 작업이 묶이는 것을 막아야
+   하면 min_common을 올린다.
+
+### 13.2 job 간 이중계산 방지
+
+여러 job이 같은 저장소의 같은 기간을 공유하면, 한 job의 diff에 다른 job의
+변경이 섞여 들어와 사람 작업량이 이중계산될 수 있다. 따라서:
+
+- 다른 job의 세션이 직접 건드린 경로는 이 job의 net diff에서 제거한다.
+- 어느 job의 trajectory에도 증거가 없는 변경은 특정 job에 귀속하지 않고
+  unresolved로 분리한다 — 사용자의 수동 변경이나 다른 작업일 수 있기 때문이다.
+
+### 13.3 원칙
 
 세션별 결과를 각각 사람시간으로 계산한 뒤 합산하지 않는다.
 
@@ -702,9 +730,9 @@ trajectory_ingestor
   - session metadata
 
 session_grouper
-  - project/cwd
-  - timestamp
-  - session relation
+  - 산출물 서명(수정 경로 집합) 겹침 기반 union-find grouping (§13.1)
+  - grouping evidence 기록
+  - timestamp / project 보조
 
 path_extractor
   - Write/Edit/NotebookEdit
