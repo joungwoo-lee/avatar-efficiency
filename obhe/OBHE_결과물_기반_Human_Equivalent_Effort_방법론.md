@@ -375,33 +375,7 @@ Reference Human의 정의가 불명확하면 결과가 크게 흔들릴 수 있�
 
 ---
 
-## 17. 3중 추정으로 작업경로 안정성을 검증한다
-
-Epoch는 여러 frontier model의 median을 사용해 개별 judge의 noise를 줄였다.
-
-OBHE에서는 시간을 여러 번 추정하는 대신 **작업경로 자체를 여러 번 복원**하는 것이 좋다.
-
-예:
-
-- Judge A: 자료조사 15건
-- Judge B: 자료조사 13건
-- Judge C: 자료조사 16건
-
-이 경우 median 값을 사용할 수 있다.
-
-반면:
-
-- Judge A: 설계 필요
-- Judge B: 설계 불필요
-- Judge C: 설계 필요
-
-와 같은 경우 다수결 또는 rule-based resolution을 사용한다.
-
-Judge 간 차이가 지나치게 크면 **Human Review Required**로 분류한다.
-
----
-
-## 18. 결과는 단일 숫자가 아니라 범위로 제공한다
+## 17. 결과는 단일 숫자가 아니라 범위로 제공한다
 
 Counterfactual human-time 자체에는 불확실성이 존재한다.
 
@@ -419,7 +393,7 @@ Confidence는 최소한 다음 세 요소로 결정한다.
 
 ---
 
-## 19. 반드시 별도로 보존해야 할 세 숫자
+## 18. 반드시 별도로 보존해야 할 세 숫자
 
 | 지표 | 의미 |
 |---|---|
@@ -445,7 +419,7 @@ Confidence는 최소한 다음 세 요소로 결정한다.
 
 ---
 
-## 20. 기존 방법 대비 차이
+## 19. 기존 방법 대비 차이
 
 ### Epoch·METR식
 
@@ -476,7 +450,7 @@ OBHE의 핵심 차별점은 **Human Work Path를 명시적인 계측 객체로 �
 
 ---
 
-## 21. 실제 시스템 구현 구조
+## 20. 실제 시스템 구현 구조
 
 ### Layer 1 — Outcome Reconstruction
 
@@ -506,7 +480,7 @@ Epoch의 counterfactual human reasoning을 사용하되, exact artifact replicat
 
 ---
 
-## 22. 검증 방법
+## 21. 검증 방법
 
 OBHE는 새로운 조합이므로 실제 human-only task로 검증해야 한다.
 
@@ -531,7 +505,7 @@ OBHE는 새로운 조합이므로 실제 human-only task로 검증해야 한다.
 
 ---
 
-## 23. 핵심 정의
+## 22. 핵심 정의
 
 OBHE의 핵심을 한 문장으로 정리하면 다음과 같다.
 

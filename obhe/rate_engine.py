@@ -8,10 +8,10 @@ time equation으로 환산한다.
 
 원칙 (OBHE 방법론 문서 기준):
   - LLM은 시간을 출력하지 않는다. 시간은 이 엔진만 계산한다 (§11).
-  - 결과는 단일 숫자가 아니라 P50/P80 범위 + Confidence (§18).
+  - 결과는 단일 숫자가 아니라 P50/P80 범위 + Confidence (§17).
   - Verification(H7)이 ledger에 없으면 경고한다 (§13).
   - Expected Human Rework를 별도 항목으로 가산한다 (§14).
-  - HRE / RHE / AI Actual Effort 세 숫자를 분리 보존한다 (§19).
+  - HRE / RHE / AI Actual Effort 세 숫자를 분리 보존한다 (§18).
 """
 import json
 from pathlib import Path
@@ -114,7 +114,7 @@ def price_ledger(rows, card):
 
 
 def _worst_confidence(*grades):
-    """§18: Confidence = Outcome/Path/Rate 신뢰도 중 최악값."""
+    """§17: Confidence = Outcome/Path/Rate 신뢰도 중 최악값."""
     valid = [g for g in grades if g in _CONFIDENCE_ORDER]
     if not valid:
         return "D"

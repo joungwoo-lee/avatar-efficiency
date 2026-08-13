@@ -19,7 +19,7 @@ AI가 만든 분량을 그대로 사람 시간으로 바꾸면 안 된다. AI는
 | 5 | 각 일의 양을 센다 | "자료 15건, 확인할 주장 31개"처럼 결과물에서 셀 수 있는 숫자로 남긴다. 나중에 근거를 따질 수 있다 (§7) | LLM **턴2** |
 | 6 | 양 × 단가로 시간을 낸다 | "주장 1개 확인 = 3분"처럼 일마다 단가표가 있고, 어려우면 추가 시간이 붙는다. 단가표는 외부 파일(rate_card.json)이라 조직 데이터로 바꿀 수 있다 (§8·§10) | 코드 |
 | 7 | 사람다운 비용도 넣는다 | 사람도 검토하고, 사람도 고쳐 쓴다. 그 시간을 따로 더한다 (§13·§14) | LLM 턴2(검토 행동 포함) + 코드(고쳐쓰기 시간 가산) |
-| 8 | 답은 범위로 준다 | "정확히 17.3시간"이 아니라 "보통 15시간, 넉넉히 21시간, 믿을 만한 정도 B" (§18·§19) | 코드 |
+| 8 | 답은 범위로 준다 | "정확히 17.3시간"이 아니라 "보통 15시간, 넉넉히 21시간, 믿을 만한 정도 B" (§17·§18) | 코드 |
 
 **턴1/턴2 표기의 의미**: 품질을 보장하려면 LLM 호출을 두 턴으로 나누는 것이 맞다 —
 **턴1**에서 "무엇이 달성됐나"(1·3단계)만 추출하고, **턴2**에서 그 결과만 입력으로
@@ -42,9 +42,9 @@ Artifact → (LLM) Human Action Ledger → rate_card.json → P50/P80 시간
 
 - LLM은 행동·수량·complexity driver·evidence만 추론한다. **시간을 결정하지 않는다** (§11).
 - 요율은 프롬프트에 노출하지 않는다 (수량 역산 오염 방지).
-- 결과는 P50/P80 범위 + Confidence(A/B/C)로 제공한다 (§18).
+- 결과는 P50/P80 범위 + Confidence(A/B/C)로 제공한다 (§17).
 
-> **구현 노트 — 1턴 vs 2턴**: 방법론 §21은 Layer 1(무엇이 달성됐나 추출)과
+> **구현 노트 — 1턴 vs 2턴**: 방법론 §20은 Layer 1(무엇이 달성됐나 추출)과
 > Layer 2(사람의 작업경로 복원)를 별도 층으로 둔다. 품질을 보장하려면 이 둘을
 > LLM 2턴으로 분리하는 것이 맞다 — 잉여물 제거 결과가 독립 산출물로 남아 감사
 > 가능하고, 2턴째에 원문 대신 추출된 결과만 주면 잉여 분량에 끌려가는 오염도
@@ -54,7 +54,7 @@ Artifact → (LLM) Human Action Ledger → rate_card.json → P50/P80 시간
 
 ## 구성
 
-| 파일 | 역할 (방법론 §21 Layer) |
+| 파일 | 역할 (방법론 §20 Layer) |
 |---|---|
 | `rate_card.json` | **외부 설정**: Human Action 카탈로그(H1~H9) + 요율 + complexity driver + rework 비율 |
 | `ledger_builder.py` | Layer 1+2 — Outcome 추출 + Reference/Replication Human Path 복원 (LLM 1턴) |
@@ -99,7 +99,7 @@ python test_obhe.py
 
 - `--rates my_rate_card.json` 으로 조직별 카드 교체 가능 (§9 local calibration).
 - `expected_rework.ratio` — Normal Human Rework 비율 (§14).
-- `meta.rate_confidence` — rate DB 신뢰도. 전체 Confidence는 outcome/path/rate 중 최악값 (§18).
+- `meta.rate_confidence` — rate DB 신뢰도. 전체 Confidence는 outcome/path/rate 중 최악값 (§17).
 
 ## 실제 LLM 연결
 
@@ -107,7 +107,7 @@ python test_obhe.py
 `complete_json(prompt: str, max_tokens: int) -> dict` 계약을 만족하는 클라이언트를 넘기면 된다
 (effort-estimator의 `OnpremLLM` 계약과 동일).
 
-## 세 숫자 (§19)
+## 세 숫자 (§18)
 
 | 지표 | 의미 |
 |---|---|

@@ -71,7 +71,7 @@ class TestReport(unittest.TestCase):
         self.assertGreater(report["rhe_p80_hours"], report["rhe_p50_hours"])
         self.assertGreater(report["hre_p50_hours"], report["rhe_p50_hours"])
         self.assertGreater(report["output_inflation"], 1.0)
-        # 겉보기 효율(HRE/AI) > 현실화 효율(RHE/AI) — §19 과장 구조
+        # 겉보기 효율(HRE/AI) > 현실화 효율(RHE/AI) — §18 과장 구조
         self.assertGreater(report["naive_efficiency"], report["realized_efficiency"])
 
     def test_confidence_worst_of_three(self):
