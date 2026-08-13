@@ -51,6 +51,54 @@ class TestTrajectory(unittest.TestCase):
         self.assertEqual(trajectory.bash_candidate_paths("ls > /dev/null 2>&1"), set())
 
 
+def _fake_session(sid, paths, ts="2026-08-13T10:00:00Z", cwd="C:/proj"):
+    return {"file": f"{sid}.jsonl", "session_id": sid, "cwd": cwd,
+            "timestamps": [ts], "task_requests": [],
+            "direct_paths": set(paths), "bash_candidate_paths": set(),
+            "git_commands": []}
+
+
+class TestGrouping(unittest.TestCase):
+    def test_overlap_merges_and_disjoint_separates(self):
+        s1 = _fake_session("s1", {"C:/proj/src/auth.ts", "C:/proj/src/token.ts"})
+        s2 = _fake_session("s2", {"C:/proj/src/auth.ts", "C:/proj/tests/auth.test.ts"},
+                           ts="2026-08-13T11:00:00Z")
+        s3 = _fake_session("s3", {"C:/proj/docs/readme.md"}, ts="2026-08-13T12:00:00Z")
+        groups = trajectory.group_by_artifacts([s1, s2, s3])
+        self.assertEqual(len(groups), 2)
+        ids = [{s["session_id"] for s in g["sessions"]} for g in groups]
+        self.assertIn({"s1", "s2"}, ids)
+        self.assertIn({"s3"}, ids)
+        merged = groups[ids.index({"s1", "s2"})]
+        self.assertTrue(merged["grouping_evidence"])
+        self.assertIn("auth.ts", merged["grouping_evidence"][0]["common_paths"][0])
+
+    def test_transitive_chain(self):
+        s1 = _fake_session("s1", {"C:/p/a.py"})
+        s2 = _fake_session("s2", {"C:/p/a.py", "C:/p/b.py"}, ts="2026-08-13T11:00:00Z")
+        s3 = _fake_session("s3", {"C:/p/b.py"}, ts="2026-08-13T12:00:00Z")
+        groups = trajectory.group_by_artifacts([s1, s2, s3])
+        self.assertEqual(len(groups), 1)  # s1∩s2, s2∩s3 → s1·s3도 한 그룹
+        self.assertEqual([s["session_id"] for s in groups[0]["sessions"]], ["s1", "s2", "s3"])
+
+    def test_min_common_threshold(self):
+        s1 = _fake_session("s1", {"C:/p/readme.md", "C:/p/a.py"})
+        s2 = _fake_session("s2", {"C:/p/readme.md", "C:/p/b.py"})
+        self.assertEqual(len(trajectory.group_by_artifacts([s1, s2], min_common=2)), 2)
+        self.assertEqual(len(trajectory.group_by_artifacts([s1, s2], min_common=1)), 1)
+
+    def test_relative_paths_normalized_with_cwd(self):
+        # 같은 상대경로라도 cwd가 다르면 절대경로가 달라 병합되지 않는다
+        s1 = _fake_session("s1", {"src/a.py"}, cwd="C:/proj1")
+        s2 = _fake_session("s2", {"src/a.py"}, cwd="C:/proj2")
+        self.assertEqual(len(trajectory.group_by_artifacts([s1, s2])), 2)
+
+    def test_pathless_session_is_own_group(self):
+        s1 = _fake_session("s1", {"C:/p/a.py"})
+        s2 = _fake_session("s2", set())
+        self.assertEqual(len(trajectory.group_by_artifacts([s1, s2])), 2)
+
+
 class TestClassify(unittest.TestCase):
     def test_attribution_and_transient(self):
         changed = {"src/auth.ts": "M", "src/new.ts": "A", "out/report.txt": "A"}
@@ -141,7 +189,10 @@ class TestEndToEnd(unittest.TestCase):
                 _jsonl_line("Write", {"file_path": str(repo / "src" / "proto.py")}),  # transient
             ]), encoding="utf-8")
 
-            man = estimate.build_local_manifest([str(traj)], str(repo), base, None)
+            sessions = [trajectory.parse_trajectory(str(traj))]
+            groups = trajectory.group_by_artifacts(sessions)
+            self.assertEqual(len(groups), 1)
+            man = estimate.build_group_manifest("job-1", groups[0], str(repo), base, None)
             self.assertEqual(man["recovery"], "HIGH_CONFIDENCE")
             paths = {a["path"]: a for a in man["artifacts"]}
             self.assertIn("src/auth.py", paths)
@@ -162,7 +213,8 @@ class TestEndToEnd(unittest.TestCase):
             traj.write_text(json.dumps({"type": "user", "sessionId": "s1",
                                         "message": {"role": "user", "content": "x"}}),
                             encoding="utf-8")
-            man = estimate.build_local_manifest([str(traj)], d, None, None)
+            groups = trajectory.group_by_artifacts([trajectory.parse_trajectory(str(traj))])
+            man = estimate.build_group_manifest("job-1", groups[0], d, None, None)
             self.assertEqual(man["recovery"], "UNRECOVERABLE")
             self.assertEqual(man["artifacts"], [])
 

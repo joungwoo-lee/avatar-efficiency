@@ -5,12 +5,12 @@
 """
 from .rate_engine import load_rates, price_ledger, build_report, RateError
 from .workload import build_prompt, estimate_workload
-from .trajectory import parse_trajectory, group_sessions
+from .trajectory import parse_trajectory, group_by_artifacts
 from .gitstate import resolve_states, net_diff, classify
 
 __all__ = [
     "load_rates", "price_ledger", "build_report", "RateError",
     "build_prompt", "estimate_workload",
-    "parse_trajectory", "group_sessions",
+    "parse_trajectory", "group_by_artifacts",
     "resolve_states", "net_diff", "classify",
 ]

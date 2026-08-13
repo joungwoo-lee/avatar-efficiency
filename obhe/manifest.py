@@ -3,7 +3,8 @@
 정규화된 manifest만 넘긴다. LLM 미사용."""
 
 
-def build_manifest(job_id, sessions, repo, states, artifacts, transient, unresolved):
+def build_manifest(job_id, sessions, repo, states, artifacts, transient, unresolved,
+                   grouping_evidence=None):
     task_requests = []
     for s in sessions:
         for t in s["task_requests"]:
@@ -17,6 +18,7 @@ def build_manifest(job_id, sessions, repo, states, artifacts, transient, unresol
         "end_state": states["end"],
         "recovery": states["recovery"],
         "recovery_note": states["note"],
+        "grouping_evidence": grouping_evidence or [],
         "task_requests": task_requests[:20],
         "artifacts": artifacts,
         "excluded_transient_paths": transient,

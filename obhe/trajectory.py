@@ -9,6 +9,7 @@
   - task_requests = user message에서 deterministic 추출
 """
 import json
+import os
 import re
 from pathlib import Path
 
@@ -105,11 +106,65 @@ def parse_trajectory(path):
     return sess
 
 
-def group_sessions(sessions):
-    """cwd 기준 grouping (방법론 §13). 시간순 정렬."""
-    jobs = {}
-    for s in sessions:
-        jobs.setdefault(s["cwd"] or "?", []).append(s)
-    for group in jobs.values():
-        group.sort(key=lambda s: s["timestamps"][0] if s["timestamps"] else "")
-    return jobs
+def _artifact_signature(sess):
+    """세션의 산출물 서명: 건드린 경로를 절대경로로 정규화한 집합.
+
+    절대경로 정규화로 다른 프로젝트의 같은 상대경로(README.md 등)가
+    허위 병합되는 것을 원천 차단한다.
+    """
+    sig = set()
+    for p in sess["direct_paths"] | sess["bash_candidate_paths"]:
+        if not os.path.isabs(p) and sess["cwd"]:
+            p = os.path.join(sess["cwd"], p)
+        sig.add(os.path.normcase(os.path.normpath(p)))
+    return sig
+
+
+def group_by_artifacts(sessions, min_common=1):
+    """산출물 겹침 기반 세션 grouping (방법론 §13, LLM 미사용).
+
+    두 세션이 같은 파일을 min_common개 이상 건드렸으면 같은 작업(job)으로
+    union-find 연결한다. s1∩s2, s2∩s3이면 s1·s3도 한 그룹(이어달리기 작업).
+    겹침이 없는 세션(경로 미추출 포함)은 각자 독립 그룹.
+    반환: [{"sessions": [...시간순...], "grouping_evidence": [...]}, ...] 시간순.
+    """
+    n = len(sessions)
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i, j):
+        parent[find(i)] = find(j)
+
+    sigs = [_artifact_signature(s) for s in sessions]
+    edges = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            common = sigs[i] & sigs[j]
+            if len(common) >= max(1, min_common):
+                union(i, j)
+                edges.append((i, j, sorted(common)))
+
+    def _label(s):
+        return s["session_id"] or s["file"]
+
+    def _start(s):
+        return s["timestamps"][0] if s["timestamps"] else ""
+
+    by_root = {}
+    for i in range(n):
+        by_root.setdefault(find(i), []).append(i)
+
+    groups = []
+    for root, idxs in by_root.items():
+        members = sorted((sessions[i] for i in idxs), key=_start)
+        evidence = [{"sessions": [_label(sessions[i]), _label(sessions[j])],
+                     "common_paths": common}
+                    for i, j, common in edges if find(i) == root]
+        groups.append({"sessions": members, "grouping_evidence": evidence})
+    groups.sort(key=lambda g: _start(g["sessions"][0]))
+    return groups

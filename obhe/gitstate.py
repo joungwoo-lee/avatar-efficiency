@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """로컬 결정론 층 2 — Git base/end 확정 + net diff + attribution (LLM 미사용).
 
 방법론 §5~§6:
@@ -58,7 +58,7 @@ def net_diff(repo, base, end):
     return changed
 
 
-def _to_repo_relative(path, repo):
+def to_repo_relative(path, repo):
     """trajectory의 절대/상대 경로를 repo 상대 posix 경로로. repo 밖이면 None."""
     try:
         p = Path(path)
@@ -69,23 +69,31 @@ def _to_repo_relative(path, repo):
         return None
 
 
-def classify(direct_paths, bash_paths, git_changed, repo):
-    """§6.1 attribution 결합. 반환: (artifacts, transient, unresolved)."""
-    direct = {_to_repo_relative(p, repo) for p in direct_paths} - {None}
-    bash = {_to_repo_relative(p, repo) for p in bash_paths} - {None}
-    artifacts, transient = [], []
+def classify(direct_paths, bash_paths, git_changed, repo, git_net_to_unresolved=False):
+    """§6 attribution 결합. 반환: (artifacts, transient, unresolved).
+
+    git_net_to_unresolved=True(다중 job 실행)면 trajectory 증거가 없는 GIT_NET
+    변경을 artifact에 넣지 않고 unresolved로 보낸다 — 어느 job의 것인지
+    귀속할 수 없어 이중계산 위험이 있기 때문 (§6 자동 포함 금지).
+    """
+    direct = {to_repo_relative(p, repo) for p in direct_paths} - {None}
+    bash = {to_repo_relative(p, repo) for p in bash_paths} - {None}
+    artifacts, transient, unresolved = [], [], []
     for path, status in sorted(git_changed.items()):
         if path in direct:
             attribution = "DIRECT_NET"
         elif path in bash:
             attribution = "BASH_NET"
+        elif git_net_to_unresolved:
+            unresolved.append(f"{path} (GIT_NET: trajectory 증거 없음 — job 귀속 불가)")
+            continue
         else:
-            attribution = "GIT_NET"  # 자동 포함하지 않고 confidence만 낮게 (§6.1)
+            attribution = "GIT_NET"
         artifacts.append({"path": path, "status": status, "attribution": attribution,
                           "confidence": ATTRIBUTION_CONFIDENCE[attribution]})
     transient = sorted((direct | bash) - set(git_changed))  # 건드렸지만 최종에 없음
-    unresolved = sorted({p for p in (direct_paths | bash_paths)
-                         if _to_repo_relative(p, repo) is None})
+    unresolved += sorted({p for p in (direct_paths | bash_paths)
+                          if to_repo_relative(p, repo) is None})
     return artifacts, transient, unresolved
 
 
