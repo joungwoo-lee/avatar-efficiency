@@ -1,12 +1,16 @@
 # -*- coding: utf-8 -*-
-"""OBHE — Outcome-Based Human Effort 추산 패키지.
+"""OBHE — Claude Code trajectory 기반 Human Equivalent Effort 측정.
 
 문서: OBHE_결과물_기반_Human_Equivalent_Effort_방법론.md
 """
-from .rate_engine import load_rate_card, price_ledger, build_report, RateCardError
-from .ledger_builder import restore_paths, build_prompt
+from .rate_engine import load_rates, price_ledger, build_report, RateError
+from .workload import build_prompt, estimate_workload
+from .trajectory import parse_trajectory, group_sessions
+from .gitstate import resolve_states, net_diff, classify
 
 __all__ = [
-    "load_rate_card", "price_ledger", "build_report", "RateCardError",
-    "restore_paths", "build_prompt",
+    "load_rates", "price_ledger", "build_report", "RateError",
+    "build_prompt", "estimate_workload",
+    "parse_trajectory", "group_sessions",
+    "resolve_states", "net_diff", "classify",
 ]

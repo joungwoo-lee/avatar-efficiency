@@ -1,19 +1,13 @@
 # -*- coding: utf-8 -*-
-"""OBHE CLI — 결과물 기반 Human Equivalent Effort 추산.
+"""OBHE CLI — Claude Code trajectory 기반 Human Equivalent Effort.
 
 사용법:
-  # 1) 이미 작성된 Human Action Ledger(JSON)로 시간 계산 (LLM 불필요)
-  python estimate.py --ledger examples/sample_ledger.json [--ai-hours 20]
+  # trajectory + repo에서 산출물 확정 → LLM 1회(기본 SimLLM) → 시간 계산
+  python estimate.py --trajectory s1.jsonl s2.jsonl --repo <repo> --base <commit>
+                     [--end <commit>] [--ai-hours 2] [--rates rates.json] [--json out.json]
 
-  # 2) artifact 파일에서 작업경로 복원(LLM 1턴) 후 계산 (기본 SimLLM)
-  python estimate.py --artifact path/to/artifact.md [--ai-hours 20]
-
-  공통: [--rates rate_card.json] [--json out.json]
-
-ledger JSON 스키마:
-  {"reference_ledger": [{"outcome","action","quantity","drivers","evidence","role","confidence"}...],
-   "replication_ledger": [...선택...],
-   "outcome_confidence": "A|B|C", "path_confidence": "A|B|C"}
+  # 로컬 층만 실행해 Artifact Manifest 확인 (LLM 미사용)
+  python estimate.py --trajectory s1.jsonl --repo <repo> --base <commit> --manifest-only
 """
 import argparse
 import io
@@ -23,11 +17,15 @@ from pathlib import Path
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import ledger_builder
+    import gitstate
+    import manifest as manifest_mod
     import rate_engine
+    import trajectory
+    import workload
     from sim_llm import SimLLM
 else:
-    from . import ledger_builder, rate_engine
+    from . import gitstate, rate_engine, trajectory, workload
+    from . import manifest as manifest_mod
     from .sim_llm import SimLLM
 
 
@@ -35,93 +33,95 @@ def _fmt_h(minutes):
     return f"{minutes / 60.0:5.1f}h"
 
 
-def render_report(report, outcomes=None):
-    out = []
-    out.append("=" * 78)
-    out.append("OBHE — 결과물 기반 Human Equivalent Effort 리포트")
-    out.append("=" * 78)
+def build_local_manifest(trajectory_files, repo, base, end):
+    """로컬 결정론 층: trajectory → Git → Artifact Manifest (LLM 미사용)."""
+    sessions = [trajectory.parse_trajectory(f) for f in trajectory_files]
+    states = gitstate.resolve_states(repo, base, end)
+    if states["recovery"] == "UNRECOVERABLE":
+        return manifest_mod.build_manifest("job-1", sessions, repo, states, [], [], [])
+    changed = gitstate.net_diff(repo, states["base"], states["end"])
+    direct = set().union(*(s["direct_paths"] for s in sessions)) if sessions else set()
+    bash = set().union(*(s["bash_candidate_paths"] for s in sessions)) if sessions else set()
+    artifacts, transient, unresolved = gitstate.classify(direct, bash, changed, repo)
+    gitstate.attach_contents(artifacts, repo, states["base"], states["end"])
+    return manifest_mod.build_manifest("job-1", sessions, repo, states, artifacts,
+                                       transient, unresolved)
 
-    if outcomes:
-        out.append("\n[Net Accepted Outcome]")
-        for o in outcomes:
-            out.append(f"  - {o.get('unit', '?')}: {o.get('quantity', '?')}  ({o.get('evidence', '')})")
 
-    ref = report["reference"]
-    out.append("\n[Human Action Ledger — Reference Human Path]")
-    out.append(f"  {'action':<20} {'tax':<4} {'수량':>7} {'단위':<14} {'분/단위':>8} {'P50':>7} {'P80':>7}  근거")
-    for r in ref["rows"]:
-        out.append(
-            f"  {r['action']:<20} {r['taxonomy']:<4} {r['quantity']:>7g} {r['unit']:<14}"
-            f" {r['min_per_unit']:>8.1f} {_fmt_h(r['p50_min']):>7} {_fmt_h(r['p80_min']):>7}"
-            f"  {r['evidence'][:40]}")
+def render_report(report, man):
+    out = ["=" * 78, "OBHE — Trajectory 기반 Human Equivalent Effort 리포트", "=" * 78]
+    out.append(f"\n[Artifact Manifest]  base {man['base_state']} → end {man['end_state']}"
+               f"  (복원 상태: {man['recovery']})")
+    for a in man["artifacts"]:
+        out.append(f"  {a['status']}  {a['path']:<42} {a['attribution']:<11} conf {a['confidence']}")
+    for p in man["excluded_transient_paths"]:
+        out.append(f"  -  {p:<42} TRANSIENT   (최종 산출물 제외)")
+
+    out.append("\n[Completed Outcomes]")
+    for o in report["completed_outcomes"]:
+        out.append(f"  {o['outcome_id']}: {o['outcome']}  — 근거: {o['evidence']}")
+
+    out.append("\n[Human Action Ledger]")
+    out.append(f"  {'action':<20} {'unit':<15} {'양':>7} {'cx':<7} {'P50':>7} {'P80':>7}  근거")
+    for r in report["priced"]["rows"]:
+        out.append(f"  {r['action']:<20} {r['workload_unit']:<15} {r['workload']:>7g}"
+                   f" {r['complexity']:<7} {_fmt_h(r['p50_min']):>7} {_fmt_h(r['p80_min']):>7}"
+                   f"  {r['evidence'][:36]}")
+    p = report["priced"]
     out.append(f"  {'-' * 74}")
-    out.append(f"  작업 소계                      P50 {_fmt_h(ref['work_p50_min'])} / P80 {_fmt_h(ref['work_p80_min'])}")
-    out.append(f"  Expected Human Rework (단계 7)    P50 {_fmt_h(ref['rework_p50_min'])} / P80 {_fmt_h(ref['rework_p80_min'])}")
+    out.append(f"  작업 소계        P50 {_fmt_h(p['work_p50_min'])} / P80 {_fmt_h(p['work_p80_min'])}")
+    out.append(f"  Human Rework     P50 {_fmt_h(p['rework_p50_min'])} / P80 {_fmt_h(p['rework_p80_min'])}")
 
-    out.append("\n[핵심 지표 (§6)]")
-    out.append(f"  RHE (Reference Human Effort) : P50 {report['rhe_p50_hours']}h / P80 {report['rhe_p80_hours']}h")
-    if "hre_p50_hours" in report:
-        out.append(f"  HRE (Human Replication Effort): P50 {report['hre_p50_hours']}h")
-        if report.get("output_inflation") is not None:
-            out.append(f"  Output Inflation (HRE/RHE)   : {report['output_inflation']}x")
+    out.append(f"\n[Human Equivalent Effort]")
+    out.append(f"  RHE: P50 {report['rhe_p50_hours']}h / P80 {report['rhe_p80_hours']}h"
+               f"   (rate confidence {report['rate_confidence']},"
+               f" 자동승인 {'가' if report['auto_approved'] else '불가'})")
     if "ai_actual_hours" in report:
-        out.append(f"  AI Actual Effort             : {report['ai_actual_hours']}h")
-        if report.get("naive_efficiency") is not None:
-            out.append(f"  겉보기 효율 (HRE/AI)          : {report['naive_efficiency']}x")
-        if report.get("realized_efficiency") is not None:
-            out.append(f"  현실화 효율 (RHE/AI)          : {report['realized_efficiency']}x")
+        out.append(f"  AI Actual {report['ai_actual_hours']}h → 현실화 효율 {report['realized_efficiency']}x")
 
-    cc = report["confidence_components"]
-    out.append(f"\n  Confidence: {report['confidence']}"
-               f"  (outcome {cc['outcome']} / path {cc['path']} / rate DB {cc['rate_db']})")
-    for w in report.get("warnings", []):
+    if report["excluded_outputs"]:
+        out.append("\n[Excluded Outputs]")
+        for e in report["excluded_outputs"]:
+            out.append(f"  - {e.get('item', '')}: {e.get('reason', '')}")
+    if report["measurement_required"]:
+        out.append("\n[Measurement Required]")
+        for mr in report["measurement_required"]:
+            out.append(f"  - {mr.get('item', '')}: {mr.get('needed_info', '')}")
+    for w in report["warnings"]:
         out.append(f"  경고: {w}")
     out.append("=" * 78)
     return "\n".join(out)
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="OBHE 결과물 기반 Human Equivalent Effort 추산")
-    src = ap.add_mutually_exclusive_group(required=True)
-    src.add_argument("--ledger", help="Human Action Ledger JSON 파일")
-    src.add_argument("--artifact", help="최종 결과물 텍스트/마크다운 파일")
-    ap.add_argument("--rates", default=None, help="rate card JSON 경로 (기본: obhe/rate_card.json)")
-    ap.add_argument("--requirement", default=None, help="요구사항·배경 텍스트 파일 (선택)")
+    ap = argparse.ArgumentParser(description="Trajectory 기반 Human Equivalent Effort 추산")
+    ap.add_argument("--trajectory", nargs="+", required=True, help="Claude Code JSONL 파일들")
+    ap.add_argument("--repo", required=True, help="작업이 수행된 Git repository 경로")
+    ap.add_argument("--base", default=None, help="작업 시작 commit (미지정 시 UNRECOVERABLE)")
+    ap.add_argument("--end", default=None, help="작업 종료 commit (미지정 시 현재 working tree)")
+    ap.add_argument("--rates", default=None, help="Human Rate Table JSON (기본: obhe/rates.json)")
     ap.add_argument("--ai-hours", type=float, default=None, help="AI Actual Effort (시간)")
-    ap.add_argument("--json", dest="json_out", default=None, help="리포트 JSON 저장 경로")
+    ap.add_argument("--manifest-only", action="store_true", help="로컬 층 결과만 출력 (LLM 미사용)")
+    ap.add_argument("--json", dest="json_out", default=None, help="결과 JSON 저장 경로")
     args = ap.parse_args(argv)
 
-    card = rate_engine.load_rate_card(args.rates)
-    outcomes = None
+    man = build_local_manifest(args.trajectory, args.repo, args.base, args.end)
 
-    if args.ledger:
-        data = json.loads(Path(args.ledger).read_text(encoding="utf-8"))
-        report = rate_engine.build_report(
-            data["reference_ledger"], card,
-            replication_ledger=data.get("replication_ledger"),
-            ai_actual_hours=args.ai_hours,
-            outcome_confidence=data.get("outcome_confidence", "B"),
-            path_confidence=data.get("path_confidence", "B"))
-        outcomes = data.get("outcomes")
-    else:
-        artifact_text = Path(args.artifact).read_text(encoding="utf-8")
-        requirement_text = (Path(args.requirement).read_text(encoding="utf-8")
-                            if args.requirement else "")
-        restored = ledger_builder.restore_paths(
-            artifact_text, SimLLM(), card, requirement_text=requirement_text)
-        report = rate_engine.build_report(
-            restored["reference_ledger"], card,
-            replication_ledger=restored["replication_ledger"],
-            ai_actual_hours=args.ai_hours,
-            outcome_confidence=restored["outcome_confidence"])
-        outcomes = restored["outcomes"]
+    if args.manifest_only or man["recovery"] == "UNRECOVERABLE":
+        print(json.dumps(man, ensure_ascii=False, indent=2, default=str))
+        if man["recovery"] == "UNRECOVERABLE":
+            print(f"\n{man['recovery_note']} — Human Effort 계산을 진행하지 않음 (§5.3/§14).")
+        return 0 if args.manifest_only else 1
 
-    text = render_report(report, outcomes)
-    print(text)
+    rates = rate_engine.load_rates(args.rates)
+    estimation = workload.estimate_workload(man, SimLLM(), rates)
+    report = rate_engine.build_report(man, estimation, rates, ai_actual_hours=args.ai_hours)
 
+    print(render_report(report, man))
     if args.json_out:
         Path(args.json_out).write_text(
-            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            json.dumps({"manifest": man, "report": report}, ensure_ascii=False, indent=2),
+            encoding="utf-8")
         print(f"\nJSON 저장: {args.json_out}")
     return 0
 

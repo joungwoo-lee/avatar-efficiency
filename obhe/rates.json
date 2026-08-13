@@ -1,0 +1,38 @@
+{
+  "meta": {
+    "version": "1.0.0",
+    "rate_source": "SME 추정 seed (방법론 §11 예시값 기반)",
+    "rate_confidence": "C",
+    "note": "실제 값은 조직의 human-only 작업 기록으로 보정할 것. 요율은 LLM 프롬프트에 노출하지 않는다 — workload 단위 이름만 노출."
+  },
+  "actions": {
+    "understand_context": "입력 및 맥락 이해",
+    "search_info": "정보 검색",
+    "read_material": "자료 읽기",
+    "extract_info": "정보 추출",
+    "transform": "변환/정규화",
+    "analyze_compare": "분석/비교",
+    "compute_execute": "계산/실행",
+    "design_decide": "설계/판단",
+    "construct": "작성/구현",
+    "verify": "검증",
+    "finalize": "최종 정리"
+  },
+  "units": {
+    "module":         { "label": "모듈(기존 구조) 이해", "p50_min": 10, "p80_min": 18 },
+    "interface":      { "label": "interface 분석",       "p50_min": 12, "p80_min": 20 },
+    "function_point":  { "label": "기능 단위 구현",       "p50_min": 35, "p80_min": 60 },
+    "testcase":       { "label": "testcase 작성",        "p50_min": 8,  "p80_min": 15 },
+    "assertion":      { "label": "assertion 검증",       "p50_min": 2,  "p80_min": 4 },
+    "loc_100":        { "label": "코드 100 LOC 읽기",    "p50_min": 8,  "p80_min": 14 },
+    "document":       { "label": "문서 1건 읽기·작성",   "p50_min": 12, "p80_min": 20 },
+    "query":          { "label": "검색 1회",             "p50_min": 3,  "p80_min": 6 },
+    "data_item":      { "label": "데이터 항목 추출·변환", "p50_min": 2,  "p80_min": 4 },
+    "decision":       { "label": "설계·판단 1건",        "p50_min": 20, "p80_min": 35 },
+    "run":            { "label": "계산·실행 1회",        "p50_min": 5,  "p80_min": 10 },
+    "claim":          { "label": "주장·사실 검증 1건",   "p50_min": 3,  "p80_min": 5 },
+    "artifact_review": { "label": "완성물 최종 정리·검토", "p50_min": 45, "p80_min": 70 }
+  },
+  "complexity_adjustment": { "low": 0.8, "normal": 1.0, "high": 1.5 },
+  "expected_rework_ratio": 0.12
+}
