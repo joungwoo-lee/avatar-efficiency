@@ -50,6 +50,84 @@ class TestTrajectory(unittest.TestCase):
     def test_bash_candidates_filter_devnull(self):
         self.assertEqual(trajectory.bash_candidate_paths("ls > /dev/null 2>&1"), set())
 
+    def test_powershell_tool_and_cmdlets(self):
+        # Windows 세션은 PowerShell 툴 사용 — 실측 trajectory에서 확인된 형식
+        lines = [_jsonl_line("PowerShell", {"command":
+                 'Get-Content a.txt | Out-File -FilePath out\\report.txt; '
+                 'Set-Content config.json "x"; git push'})]
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "t.jsonl"
+            f.write_text("\n".join(lines), encoding="utf-8")
+            sess = trajectory.parse_trajectory(f)
+        self.assertIn("out\\report.txt", sess["bash_candidate_paths"])
+        self.assertIn("config.json", sess["bash_candidate_paths"])
+        self.assertEqual(len(sess["git_commands"]), 1)
+
+    def test_powershell_nul_filtered(self):
+        self.assertNotIn("nul", trajectory.bash_candidate_paths("cmd > nul"))
+
+
+class TestLLMFactory(unittest.TestCase):
+    def test_sim_and_dynamic_load(self):
+        import llm as llm_mod
+        self.assertTrue(callable(llm_mod.make_llm("sim").complete_json))
+        obj = llm_mod.make_llm("sim_llm:SimLLM")  # 모듈경로:클래스명 동적 로드
+        self.assertTrue(callable(obj.complete_json))
+
+    def test_unknown_backend_raises(self):
+        import llm as llm_mod
+        with self.assertRaises(ValueError):
+            llm_mod.make_llm("nonsense")
+
+
+class _FlakyLLM:
+    """1회 실패 후 성공 — 재시도 검증용."""
+
+    def __init__(self, good):
+        self.calls = 0
+        self.good = good
+
+    def complete_json(self, prompt, max_tokens):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("일시 오류")
+        return self.good
+
+
+class TestRetry(unittest.TestCase):
+    def _manifest(self):
+        return {"job_id": "j", "task_requests": ["x"], "grouping_evidence": [],
+                "artifacts": [{"path": "a.py", "status": "M", "attribution": "DIRECT_NET",
+                               "confidence": 0.99}],
+                "excluded_transient_paths": [], "unresolved": [], "sessions": [],
+                "repository": ".", "base_state": "b", "end_state": "e",
+                "recovery": "EXACT", "recovery_note": ""}
+
+    def test_retry_then_success(self):
+        good = {"completed_outcomes": [], "excluded_outputs": [], "measurement_required": [],
+                "action_ledger": [{"action": "construct", "workload_unit": "function_point",
+                                   "workload": 1}]}
+        llm = _FlakyLLM(good)
+        est = workload.estimate_workload(self._manifest(), llm, _rates(), retries=1)
+        self.assertEqual(llm.calls, 2)
+        self.assertEqual(len(est["action_ledger"]), 1)
+
+    def test_exhausted_raises(self):
+        class Dead:
+            def complete_json(self, p, max_tokens):
+                raise RuntimeError("down")
+        with self.assertRaises(RuntimeError):
+            workload.estimate_workload(self._manifest(), Dead(), _rates(), retries=1)
+
+    def test_long_request_truncated(self):
+        import manifest as manifest_mod
+        sess = _fake_session("s1", set())
+        sess["task_requests"] = ["가" * 9000]
+        man = manifest_mod.build_manifest(
+            "j", [sess], ".", {"base": "b", "end": "e", "recovery": "EXACT", "note": ""},
+            [], [], [])
+        self.assertLessEqual(len(man["task_requests"][0]), 1500)
+
 
 def _fake_session(sid, paths, ts="2026-08-13T10:00:00Z", cwd="C:/proj"):
     return {"file": f"{sid}.jsonl", "session_id": sid, "cwd": cwd,

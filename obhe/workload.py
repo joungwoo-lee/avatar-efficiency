@@ -11,7 +11,8 @@ LLM 계약: llm.complete_json(prompt: str, max_tokens: int) -> dict
 """
 import json
 
-_MAX_TOKENS = 4000
+_MAX_TOKENS = 8000
+_MAX_PROMPT_ARTIFACTS = 30  # 초과분은 프롬프트에서 생략하고 생략 사실을 명시 (silent cap 금지)
 MANIFEST_BEGIN = "<<<ARTIFACT_MANIFEST_JSON>>>"
 MANIFEST_END = "<<<END_ARTIFACT_MANIFEST_JSON>>>"
 
@@ -20,8 +21,12 @@ def build_prompt(manifest, rates):
     actions = "\n".join(f"- {k}: {v}" for k, v in rates["actions"].items())
     units = "\n".join(f"- {k}: {v['label']}" for k, v in rates["units"].items())
     lean = {k: v for k, v in manifest.items() if k != "artifacts"}
-    lean["artifacts"] = [
-        {k: v for k, v in a.items()} for a in manifest["artifacts"]]
+    arts = manifest["artifacts"]
+    lean["artifacts"] = [dict(a) for a in arts[:_MAX_PROMPT_ARTIFACTS]]
+    if len(arts) > _MAX_PROMPT_ARTIFACTS:
+        lean["artifacts_omitted"] = (
+            f"{len(arts) - _MAX_PROMPT_ARTIFACTS}개 artifact 생략됨 — "
+            f"경로만: {[a['path'] for a in arts[_MAX_PROMPT_ARTIFACTS:]]}")
     manifest_json = json.dumps(lean, ensure_ascii=False, indent=1)
     return f"""너의 목적은 AI가 만든 최종 산출물을 기준으로, AI 없이 숙련된 사람이 동일한 유효 결과를
 만들었다면 필요했을 인간 작업량을 산출하는 것이다.
@@ -104,13 +109,28 @@ def _clean_ledger(rows, rates):
     return valid, demoted
 
 
-def estimate_workload(manifest, llm, rates):
-    """LLM 1회 호출 → 검증된 estimation dict."""
-    result = llm.complete_json(build_prompt(manifest, rates), max_tokens=_MAX_TOKENS)
-    ledger, demoted = _clean_ledger(result.get("action_ledger"), rates)
-    return {
-        "completed_outcomes": result.get("completed_outcomes") or [],
-        "action_ledger": ledger,
-        "excluded_outputs": result.get("excluded_outputs") or [],
-        "measurement_required": (result.get("measurement_required") or []) + demoted,
-    }
+def estimate_workload(manifest, llm, rates, retries=1):
+    """LLM 호출 → 검증된 estimation dict.
+
+    호출 실패(HTTP/JSON) 또는 유효 ledger 0행이면 retries회까지 재시도.
+    재시도까지 실패하면 마지막 예외를 올린다 — 숫자를 지어내지 않는다.
+    """
+    prompt = build_prompt(manifest, rates)
+    last_err = None
+    for attempt in range(1 + max(0, retries)):
+        try:
+            result = llm.complete_json(prompt, max_tokens=_MAX_TOKENS)
+        except (RuntimeError, ValueError) as e:
+            last_err = e
+            continue
+        ledger, demoted = _clean_ledger(result.get("action_ledger"), rates)
+        if not ledger and manifest.get("artifacts") and attempt < retries:
+            last_err = ValueError("유효한 action_ledger 0행 — 재시도")
+            continue
+        return {
+            "completed_outcomes": result.get("completed_outcomes") or [],
+            "action_ledger": ledger,
+            "excluded_outputs": result.get("excluded_outputs") or [],
+            "measurement_required": (result.get("measurement_required") or []) + demoted,
+        }
+    raise RuntimeError(f"LLM workload 산정 실패 (재시도 {retries}회 포함): {last_err}")

@@ -14,10 +14,18 @@ import re
 from pathlib import Path
 
 FILE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+SHELL_TOOLS = {"Bash", "PowerShell"}  # Windows 세션은 PowerShell 툴 사용 (실측 검증됨)
 
 _REDIRECT = re.compile(r"(?:>>?|\btee\b(?:\s+-a)?)\s+([^\s;|&()<>]+)")
 _CP_MV = re.compile(r"\b(?:cp|mv)\b(?:\s+-[\w-]+)*\s+\S+\s+([^\s;|&()<>]+)")
 _SED_I = re.compile(r"\bsed\b[^;|&]*?-i\S*\s+(?:'[^']*'|\"[^\"]*\")\s+([^\s;|&()<>]+)")
+# PowerShell 파일 출력 cmdlet
+_PS_OUTFILE = re.compile(
+    r"\b(?:Out-File|Set-Content|Add-Content)\b(?:\s+-\w+(?::\S+)?)*\s+(?:-(?:File)?Path\s+)?"
+    r"('[^']+'|\"[^\"]+\"|[^\s;|&()<>]+)", re.IGNORECASE)
+_PS_COPY_MOVE = re.compile(
+    r"\b(?:Copy-Item|Move-Item)\b\s+\S+\s+(?:-Destination\s+)?"
+    r"('[^']+'|\"[^\"]+\"|[^\s;|&()<>]+)", re.IGNORECASE)
 
 
 def _iter_json_lines(path):
@@ -58,12 +66,13 @@ def _user_texts(rec):
 
 
 def bash_candidate_paths(command):
-    """Bash command 문자열에서 출력 경로 후보를 heuristic으로 뽑는다."""
+    """shell command 문자열에서 출력 경로 후보를 heuristic으로 뽑는다 (Bash+PowerShell)."""
     out = set()
-    for pat in (_REDIRECT, _CP_MV, _SED_I):
+    for pat in (_REDIRECT, _CP_MV, _SED_I, _PS_OUTFILE, _PS_COPY_MOVE):
         for m in pat.finditer(command):
             p = m.group(1).strip("'\"")
-            if p and not p.startswith(("-", "$", "/dev/")) and p not in ("&1", "&2"):
+            if (p and not p.startswith(("-", "$", "/dev/")) and p not in ("&1", "&2")
+                    and p.lower() != "nul"):
                 out.add(p)
     return out
 
@@ -110,10 +119,10 @@ def parse_trajectory(path):
                         elif name == "NotebookEdit":
                             op["new"] = inp.get("new_source")
                         sess["file_ops"].append(op)
-                elif name == "Bash" and isinstance(inp.get("command"), str):
+                elif name in SHELL_TOOLS and isinstance(inp.get("command"), str):
                     cmd = inp["command"]
                     sess["bash_candidate_paths"] |= bash_candidate_paths(cmd)
-                    if re.search(r"(?:^|[;&|]\s*)git\s+", " " + cmd):
+                    if re.search(r"(?:^|[;&|]\s*|&\s+)git\s+", " " + cmd):
                         sess["git_commands"].append(cmd)
     sess["timestamps"].sort()
     return sess

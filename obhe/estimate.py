@@ -31,13 +31,11 @@ if __package__ in (None, ""):
     import rate_engine
     import trajectory
     import workload
-    from cursor_llm import CursorProxyLLM
-    from sim_llm import SimLLM
+    from llm import make_llm
 else:
     from . import fsstate, gitstate, rate_engine, trajectory, workload
     from . import manifest as manifest_mod
-    from .cursor_llm import CursorProxyLLM
-    from .sim_llm import SimLLM
+    from .llm import make_llm
 
 
 def _fmt_h(minutes):
@@ -147,8 +145,8 @@ def main(argv=None):
     ap.add_argument("--end", default=None, help="작업 종료 commit (미지정 시 현재 working tree)")
     ap.add_argument("--min-common", type=int, default=1,
                     help="같은 job으로 묶는 최소 공통 산출물 경로 수 (기본 1)")
-    ap.add_argument("--llm", choices=["cursor", "sim"], default="cursor",
-                    help="cursor: cursor-proxy(기본, OBHE_LLM_BASE/MODEL env), sim: 데모 시뮬레이터")
+    ap.add_argument("--llm", default=None,
+                    help="LLM 백엔드: cursor(기본) | sim | '모듈경로:클래스명' (env OBHE_LLM_BACKEND)")
     ap.add_argument("--rates", default=None, help="Human Rate Table JSON (기본: obhe/rates.json)")
     ap.add_argument("--ai-hours", type=float, default=None, help="AI Actual Effort (시간)")
     ap.add_argument("--manifest-only", action="store_true", help="로컬 층 결과만 출력 (LLM 미사용)")
@@ -185,8 +183,7 @@ def main(argv=None):
             results.append({"manifest": man, "report": None})
             continue
 
-        llm = SimLLM() if args.llm == "sim" else CursorProxyLLM()
-        estimation = workload.estimate_workload(man, llm, rates)
+        estimation = workload.estimate_workload(man, make_llm(args.llm), rates)
         report = rate_engine.build_report(man, estimation, rates, ai_actual_hours=args.ai_hours)
         print(render_report(report, man))
         results.append({"manifest": man, "report": report})
