@@ -38,6 +38,51 @@ RHE P50/P80 리포트
   과대추산되지 않는다.
 - 증거가 없으면 지어내지 않는다. 자동 승인은 EXACT / HIGH_CONFIDENCE만.
 
+## LLM이 하는 변환 — 무엇이 들어가서 무엇이 나오나 (실측 예시)
+
+LLM 입력 = **확정된 diff/content + 원래 작업 요청**. 출력 = 완료 결과 목록 +
+행동×수량 장부(JSON). **시간은 출력되지 않는다.** cursor-proxy 라이브 실행 결과:
+
+입력 (manifest의 diff + 요청 "로그인을 해시 검증으로 구현하고 token refresh 추가, 테스트 작성"):
+
+```diff
+--- src/auth.py
+-def login(user, pw):  # TODO, return False
++import hashlib
++def login(user, pw): ... _check(user, sha256(pw)) ...
++def refresh_token(user): return f"tok-{user}"
++++ tests/test_auth.py (신규: test 3개, assert 3개)
+```
+
+출력 ① 완료 결과 — diff에서 "무엇이 달성됐나":
+
+```json
+"completed_outcomes": [
+  {"outcome_id": "O1", "outcome": "로그인이 실제 해시 검증으로 구현됨",
+   "evidence": "diff의 import hashlib, _check(...)"},
+  {"outcome_id": "O2", "outcome": "토큰 리프레시 추가", "evidence": "def refresh_token"},
+  {"outcome_id": "O3", "outcome": "검증 테스트 작성", "evidence": "test 3개, assert 3개"}
+]
+```
+
+출력 ② 행동 장부 — 각 결과를 사람이 만들려면 뭘 몇 개 했어야 하나:
+
+```json
+"action_ledger": [
+  {"action": "understand_context", "workload_unit": "module",         "workload": 1, "evidence": "기존 auth 구조 파악"},
+  {"action": "design_decide",      "workload_unit": "decision",       "workload": 1, "evidence": "해시·토큰 포맷 결정"},
+  {"action": "construct",          "workload_unit": "function_point", "workload": 3, "evidence": "login, _check, _load_users"},
+  {"action": "construct",          "workload_unit": "testcase",       "workload": 3, "evidence": "test 함수 3개"},
+  {"action": "verify",             "workload_unit": "assertion",      "workload": 3, "evidence": "assert 3개"},
+  {"action": "finalize",           "workload_unit": "artifact_review","workload": 1, "evidence": "최종 반영 검토"}
+]
+```
+
+즉 LLM의 변환 = **코드 변경 조각 → 셀 수 있는 사람 행동 수량 + diff 근거(evidence)**.
+행동·단위는 프롬프트가 준 카탈로그에서만 고르게 강제되고 카탈로그 밖은 코드가 버린다.
+이후는 LLM 밖: `construct 3 function_point × 35분 = 1.8h` 식으로 요율을 곱해
+RHE(이 예시 P50 4.4h)를 코드가 계산한다.
+
 ## 다중 세션 → job 그룹핑 (LLM 미사용)
 
 trajectory를 여러 개 넣으면 **같은 파일을 건드린 세션끼리** 한 job으로 묶고
