@@ -17,11 +17,22 @@ MANIFEST_BEGIN = "<<<ARTIFACT_MANIFEST_JSON>>>"
 MANIFEST_END = "<<<END_ARTIFACT_MANIFEST_JSON>>>"
 
 
+_ANSWER_RULES = """
+9. '(대화 답변)' artifact는 대화로 전달된 최종 결과물(리뷰 의견·분석·판정)이다.
+   이 중 다른 파일 artifact의 작업 내용을 보고하는 서술은 결과로 세지 마라 —
+   그 노동은 해당 파일 artifact에서 이미 계산된다. diff에 대응물이 없는
+   독립 결과(발견 사항, 판정, 권고, 답변된 질문)만 세라.
+10. review_evidence의 files_read / read_loc_total / search_count는 trajectory에서
+   추출한 실측치다. 읽기·검색 workload는 이 수치를 사용하고 새로 추정하지 마라."""
+
+
 def build_prompt(manifest, rates):
     actions = "\n".join(f"- {k}: {v}" for k, v in rates["actions"].items())
     units = "\n".join(f"- {k}: {v['label']}" for k, v in rates["units"].items())
     lean = {k: v for k, v in manifest.items() if k != "artifacts"}
     arts = manifest["artifacts"]
+    answer_rules = (_ANSWER_RULES
+                    if any(a.get("type") == "answer" for a in arts) else "")
     lean["artifacts"] = [dict(a) for a in arts[:_MAX_PROMPT_ARTIFACTS]]
     if len(arts) > _MAX_PROMPT_ARTIFACTS:
         lean["artifacts_omitted"] = (
@@ -67,7 +78,7 @@ STEP 1의 각 완료 결과에 대해, AI 없이 숙련된 사람이 처음부�
 5. 여러 결과가 같은 선행 행동을 공유하면 한 행으로만 적고 shared를 true로 표시한다.
 6. 결과물만으로 수량화할 수 없는 항목은 숫자를 지어내지 말고 measurement_required에 적어라.
 7. 시간·분·시급을 출력하지 마라.
-8. complexity는 low|normal|high 중 하나로 표시한다.
+8. complexity는 low|normal|high 중 하나로 표시한다.{answer_rules}
 
 JSON만 출력하라:
 {{

@@ -50,12 +50,15 @@ def _union(sessions, key):
 
 
 def build_group_manifest(job_id, group, repo, base, end,
-                         claimed_elsewhere=frozenset(), exclusive=False):
-    """로컬 결정론 층: 세션 그룹 → Git → Artifact Manifest (LLM 미사용).
+                         claimed_elsewhere=frozenset(), exclusive=False,
+                         include_answers=False):
+    """로컬 결정론 층: 세션 그룹 → Git/FS → Artifact Manifest (LLM 미사용).
 
     claimed_elsewhere: 다른 job 그룹이 직접 건드린 repo상대경로 —
       이 job의 net diff에서 제거해 job 간 이중계산을 막는다.
     exclusive: 다중 job 실행 시 True — 귀속 불가 GIT_NET을 unresolved로.
+    include_answers: 파일 산출물이 있어도 최종 답변을 artifact로 추가 (혼합
+      세션 수동 opt-in, §5.4). 기본 False — 파일 산출물 0건일 때만 자동 발동.
     """
     sessions = group["sessions"]
     evidence = group.get("grouping_evidence", [])
@@ -69,17 +72,27 @@ def build_group_manifest(job_id, group, repo, base, end,
         except gitstate.GitStateError as e:
             states = {"base": None, "end": None, "recovery": "UNRECOVERABLE", "note": str(e)}
         if states["recovery"] == "UNRECOVERABLE":
-            return manifest_mod.build_manifest(job_id, sessions, repo, states, [], [], [],
-                                               grouping_evidence=evidence)
-        changed = {p: s for p, s in
-                   gitstate.net_diff(repo, states["base"], states["end"]).items()
-                   if p not in claimed_elsewhere}
-        artifacts, transient, unresolved = gitstate.classify(
-            _union(sessions, "direct_paths"), _union(sessions, "bash_candidate_paths"),
-            changed, repo, git_net_to_unresolved=exclusive)
-        gitstate.attach_contents(artifacts, repo, states["base"], states["end"])
+            artifacts, transient, unresolved = [], [], []
+        else:
+            changed = {p: s for p, s in
+                       gitstate.net_diff(repo, states["base"], states["end"]).items()
+                       if p not in claimed_elsewhere}
+            artifacts, transient, unresolved = gitstate.classify(
+                _union(sessions, "direct_paths"), _union(sessions, "bash_candidate_paths"),
+                changed, repo, git_net_to_unresolved=exclusive)
+            gitstate.attach_contents(artifacts, repo, states["base"], states["end"])
     else:
         states, artifacts, transient, unresolved = fsstate.resolve_without_git(sessions, repo)
+
+    # §5.4 답변형 산출물: 파일 산출물 0건이면 자동, 있으면 --include-answers 수동 opt-in
+    if not artifacts or include_answers:
+        ans_states, ans_artifact = fsstate.resolve_answer_artifact(sessions, repo)
+        if ans_artifact is not None:
+            if not artifacts:
+                states = ans_states
+                artifacts = [ans_artifact]
+            else:
+                artifacts = artifacts + [ans_artifact]
     return manifest_mod.build_manifest(job_id, sessions, repo, states, artifacts,
                                        transient, unresolved, grouping_evidence=evidence)
 
@@ -149,6 +162,8 @@ def main(argv=None):
                     help="LLM 백엔드: cursor(기본) | sim | '모듈경로:클래스명' (env OBHE_LLM_BACKEND)")
     ap.add_argument("--rates", default=None, help="Human Rate Table JSON (기본: obhe/rates.json)")
     ap.add_argument("--ai-hours", type=float, default=None, help="AI Actual Effort (시간)")
+    ap.add_argument("--include-answers", action="store_true",
+                    help="파일 산출물이 있어도 최종 답변을 artifact로 추가 (혼합 세션 opt-in)")
     ap.add_argument("--manifest-only", action="store_true", help="로컬 층 결과만 출력 (LLM 미사용)")
     ap.add_argument("--json", dest="json_out", default=None, help="결과 JSON 저장 경로")
     args = ap.parse_args(argv)
@@ -172,7 +187,8 @@ def main(argv=None):
                     if rel:
                         claimed.add(rel)
         man = build_group_manifest(f"job-{k}", group, repo, args.base, args.end,
-                                   claimed_elsewhere=claimed, exclusive=multi)
+                                   claimed_elsewhere=claimed, exclusive=multi,
+                                   include_answers=args.include_answers)
 
         if args.manifest_only or man["recovery"] == "UNRECOVERABLE":
             print(json.dumps(man, ensure_ascii=False, indent=2, default=str))

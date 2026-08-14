@@ -89,10 +89,22 @@ def parse_trajectory(path):
         "bash_candidate_paths": set(),
         "git_commands": [],
         "file_ops": [],  # Write/Edit 기록 원본 — Git 없는 복원 증거 (§4.1, §7)
+        "read_paths": set(),   # Read로 접근한 파일 — 리뷰 workload 실측 (§5.4)
+        "search_count": 0,     # Grep/Glob 호출 수
+        "final_answer": "",    # 마지막 assistant 텍스트 응답 — 답변형 산출물 (§5.4)
     }
     for rec in _iter_json_lines(path):
         if rec.get("type") == "user" and not rec.get("isMeta"):
             sess["task_requests"].extend(_user_texts(rec))
+        if rec.get("type") == "assistant":
+            msg = rec.get("message")
+            content = msg.get("content") if isinstance(msg, dict) else None
+            if isinstance(content, list):
+                texts = [b.get("text", "") for b in content
+                         if isinstance(b, dict) and b.get("type") == "text"]
+                joined = "\n".join(t for t in texts if t).strip()
+                if joined:
+                    sess["final_answer"] = joined  # 마지막 텍스트 응답이 남는다
         for d in _walk(rec):
             if sess["session_id"] is None and isinstance(d.get("sessionId"), str):
                 sess["session_id"] = d["sessionId"]
@@ -119,6 +131,10 @@ def parse_trajectory(path):
                         elif name == "NotebookEdit":
                             op["new"] = inp.get("new_source")
                         sess["file_ops"].append(op)
+                elif name == "Read" and isinstance(inp.get("file_path"), str):
+                    sess["read_paths"].add(inp["file_path"])
+                elif name in ("Grep", "Glob"):
+                    sess["search_count"] += 1
                 elif name in SHELL_TOOLS and isinstance(inp.get("command"), str):
                     cmd = inp["command"]
                     sess["bash_candidate_paths"] |= bash_candidate_paths(cmd)

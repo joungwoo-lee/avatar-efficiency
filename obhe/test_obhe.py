@@ -67,6 +67,109 @@ class TestTrajectory(unittest.TestCase):
         self.assertNotIn("nul", trajectory.bash_candidate_paths("cmd > nul"))
 
 
+class TestAnswerArtifact(unittest.TestCase):
+    """리뷰·답변 세션 (§5.4): 파일 산출물 0건이면 최종 답변이 산출물."""
+
+    def _review_traj(self, d, with_edit=False):
+        target = Path(d) / "auth.py"
+        target.write_text("def f():\n    pass\n" * 10, encoding="utf-8")
+        recs = [
+            json.dumps({"type": "user", "sessionId": "s1",
+                        "message": {"role": "user", "content": "auth.py 코드 리뷰해줘"}}),
+            json.dumps({"type": "assistant", "sessionId": "s1", "cwd": d,
+                        "timestamp": "2026-08-14T10:00:00Z",
+                        "message": {"content": [{"type": "tool_use", "name": "Read",
+                                                 "input": {"file_path": str(target)}}]}}),
+            json.dumps({"type": "assistant", "sessionId": "s1", "cwd": d,
+                        "timestamp": "2026-08-14T10:01:00Z",
+                        "message": {"content": [{"type": "tool_use", "name": "Grep",
+                                                 "input": {"pattern": "def "}}]}}),
+        ]
+        if with_edit:
+            recs.append(json.dumps({
+                "type": "assistant", "sessionId": "s1", "cwd": d,
+                "timestamp": "2026-08-14T10:02:00Z",
+                "message": {"content": [{"type": "tool_use", "name": "Edit",
+                                         "input": {"file_path": str(target),
+                                                   "old_string": "pass",
+                                                   "new_string": "return 1"}}]}}))
+        recs.append(json.dumps({
+            "type": "assistant", "sessionId": "s1", "cwd": d,
+            "timestamp": "2026-08-14T10:03:00Z",
+            "message": {"content": [{"type": "text",
+                                     "text": "리뷰 결과: 결함 2건 발견. 예외 처리 누락, 반환값 미검증."}]}}))
+        f = Path(d) / "t.jsonl"
+        f.write_text("\n".join(recs), encoding="utf-8")
+        return f
+
+    def test_parser_extracts_answer_and_reads(self):
+        with tempfile.TemporaryDirectory() as d:
+            sess = trajectory.parse_trajectory(self._review_traj(d))
+        self.assertIn("리뷰 결과", sess["final_answer"])
+        self.assertEqual(len(sess["read_paths"]), 1)
+        self.assertEqual(sess["search_count"], 1)
+        self.assertEqual(sess["file_ops"], [])
+
+    def test_review_session_gets_answer_artifact(self):
+        with tempfile.TemporaryDirectory() as d:
+            groups = trajectory.group_by_artifacts(
+                [trajectory.parse_trajectory(self._review_traj(d))])
+            man = estimate.build_group_manifest("job-1", groups[0], d, None, None)
+        self.assertEqual(man["recovery"], "HIGH_CONFIDENCE")
+        art = man["artifacts"][0]
+        self.assertEqual(art["type"], "answer")
+        self.assertIn("리뷰 결과", art["content"])
+        self.assertEqual(art["review_evidence"]["files_read"], 1)
+        self.assertGreater(art["review_evidence"]["read_loc_total"], 0)
+        self.assertEqual(art["review_evidence"]["search_count"], 1)
+
+    def test_mixed_session_default_no_answer(self):
+        # 편집이 있으면 기본은 파일 산출물만 — 답변 노이즈 안 붙음
+        with tempfile.TemporaryDirectory() as d:
+            groups = trajectory.group_by_artifacts(
+                [trajectory.parse_trajectory(self._review_traj(d, with_edit=True))])
+            man = estimate.build_group_manifest("job-1", groups[0], d, None, None)
+        self.assertFalse(any(a.get("type") == "answer" for a in man["artifacts"]))
+
+    def test_mixed_session_optin_appends_answer(self):
+        with tempfile.TemporaryDirectory() as d:
+            groups = trajectory.group_by_artifacts(
+                [trajectory.parse_trajectory(self._review_traj(d, with_edit=True))])
+            man = estimate.build_group_manifest("job-1", groups[0], d, None, None,
+                                                include_answers=True)
+        types = [a.get("type") for a in man["artifacts"]]
+        self.assertIn("answer", types)
+        self.assertGreater(len(man["artifacts"]), 1)
+
+    def test_answer_rules_only_when_answer_present(self):
+        base = {"job_id": "j", "task_requests": [], "grouping_evidence": [],
+                "excluded_transient_paths": [], "unresolved": [], "sessions": [],
+                "repository": ".", "base_state": "b", "end_state": "e",
+                "recovery": "EXACT", "recovery_note": ""}
+        p1 = workload.build_prompt({**base, "artifacts": [
+            {"path": "a.py", "status": "M", "attribution": "DIRECT_NET", "confidence": 0.99}]},
+            _rates())
+        self.assertNotIn("review_evidence", p1)
+        p2 = workload.build_prompt({**base, "artifacts": [
+            {"path": "(대화 답변)", "type": "answer", "status": "A",
+             "attribution": "TRANSCRIPT", "confidence": 0.95, "content": "x",
+             "review_evidence": {"files_read": 1, "read_loc_total": 10, "search_count": 0}}]},
+            _rates())
+        self.assertIn("독립 결과", p2)
+        self.assertIn("실측치", p2)
+
+    def test_answer_e2e_with_sim(self):
+        with tempfile.TemporaryDirectory() as d:
+            groups = trajectory.group_by_artifacts(
+                [trajectory.parse_trajectory(self._review_traj(d))])
+            man = estimate.build_group_manifest("job-1", groups[0], d, None, None)
+            rates = _rates()
+            est = workload.estimate_workload(man, SimLLM(), rates)
+            report = rate_engine.build_report(man, est, rates)
+        self.assertGreater(report["rhe_p50_hours"], 0)
+        self.assertTrue(report["auto_approved"])
+
+
 class TestLLMFactory(unittest.TestCase):
     def test_sim_and_dynamic_load(self):
         import llm as llm_mod

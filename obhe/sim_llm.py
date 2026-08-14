@@ -29,6 +29,28 @@ class SimLLM:
             n += 1
             oid = f"O{n}"
             text = a.get("content") or a.get("diff") or ""
+            if a.get("type") == "answer":
+                ev = a.get("review_evidence", {})
+                claims = max(1, len(re.findall(r"\d+(?:\.\d+)?%?", text)))
+                outcomes.append({
+                    "outcome_id": oid, "outcome": "리뷰·분석 답변 전달",
+                    "done_criteria": "최종 답변이 transcript에 존재",
+                    "evidence": "(대화 답변) artifact"})
+                ledger.append({"action_id": f"A{n}r", "outcome_id": oid,
+                               "action": "read_material", "workload_unit": "loc_100",
+                               "workload": max(1, round(ev.get("read_loc_total", 100) / 100, 1)),
+                               "complexity": "normal",
+                               "evidence": f"실측 read_loc_total={ev.get('read_loc_total', 0)}",
+                               "shared": False})
+                ledger.append({"action_id": f"A{n}v", "outcome_id": oid,
+                               "action": "verify", "workload_unit": "claim",
+                               "workload": min(claims, 30), "complexity": "normal",
+                               "evidence": "답변 내 수치 포함 주장", "shared": False})
+                ledger.append({"action_id": f"A{n}w", "outcome_id": oid,
+                               "action": "construct", "workload_unit": "document",
+                               "workload": 1, "complexity": "normal",
+                               "evidence": "리뷰 의견서 1건", "shared": False})
+                continue
             loc = max(1, _loc(text))
             is_test = "test" in a["path"].lower()
             outcomes.append({

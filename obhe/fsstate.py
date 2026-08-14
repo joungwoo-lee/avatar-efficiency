@@ -117,3 +117,53 @@ def resolve_without_git(sessions, project_root):
     states = {"base": "TRAJECTORY_EVIDENCE", "end": FILESYSTEM_END,
               "recovery": recovery, "note": note}
     return states, artifacts, transient, unresolved
+
+
+def resolve_answer_artifact(sessions, project_root):
+    """답변형 산출물 복원 (§5.4) — 리뷰·분석·답변 세션용.
+
+    산출물 = job 내 마지막 유효 assistant 답변 (transcript 원본이라 복원 불확실성 없음).
+    Read/Grep 기록에서 읽기 workload 실측치를 함께 뽑는다 — LLM이 읽기량을
+    지어내지 않고 이 수치를 쓰게 한다.
+    반환: (states, artifact) — 답변이 없으면 (None, None).
+    """
+    answer = ""
+    for s in sessions:  # 시간순 — 마지막 세션의 최종 답변이 남는다
+        if s.get("final_answer"):
+            answer = s["final_answer"]
+    if not answer:
+        return None, None
+
+    read_paths = set()
+    search_count = 0
+    for s in sessions:
+        read_paths |= {_norm(p, s["cwd"]) for p in s.get("read_paths", set())}
+        search_count += s.get("search_count", 0)
+    read_loc = 0
+    for p in sorted(read_paths):
+        try:
+            f = Path(p)
+            if f.is_file() and f.stat().st_size < 2_000_000:
+                read_loc += sum(1 for ln in f.read_text(encoding="utf-8", errors="replace")
+                                .splitlines() if ln.strip())
+        except OSError:
+            continue
+
+    artifact = {
+        "path": "(대화 답변)",
+        "type": "answer",
+        "status": "A",
+        "attribution": "TRANSCRIPT",
+        "evidence_sources": ["trajectory_final_assistant_message"],
+        "confidence": 0.95,
+        "content": answer[:_MAX_TEXT],
+        "review_evidence": {
+            "files_read": len(read_paths),
+            "read_loc_total": read_loc,
+            "search_count": search_count,
+        },
+    }
+    states = {"base": "TRAJECTORY_EVIDENCE", "end": "TRANSCRIPT",
+              "recovery": "HIGH_CONFIDENCE",
+              "note": "산출물 = 대화 최종 답변 (파일 편집 없음, transcript 원본)"}
+    return states, artifact
