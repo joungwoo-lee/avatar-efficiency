@@ -152,19 +152,63 @@ python test_obhe.py
 
 ## LLM 연결 — 교체는 함수 하나
 
-모든 백엔드는 `complete_json(prompt, max_tokens) -> dict` 계약 하나만 구현하면 되고,
-선택은 `llm.make_llm(spec)` 팩토리가 담당한다.
+### 계약 (이것만 구현하면 어떤 백엔드든 붙는다)
+
+```python
+class MyLLM:
+    def complete_json(self, prompt: str, max_tokens: int) -> dict:
+        ...
+```
+
+| 항목 | 내용 |
+|---|---|
+| 입력 `prompt` | 완성된 프롬프트 문자열 1개 (작업 지시+규칙+카탈로그+manifest 포함). 백엔드는 내용을 해석·수정하지 않고 그대로 모델에 전달 |
+| 입력 `max_tokens` | 응답 토큰 상한 (현재 8000). 무시해도 되지만 응답이 잘리면 JSON 파싱 실패로 처리됨 |
+| 반환 | **파싱 완료된 dict** (JSON 문자열 아님). 코드펜스·잡담 제거는 백엔드 책임 — `cursor_llm._extract_json()` 재사용 가능 |
+| 반환 dict 키 | `completed_outcomes`, `action_ledger`, `excluded_outputs`, `measurement_required`. 누락 키는 빈 목록으로 처리되므로 필수는 `action_ledger`뿐 |
+| 실패 시 | `RuntimeError`(호출 실패) 또는 `ValueError`(JSON 추출 실패)를 raise. 그 외 예외 타입은 재시도 없이 그대로 전파됨 |
+| 상태 | 멀티턴 없음 — 호출마다 독립. 상태 저장 불필요 |
+
+호출부(`workload.estimate_workload`)가 보장하는 것: 실패·유효 ledger 0행이면 **1회
+재시도**, 소진 시 에러(숫자를 지어내지 않음). 응답 dict의 `action_ledger`는 카탈로그
+검증을 거쳐 위반 행은 자동 폐기·`measurement_required` 강등 — 백엔드가 스키마를
+완벽히 지키지 못해도 파이프라인은 오염되지 않는다.
+
+### 백엔드 선택 — `llm.make_llm(spec)`
 
 ```python
 llm = make_llm("cursor")              # cursor-proxy (기본)
 llm = make_llm("sim")                 # 데모 시뮬레이터
-llm = make_llm("my_pkg.my_mod:MyLLM") # 임의 백엔드 — 코드 수정 없이 교체
+llm = make_llm("my_pkg.my_mod:MyLLM") # 위 계약 구현체를 동적 로드 — 코드 수정 0줄
+llm = make_llm()                      # env OBHE_LLM_BACKEND 값 사용
 ```
 
-- CLI: `--llm cursor | sim | 모듈경로:클래스명`, env `OBHE_LLM_BACKEND`
+- CLI: `--llm cursor | sim | 모듈경로:클래스명`
+- 동적 로드 시 `complete_json` 미구현이면 `TypeError`로 즉시 거부
 - cursor-proxy: OpenAI 호환 `127.0.0.1:18741`, 기동 `opencode-cursor-proxy\proxy-start.ps1`,
   env `OBHE_LLM_BASE` / `OBHE_LLM_MODEL`(기본 `gpt-5-mini`)
-- 호출 실패·빈 응답은 1회 재시도 후에도 실패하면 에러 — 숫자를 지어내지 않는다
+
+### 교체 예시 — 사내 API 백엔드
+
+```python
+# my_llm.py
+import json, urllib.request
+
+class InhouseLLM:
+    def complete_json(self, prompt, max_tokens):
+        req = urllib.request.Request(
+            "https://llm.internal/v1/chat", method="POST",
+            headers={"Content-Type": "application/json"},
+            data=json.dumps({"prompt": prompt, "max_tokens": max_tokens}).encode())
+        with urllib.request.urlopen(req, timeout=300) as r:
+            text = json.loads(r.read())["text"]
+        from cursor_llm import _extract_json   # 코드펜스·잡담 방어 재사용
+        return _extract_json(text)
+```
+
+```bash
+python estimate.py --trajectory s1.jsonl --llm my_llm:InhouseLLM
+```
 
 ## 파서 검증 (실측 완료)
 
