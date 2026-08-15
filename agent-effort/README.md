@@ -6,7 +6,7 @@ AI 효율(speedup) 산정에서 **분모**를 담당하는 독립 모듈.
 speedup = human_min ÷ agent_min
 
 분자 = human_min  : 사람이 생성형 AI 없이 직접 하면 걸리는 시간
-                    (effort-estimator — v0.6 Work Unit 방법론)
+                    (../human-effort — v0.6 Work Unit 방법론)
 분모 = agent_min  : AI 에이전트 + HITL 사람감독을 합쳐서 걸리는 시간
                     (본 모듈 — 구 방식 그대로, primitive count × 요율)
 ```
@@ -97,10 +97,21 @@ v0.6에서 분자 산정만 바뀌어 speedup 배수가 구 버전 대비 계통
 - 보정의 목표는 두 자를 같은 실측 기준(동일 업무의 human-only 실측 시간과
   agent 실측 시간)에 맞추는 것이다.
 
+## 구성
+
+```
+agent_effort.py       사전 산정: 업무 설명 → LLM 1회 count 분해 × rates.json → agent_min
+transcript_actual.py  실측: Claude Code 트랜스크립트에 기록된 동작을 결정론적으로
+                      (LLM 미사용) 세어 기계/HITL 분 환산 — 실행된 세션의 agent_min
+rates.json            요율표 (프롬프트 미노출)
+test_agent_effort.py  오프라인 테스트
+```
+
 ## 사용
 
 ```bash
-python agent_effort.py <spec.txt>            # 업무 설명 → agent_min 리포트
+python agent_effort.py <spec.txt>            # 업무 설명 → agent_min 리포트 (사전 산정)
+python transcript_actual.py <session.jsonl>  # 트랜스크립트 → 실측 agent_min
 python agent_effort.py <spec.txt> --json
 python test_agent_effort.py                  # 오프라인 테스트 (mock)
 ```
@@ -112,8 +123,8 @@ r["agent_min"], r["agent_ai_min"], r["agent_human_min"]
 speedup(human_min, r["agent_min"])       # = human_min / agent_min
 ```
 
-분자(human_min)는 `../effort-estimator`의 `HumanEffortEstimator`가 산정한다.
-LLM 백엔드는 cursor-proxy(127.0.0.1:18741) — `../effort-estimator/onprem_llm_sim.py`
+분자(human_min)는 `../human-effort`의 `HumanEffortEstimator`가 산정한다.
+LLM 백엔드는 cursor-proxy(127.0.0.1:18741) — `../human-effort/onprem_llm_sim.py`
 계약(`complete_json(prompt, max_tokens) -> dict`)과 동일.
 
 ## 요율 보정

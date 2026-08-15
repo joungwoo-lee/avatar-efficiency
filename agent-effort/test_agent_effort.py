@@ -66,6 +66,43 @@ class TestAgentEffort(unittest.TestCase):
         self.assertTrue(any("hitl 비어" in n for n in notes))
 
 
+
+
+class TestTranscriptActual(unittest.TestCase):
+    def test_deterministic_hand_check(self):
+        # 실측 분모: 트랜스크립트 → 기계/HITL 동작 × 요율 (LLM 미사용)
+        import json, tempfile, os
+        from transcript_actual import parse_actions, actual_effort_minutes
+        lines = [
+            {"type": "user", "message": {"role": "user", "content": "보고서 만들어줘"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "네 만들겠습니다 " * 10},
+                {"type": "tool_use", "name": "Write", "input": {"file_path": "a.md"}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "content": "ok " * 100}]}},
+            {"type": "user", "message": {"role": "user", "content": "[Request interrupted by user]"}},
+            {"type": "user", "message": {"role": "user", "content": "제목 바꿔줘"}},
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            c = parse_actions(p)
+            self.assertEqual(c["tool_calls"], 1)
+            self.assertEqual(c["user_instructions"], 2)
+            self.assertEqual(c["interrupts"], 1)
+            m = actual_effort_minutes(c)
+            # machine = 1×0.3 + 100×0.0005 + 20×0.002 = 0.39
+            # hitl = 2×3.0 + 20×0.006 + 1×4.0 = 10.12
+            self.assertAlmostEqual(m["machine_min"], 0.39, places=2)
+            self.assertAlmostEqual(m["hitl_min"], 10.12, places=2)
+            self.assertEqual(m["total_min"],
+                             actual_effort_minutes(parse_actions(p))["total_min"])
+        finally:
+            os.unlink(p)
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")

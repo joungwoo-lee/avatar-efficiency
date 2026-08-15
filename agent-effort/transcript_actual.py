@@ -25,9 +25,9 @@ import json
 from pathlib import Path
 
 try:
-    from .agent_path import DEFAULT_RATES_PATH, load_rates
+    from .agent_effort import DEFAULT_RATES_PATH, load_rates
 except ImportError:
-    from agent_path import DEFAULT_RATES_PATH, load_rates
+    from agent_effort import DEFAULT_RATES_PATH, load_rates
 
 
 def _words(text):

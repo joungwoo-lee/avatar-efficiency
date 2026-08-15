@@ -13,7 +13,6 @@ from pathlib import Path
 import engine
 from estimator import (HumanEffortEstimator, DEFAULT_CATALOG_PATH,
                        validate_effort_input, validate_requirements_output)
-from compat import CounterfactualEstimator
 
 with open(DEFAULT_CATALOG_PATH, encoding="utf-8") as f:
     CATALOG = json.load(f)
@@ -98,21 +97,6 @@ EFFORT_OUT = {
 }
 
 
-AGENT_OUT = {
-    "human": [{"primitive": "read", "count": 800},
-              {"primitive": "draft", "count": 200},
-              {"primitive": "verify", "count": 1}],
-    "agent": [{"primitive": "read", "count": 800},
-              {"primitive": "draft", "count": 200},
-              {"primitive": "verify", "count": 1}],
-    "hitl": [{"primitive": "instruct", "count": 1},
-             {"primitive": "review", "count": 200},
-             {"primitive": "approve", "count": 1}],
-    "ai_io": {"input_words": 900, "output_words": 250},
-    "rationale": "AI가 초안 생성, 사람은 지시·검토·승인만 수행",
-}
-
-
 def _critic_keep_all(prompt):
     """Prompt D에 나열된 모든 work_item_id에 keep 판정."""
     import re
@@ -144,8 +128,6 @@ class MockLLM:
         if "Consistency Critic" in prompt:  # Pass D
             return copy.deepcopy(self.critic_out) if self.critic_out \
                 else _critic_keep_all(prompt)
-        if "두 실행경로" in prompt:  # agent-path (integ-spec §3)
-            return copy.deepcopy(AGENT_OUT)
         return copy.deepcopy(EFFORT_OUT)
 
 
@@ -450,41 +432,6 @@ class TestEstimatorFlow(unittest.TestCase):
             .estimate_from_requirements(req)
         self.assertGreater(r["effort"]["p50_minutes"], 0)
 
-    def test_transcript_actual_deterministic(self):
-        # 분자 모듈: 트랜스크립트 → 기계/HITL 동작 × 요율 (LLM 미사용)
-        import tempfile, os
-        from transcript_actual import parse_actions, actual_effort_minutes
-        lines = [
-            {"type": "user", "message": {"role": "user", "content": "보고서 만들어줘"}},
-            {"type": "assistant", "message": {"role": "assistant", "content": [
-                {"type": "text", "text": "네 만들겠습니다 " * 10},
-                {"type": "tool_use", "name": "Write", "input": {"file_path": "a.md"}}]}},
-            {"type": "user", "message": {"role": "user", "content": [
-                {"type": "tool_result", "content": "ok " * 100}]}},
-            {"type": "user", "message": {"role": "user", "content": "[Request interrupted by user]"}},
-            {"type": "user", "message": {"role": "user", "content": "제목 바꿔줘"}},
-        ]
-        fd, p = tempfile.mkstemp(suffix=".jsonl")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            for ln in lines:
-                f.write(json.dumps(ln, ensure_ascii=False) + "\n")
-        try:
-            c = parse_actions(p)
-            self.assertEqual(c["tool_calls"], 1)
-            self.assertEqual(c["user_instructions"], 2)   # tool_result·interrupt 제외
-            self.assertEqual(c["interrupts"], 1)
-            self.assertEqual(c["tool_result_words"], 100)
-            self.assertEqual(c["assistant_words"], 20)
-            m = actual_effort_minutes(c)
-            # 수기검산: machine = 1×0.3 + 100×0.0005 + 20×0.002 = 0.39
-            #          hitl = 2×3.0 + 20×0.006 + 1×4.0 = 10.12
-            self.assertAlmostEqual(m["machine_min"], 0.39, places=2)
-            self.assertAlmostEqual(m["hitl_min"], 10.12, places=2)
-            m2 = actual_effort_minutes(parse_actions(p))
-            self.assertEqual(m["total_min"], m2["total_min"])  # 결정론
-        finally:
-            os.unlink(p)
-
     def test_recalculate_without_llm(self):
         est = HumanEffortEstimator(MockLLM(), trials=500, seed=42)
         r = est.estimate_from_effort_input(copy.deepcopy(EFFORT_OUT), SPEC)
@@ -502,68 +449,6 @@ class TestEstimatorFlow(unittest.TestCase):
 
 
 # ---------------------------------------------------------------- compat
-
-SPEC_KEYS = ("error", "human_min", "agent_min", "agent_human_min", "agent_ai_min",
-             "saved_min", "speedup", "human_breakdown", "agent_breakdown",
-             "rationale", "confidence", "confidence_notes")
-
-
-class TestCompat(unittest.TestCase):
-    def test_estimate_task_contract(self):
-        ce = CounterfactualEstimator(llm=MockLLM())
-        r = ce.estimate_task("월간 경쟁사 동향", "정기 보고", "애널리스트",
-                             ["research-web"], "경쟁사 5곳 조사 후 보고서")
-        for k in SPEC_KEYS:  # integ-spec §2: 키 전부 존재
-            self.assertIn(k, r)
-        self.assertIsNone(r["error"])
-        self.assertGreater(r["human_min"], 0)
-        self.assertGreaterEqual(r["human_p80_min"], r["human_min"])
-        # integ-spec §6.4: agent 계열 반드시 수치
-        self.assertIsInstance(r["agent_min"], float)
-        self.assertGreater(r["agent_min"], 0)
-        self.assertAlmostEqual(
-            r["agent_min"], r["agent_human_min"] + r["agent_ai_min"], places=2)
-        self.assertAlmostEqual(r["saved_min"], r["human_min"] - r["agent_min"], places=2)
-        self.assertAlmostEqual(r["speedup"], round(r["human_min"] / r["agent_min"], 2))
-        self.assertIn("research.source_search", r["human_breakdown"])
-        self.assertIn("ai_io", r["agent_breakdown"])
-        self.assertIn("minutes", r["agent_breakdown"]["ai_io"])
-        self.assertIsInstance(r["confidence"], str)  # integ-spec §2: 문자열
-        self.assertIsInstance(r["confidence_notes"], list)
-
-    def test_agent_path_math(self):
-        # AGENT_OUT 기준 수기검산: machine=(0.4+0.4+0.5 + ai_io 0.39)*1.0, hitl=3+1.2+1
-        ce = CounterfactualEstimator(llm=MockLLM())
-        r = ce.estimate_task("t", "c", "r", [], "d")
-        self.assertAlmostEqual(r["agent_ai_min"], 1.69, places=2)
-        self.assertAlmostEqual(r["agent_human_min"], 5.2, places=2)
-        self.assertAlmostEqual(r["agent_min"], 6.89, places=2)
-
-    def test_llm_call_count_and_no_rate_leak(self):
-        llm = MockLLM()
-        CounterfactualEstimator(llm=llm).estimate_task("t", "c", "r", [], "d")
-        self.assertEqual(len(llm.calls), 3)  # A-avatar + B + agent-path
-        for prompt in llm.calls:
-            self.assertNotIn("min_per_unit", prompt)
-            self.assertNotIn("time_model", prompt)
-
-    def test_error_path_all_keys_null(self):
-        class Boom:
-            def complete_json(self, p, m):
-                raise RuntimeError("down")
-        r = CounterfactualEstimator(llm=Boom()).estimate_task("t", "c", "r", [], "d")
-        for k in SPEC_KEYS:
-            self.assertIn(k, r)
-        self.assertIsNotNone(r["error"])
-        for k in ("human_min", "agent_min", "agent_human_min", "agent_ai_min",
-                  "saved_min", "speedup"):
-            self.assertIsNone(r[k])
-
-    def test_none_inputs_tolerated(self):
-        r = CounterfactualEstimator(llm=MockLLM()).estimate_task(
-            None, None, None, None, None)
-        self.assertIsNone(r["error"])
-        self.assertGreater(r["human_min"], 0)
 
 
 MAIL_SPEC = """업무 제목: 메일 회신 초안 작성

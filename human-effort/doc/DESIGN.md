@@ -1,12 +1,12 @@
-# effort-estimator 설계 근거 (기능·기술 배경·정당화)
+# human-effort 설계 근거 (기능·기술 배경·정당화)
 
 대상 독자: 이 모듈의 산정 방식이 신뢰할 만한지 판단해야 하는 사람(도입 결정자, 감사자, 후임 개발자).
 방법론 전체는 [requirement_based_human_effort_service_design.md](requirement_based_human_effort_service_design.md) (v0.6, 이하 "방법론 문서"),
-사용법은 [README.md](../README.md), 통합 절차는 [INTEGRATION.md](INTEGRATION.md),
-구 API 계약은 [integ-spec.md](integ-spec.md).
+사용법은 [README.md](../README.md), 통합 절차는 [../../counterfactual-api/INTEGRATION.md](../../counterfactual-api/INTEGRATION.md),
+구 API 계약은 [../../counterfactual-api/integ-spec.md](../../counterfactual-api/integ-spec.md).
 
 > 구 primitive×요율 방식(TAEE Phase 1 MVP)의 설계 근거 문서는 본 문서로 대체되었다.
-> 구 방식은 agent 경로 산정(agent_path.py)에만 남아 있다.
+> 구 방식은 분모 산정(../agent-effort)에만 남아 있다.
 
 ---
 
@@ -141,7 +141,7 @@ simple_operation)을 두고, 프롬프트가 경량 우선을 지시하며, 정�
 ## 5. 하이브리드 compat (구 API 유지)
 
 integ-spec.md §6.4가 `agent_min` 계열 수치를 요구한다(None이면 소비측 TypeError).
-agent 경로는 v0.6 방법론 범위 밖이므로 구 primitive×rates 방식(agent_path.py +
+agent 경로는 v0.6 방법론 범위 밖이므로 구 primitive×rates 방식(../agent-effort/agent_effort.py +
 rates.json)을 유지해 채운다:
 
 - `human_min` = v0.6 Work Unit 엔진 P50 (방법론 상향)

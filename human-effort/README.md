@@ -1,8 +1,8 @@
-# effort-estimator — 요구사항 기반 Human-Equivalent Effort 산정기
+# human-effort — 요구사항 기반 Human-Equivalent Effort 산정기
 
 방법론: [doc/requirement_based_human_effort_service_design.md](doc/requirement_based_human_effort_service_design.md) (v0.6)
-· 설계 근거: [doc/DESIGN.md](doc/DESIGN.md) · 통합 런북: [doc/INTEGRATION.md](doc/INTEGRATION.md)
-· 구 API 계약: [doc/integ-spec.md](doc/integ-spec.md)
+· 설계 근거: [doc/DESIGN.md](doc/DESIGN.md)
+· 구 API 어댑터·통합 런북: [../counterfactual-api/](../counterfactual-api/)
 
 **입력**: 아바타 디스크립션 — `할일+역할+업무상세+스킬` 업무 정의 텍스트 (**업무 실행 전**)
 **출력**: 숙련자가 생성형 AI 없이 동일 결과를 만들 때의 Human-Equivalent Effort
@@ -65,14 +65,14 @@ transcript_requirements.py  1단계 모듈(트랜스크립트 케이스, 설계�
                — extract_requirements() 출력이 estimate_from_requirements()로 연결
 engine.py      결정론적 Effort Engine: 분포 표본·검증·Monte Carlo·percentile
 catalog.json   Work Unit Catalog (expert seed, confidence C — calibration 대상)
-agent_path.py  agent/hitl 경로 산정 (doc/integ-spec.md §3 — primitive count × rates.json)
-rates.json     agent 경로 요율표 (integ-spec §3 계약, 프롬프트 미노출)
-compat.py      구 시스템(CounterfactualEstimator.estimate_task) drop-in 어댑터
-               — human_min은 v0.6 엔진 P50, agent_min 계열은 agent_path 산정 (integ-spec 완전 준수)
 onprem_llm_sim.py  OnpremLLM.complete_json(prompt, max_tokens)->dict 시뮬 (cursor-proxy)
 test_estimator.py  단위테스트(mock) + --live 프록시 실호출
 examples/      샘플 작업 지침서
 ```
+
+이 폴더는 **분자(사람 w/o 생성형AI)만** 담당한다. 분모(agent_min)는
+[`../agent-effort`](../agent-effort), 구 Counterfactual API drop-in 어댑터는
+[`../counterfactual-api`](../counterfactual-api).
 
 ## 사용
 
@@ -103,11 +103,8 @@ est.estimate_from_effort_input(edited_effort_engine_input)
 `OnpremLLM.complete_json(prompt: str, max_tokens: int) -> dict` 계약과 동일.
 `HumanEffortEstimator(OnpremLLM())`에 실물 인스턴스를 주입하면 끝.
 
-구 계약 소비자는 `compat.CounterfactualEstimator.estimate_task` 그대로 사용
-(doc/integ-spec.md §2/§6 완전 준수 — `analysis_cf.py`/`server.py` 무수정 drop-in).
-`human_min`=v0.6 P50, `agent_min`=machine+hitl 수치, `speedup`·`saved_min` 계산됨.
-human 쪽만 방법론이 바뀌어 정식 산출물 업무의 speedup이 구보다 커지는 경향 —
-대시보드 해석 기준 갱신 필요 (doc/INTEGRATION.md 구 대비 표 참조).
+구 계약(Counterfactual API) 소비자는 `../counterfactual-api/compat.py` 사용 —
+integ-spec §2/§6 완전 준수 drop-in. 통합 절차는 `../counterfactual-api/INTEGRATION.md`.
 
 ## 한계 (Phase A~B 수준)
 
@@ -115,4 +112,4 @@ human 쪽만 방법론이 바뀌어 정식 산출물 업무의 speedup이 구보
   절대값은 confidence C. 실측 calibration(설계서 §13) 전에는 업무 간 상대 비교 용도.
 - Work Item 간 상관 미반영(독립 표본) — P80이 다소 좁게 나올 수 있음.
 - `UNMAPPED_WORK_UNIT` 항목은 미산정 — 총공수 과소추정 경고로 표기.
-- Pass D(Consistency Critic), Review Studio UI, tenant 계층 Catalog는 미구현.
+- Review Studio UI, tenant 계층 Catalog는 미구현. Pass D는 critic=True 옵션.

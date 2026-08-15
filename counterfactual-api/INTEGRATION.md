@@ -1,14 +1,14 @@
-# effort-estimator 인테그레이션 런북 (통합 수행 AI용)
+# counterfactual-api 인테그레이션 런북 (통합 수행 AI용)
 
 이 문서는 **기존 시스템(mm_app)에서 구 `CounterfactualEstimator`를 본 모듈로 교체하는
 작업을 수행하는 AI/개발자를 위한 실행 절차**다. 이 문서만으로 통합을 완주할 수 있어야 한다.
 구 API 계약은 [integ-spec.md](integ-spec.md), 방법론 설계서는
-[requirement_based_human_effort_service_design.md](requirement_based_human_effort_service_design.md) (v0.6),
-설계 근거는 [DESIGN.md](DESIGN.md), 모듈 개요는 [README.md](../README.md).
+[../human-effort/doc/requirement_based_human_effort_service_design.md](../human-effort/doc/requirement_based_human_effort_service_design.md) (v0.6),
+설계 근거는 [../human-effort/doc/DESIGN.md](../human-effort/doc/DESIGN.md), 모듈 개요는 [../human-effort/README.md](../human-effort/README.md).
 
 > **산정 구성 (하이브리드)**: `human_min`은 v0.6 Work Unit 엔진
 > (catalog.json × Monte Carlo P50)이, `agent_min` 계열(machine+hitl)은
-> integ-spec §3의 primitive×rates.json 방식(agent_path.py)이 산정한다.
+> integ-spec §3의 primitive×rates.json 방식(agent_effort.py)이 산정한다.
 > `estimate_task` 시그니처·출력 키·수치 타입은 integ-spec §2/§6에 100% 맞춰져 있어
 > `analysis_cf.py`/`server.py`/`app.js` 무수정 drop-in 교체 가능.
 > human 경로에는 기준노동("생성형 AI만 배제, 일반 도구 전부 사용, 최단 경로")
@@ -26,14 +26,14 @@
 git clone https://github.com/joungwoo-lee/avatar-efficiency.git   # 또는 기존 클론 git pull
 ```
 
-`effort-estimator/` 폴더에서 다음 9개 파일을 mm_app 안에 **`effort_estimator/`
-(하이픈 아님, 언더스코어)** 이름의 폴더로 복사한다:
+세 폴더에서 다음 파일들을 mm_app 안에 **`effort_estimator/`(하이픈 아님, 언더스코어)**
+이름의 **한 폴더로 모아** 복사한다 (compat.py는 동일 폴더 import를 우선 시도):
 
 ```
-estimator.py  engine.py  prompts.py  catalog.json     # human 경로 (v0.6, 아바타 케이스)
-transcript_requirements.py                            # 1단계 모듈(트랜스크립트 케이스, §23)
-agent_path.py  rates.json                             # agent 경로 (integ-spec §3)
-compat.py  __init__.py  onprem_llm_sim.py
+human-effort/:       estimator.py engine.py prompts.py catalog.json
+                     transcript_requirements.py onprem_llm_sim.py     # 분자 (v0.6)
+agent-effort/:       agent_effort.py rates.json                       # 분모 (integ-spec §3)
+counterfactual-api/: compat.py                                        # drop-in 어댑터
 ```
 
 - 폴더명이 `effort_estimator`(언더스코어)여야 Python import가 된다. 하이픈이면 실패.
@@ -56,13 +56,13 @@ ce = CounterfactualEstimator(llm=onprem_llm_instance)
 llm 계약 (integ-spec §1, 실물이 이미 만족함): `complete_json(prompt: str, max_tokens: int) -> dict`
 (파싱 완료된 dict 반환. JSON 문자열 아님.)
 
-주의: task당 **LLM 3회 호출**(Prompt A-avatar→B two-pass + agent-path 1회.
+주의: task당 **LLM 3회 호출**(Prompt A-avatar→B two-pass + agent_effort 1회.
 검증 실패 시 호출별 1회 재시도, 최악 6회). 첫 단계는 아바타 디스크립션 특화
 변환기(A-avatar)다 — 트랜스크립트용 복원 로직이 아니므로 "자동화→시스템 구축"류
 오해석이 원천 차단된다. 지연이 문제면 `mode="single"`(총 2회). 선택적으로
 `HumanEffortEstimator(critic=True)`로 Pass D(Consistency Critic, 결과를 깎거나
 지적만 가능)를 추가할 수 있다 — 기본 OFF.
-`max_tokens` 인자는 agent-path 호출에 적용되고, v0.6 파이프라인은 내부적으로
+`max_tokens` 인자는 agent_effort 호출에 적용되고, v0.6 파이프라인은 내부적으로
 최소 6000을 보장한다.
 
 ## Step 3. 호출부 교체
@@ -165,11 +165,11 @@ python test_estimator.py --live  # 메일 스펙 P50 5~90분·≤5 items 자동 
 | 항목 | 구 | 신규 |
 |---|---|---|
 | `human_min` | human primitive count × rates 점추정 | v0.6 Work Unit WBS 분해 × catalog.json 분포 → Monte Carlo **P50** (+`human_p80_min`). 소형 업무는 경량 단위·분해 상한으로 상식 범위, 정식 산출물 업무는 구보다 큰 경향 |
-| `agent_*` | primitive×rates | **동일 방식 유지** (agent_path.py + rates.json) |
+| `agent_*` | primitive×rates | **동일 방식 유지** (agent_effort.py + rates.json) |
 | `saved_min`/`speedup` | 동일 방법론 쌍의 차/비 | human 쪽만 방법론 상향 → 계통적으로 커짐. 시계열 비교 시 단절점 표기 필요 |
 | `human_breakdown` 키 | primitive 이름 | work_unit_id (예: `research.synthesis`) |
 | `confidence` | 문자열 "C (...)" | 동일 형식 유지 |
-| LLM 호출 | 1회(+재시도) | 3회: A-avatar+B+agent-path (single 모드는 2회; critic=True 시 +1) |
+| LLM 호출 | 1회(+재시도) | 3회: A-avatar+B+agent_effort (single 모드는 2회; critic=True 시 +1) |
 | 검토 표시 | 없음 | `confidence_notes`의 `review_required:` 항목 — 있으면 확정값 사용 전 사람 검토 |
 
 ## 오류 모드
