@@ -504,6 +504,42 @@ def _live():
     assert ok, f"운영 업무 SW 오해석 회귀 실패: P50={p50}, sw={sw_units}"
 
 
+
+
+
+class TestSessionPathEffort(unittest.TestCase):
+    def test_hand_check_and_determinism(self):
+        # 세션 경로 기반 human w/o AI: 동일 count × human 요율
+        import tempfile, os
+        from session_path_effort import human_path_minutes, measure_session_path
+        counts = {"tool_calls": 10, "tool_result_words": 1000,
+                  "assistant_words": 500, "user_instructions": 3,
+                  "user_words": 50, "interrupts": 0, "session_id": "s",
+                  "first_ts": None, "last_ts": None}
+        r = human_path_minutes(counts)
+        # execute 10×2.0=20 + read 1000×0.005=5 + draft 500×0.05=25 = 50
+        self.assertAlmostEqual(r["human_path_min"], 50.0, places=2)
+        lines = [
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "단어 " * 100},
+                {"type": "tool_use", "name": "Bash", "input": {}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "content": "ok " * 200}]}},
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            m1 = measure_session_path(p)
+            m2 = measure_session_path(p)
+            # 2.0 + 200×0.005(1.0) + 100×0.05(5.0) = 8.0
+            self.assertAlmostEqual(m1["human_path_min"], 8.0, places=2)
+            self.assertEqual(m1, m2)
+        finally:
+            os.unlink(p)
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
