@@ -174,6 +174,7 @@ def normalize_claude_code_jsonl(jsonl_path, max_chars=12000,
     user_events = []
     user_total_words = 0
     reviewed_words = 0
+    read_files = []
     last_assistant_text = ""
     file_ops = []
     tool_counts = {}
@@ -221,6 +222,10 @@ def normalize_claude_code_jsonl(jsonl_path, max_chars=12000,
                     if b.get("type") == "tool_use":
                         name = b.get("name", "?")
                         tool_counts[name] = tool_counts.get(name, 0) + 1
+                        if name in ("Read", "NotebookRead"):
+                            rf = (b.get("input") or {}).get("file_path")
+                            if rf and rf not in read_files:
+                                read_files.append(rf)
                         if name in ("Write", "Edit", "NotebookEdit"):
                             inp = b.get("input") or {}
                             fp = inp.get("file_path")
@@ -259,6 +264,23 @@ def normalize_claude_code_jsonl(jsonl_path, max_chars=12000,
         lines.append(f"[조사 자료 규모] 검토된 자료 총 ~{reviewed_words}단어"
                      f" (파일·검색 결과 — 사람이 같은 조사를 해도 상응 자료를 찾아 읽어야 함,"
                      f" 단 AI 시행착오 포함이라 상한 근거)")
+    search_n = sum(tool_counts.get(t, 0) for t in
+                   ("Grep", "Glob", "WebSearch", "WebFetch"))
+    exec_n = sum(tool_counts.get(t, 0) for t in ("Bash", "PowerShell"))
+    if read_files or search_n or exec_n:
+        struct = ["[작업 구조 참고 — AI의 실제 수행에서 추출한 '일이 요구한 단계의"
+                  " 종류'. 아래 횟수는 AI의 경로이니 절대 그대로 베끼지 말고, 사람이"
+                  " 같은 결과를 내려면 어떤 종류의 단계가 필요한지 참고로만 쓸 것]"]
+        if read_files:
+            names = ", ".join(Path(f).name for f in read_files[:12])
+            struct.append(f"  검토된 파일 {len(read_files)}개: {names}")
+        if search_n:
+            struct.append(f"  탐색·검색 수행 있었음 (AI 기준 {search_n}회)")
+        if exec_n:
+            struct.append(f"  명령 실행·테스트·확인 수행 있었음 (AI 기준 {exec_n}회)")
+        if user_events:
+            struct.append(f"  사용자와의 지시·결정 왕복 {len(user_events)}회")
+        lines.extend(struct)
     if user_total_words > 200:
         # 지시문에 붙여넣은 자료 포함 — 사람도 읽어야 할 입력 규모 (읽기 노동 근거)
         lines.append(f"[입력 자료 규모] 사용자 제공 텍스트 총 ~{user_total_words}단어")

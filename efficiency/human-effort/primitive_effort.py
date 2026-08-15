@@ -128,12 +128,27 @@ def validate_llm_output(raw, rates):
     return {"human": human, "rationale": raw.get("rationale", "")}, notes, False
 
 
-def estimate_human_min(llm, spec_text, rates=None, max_tokens=2000):
+def estimate_human_min(llm, spec_text, rates=None, max_tokens=2000,
+                       requirements=None):
     """업무 설명 → 구버전 human_min. LLM 1회 호출(+검증 실패 시 1회 재시도).
+
+    requirements: 1단계 모듈이 추출한 requirements.v1 dict(선택). 주어지면
+    '달성해야 할 요구사항'으로 스코프를 고정하고, 기록 신호(산출물·조사 자료·
+    작업 구조)는 규모 단서로만 쓰는 하이브리드 모드가 된다.
 
     반환: {human_min, breakdown[{primitive, count, unit, minutes}], rationale, notes}
     """
     r = rates or load_rates()
+    if requirements:
+        req_lines = []
+        for q in requirements.get("requirements", []):
+            qty = "; ".join(f"{x.get('name')}={x.get('value')}{x.get('unit','')}"
+                            for x in (q.get("requested_quantities") or [])
+                            if isinstance(x, dict) and x.get("value"))
+            req_lines.append(f"- {q.get('title')}" + (f" ({qty})" if qty else ""))
+        header = ("[달성해야 할 요구사항 — 사람 경로는 이 요구사항을 달성하는 데"
+                  " 필요한 단계로 짠다. 아래 기록 신호는 규모·구조 단서로만 쓴다]")
+        spec_text = header + "\n" + "\n".join(req_lines) + "\n\n" + spec_text
     prompt = build_prompt(spec_text, r)
     raw = llm.complete_json(prompt, max_tokens)
     parsed, notes, fatal = validate_llm_output(raw, r)
