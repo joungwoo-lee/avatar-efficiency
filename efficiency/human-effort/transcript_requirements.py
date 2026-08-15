@@ -162,7 +162,8 @@ def extract_requirements(llm, transcript_text, artifact_context=None,
 
 # ---------------------------------------------------------------- 정규화
 
-def normalize_claude_code_jsonl(jsonl_path, max_chars=12000):
+def normalize_claude_code_jsonl(jsonl_path, max_chars=12000,
+                                include_tool_stats=True):
     """Claude Code 세션 JSONL → 요구사항 추출용 압축 이벤트 텍스트 (단계 0, 설계서 §4.1).
 
     포함: 사용자 지시 전문(개별 1500자 절단), 최종 assistant 응답(2000자),
@@ -222,7 +223,9 @@ def normalize_claude_code_jsonl(jsonl_path, max_chars=12000):
         lines.append(f"[event:FINAL] AI 최종 응답: {last_assistant_text[:2000]}")
     if file_ops:
         lines.append("[산출물 파일] " + ", ".join(file_ops[:30]))
-    if tool_counts:
+    if tool_counts and include_tool_stats:
+        # 주의: 도구 통계는 AI의 실행 경로다 — 사람 경로 분해(primitive_effort)
+        # 입력에는 include_tool_stats=False로 제외해 anchoring을 막을 것.
         stat = ", ".join(f"{k}x{v}" for k, v in
                          sorted(tool_counts.items(), key=lambda x: -x[1])[:12])
         lines.append(f"[도구 사용 통계] {stat}")
