@@ -173,6 +173,7 @@ def normalize_claude_code_jsonl(jsonl_path, max_chars=12000,
     from pathlib import Path
     user_events = []
     user_total_words = 0
+    reviewed_words = 0
     last_assistant_text = ""
     file_ops = []
     tool_counts = {}
@@ -203,6 +204,15 @@ def normalize_claude_code_jsonl(jsonl_path, max_chars=12000,
                 if text and not text.startswith("[Request interrupted"):
                     user_events.append(text[:1500])
                     user_total_words += len(text.split())
+                for bb in blocks:  # 조사에서 검토된 자료(파일·검색 결과) 분량
+                    if isinstance(bb, dict) and bb.get("type") == "tool_result":
+                        rc = bb.get("content")
+                        if isinstance(rc, str):
+                            reviewed_words += len(rc.split())
+                        elif isinstance(rc, list):
+                            for c in rc:
+                                if isinstance(c, dict) and c.get("type") == "text":
+                                    reviewed_words += len(c.get("text", "").split())
             elif rtype == "assistant":
                 texts = []
                 for b in blocks:
@@ -240,6 +250,15 @@ def normalize_claude_code_jsonl(jsonl_path, max_chars=12000,
         lines.append(f"[event:FINAL] AI 최종 응답: {last_assistant_text[:2000]}")
     if file_ops:
         lines.append("[산출물 파일] " + ", ".join(file_ops[:30]))
+    if last_assistant_text:
+        lines.append(f"[대화 보고 규모] 최종 보고 ~{len(last_assistant_text.split())}단어"
+                     + (" (파일 산출물 없음 — 보고가 산출물)" if not artifact_words else ""))
+    if reviewed_words > 300:
+        # 조사·검증에서 검토된 자료의 총량 — 일의 크기 신호.
+        # 도구 호출 횟수(경로)와 달리 "검토 대상 범위"라 사람 노동의 근거가 된다.
+        lines.append(f"[조사 자료 규모] 검토된 자료 총 ~{reviewed_words}단어"
+                     f" (파일·검색 결과 — 사람이 같은 조사를 해도 상응 자료를 찾아 읽어야 함,"
+                     f" 단 AI 시행착오 포함이라 상한 근거)")
     if user_total_words > 200:
         # 지시문에 붙여넣은 자료 포함 — 사람도 읽어야 할 입력 규모 (읽기 노동 근거)
         lines.append(f"[입력 자료 규모] 사용자 제공 텍스트 총 ~{user_total_words}단어")
