@@ -172,6 +172,7 @@ def normalize_claude_code_jsonl(jsonl_path, max_chars=12000,
     import json as _json
     from pathlib import Path
     user_events = []
+    user_total_words = 0
     last_assistant_text = ""
     file_ops = []
     tool_counts = {}
@@ -201,6 +202,7 @@ def normalize_claude_code_jsonl(jsonl_path, max_chars=12000,
                                 if isinstance(b, dict) and b.get("type") == "text").strip()
                 if text and not text.startswith("[Request interrupted"):
                     user_events.append(text[:1500])
+                    user_total_words += len(text.split())
             elif rtype == "assistant":
                 texts = []
                 for b in blocks:
@@ -214,13 +216,18 @@ def normalize_claude_code_jsonl(jsonl_path, max_chars=12000,
                             fp = inp.get("file_path")
                             if fp and fp not in file_ops:
                                 file_ops.append(fp)
-                            # 산출물 규모(작성 단어량) — AI 경로가 아닌 결과물
-                            # 실측이므로 사람 경로 분해의 수량 근거로 항상 포함
-                            written = (inp.get("content") or
-                                       inp.get("new_string") or
+                            # 산출물 규모(최종 결과물 분량) — AI 경로가 아닌
+                            # 결과물 실측. 반복 재작성 중복 방지: Write는 마지막
+                            # 상태로 리셋, Edit은 그 이후 기여만 가산 (순계 근사)
+                            if fp and name == "Write":
+                                content = inp.get("content") or ""
+                                if isinstance(content, str):
+                                    artifact_words[fp] = len(content.split())
+                            elif fp:
+                                new = (inp.get("new_string") or
                                        inp.get("new_source") or "")
-                            if fp and isinstance(written, str) and written:
-                                artifact_words[fp] = artifact_words.get(fp, 0)                                     + len(written.split())
+                                if isinstance(new, str) and new:
+                                    artifact_words[fp] = artifact_words.get(fp, 0)                                         + len(new.split())
                     elif b.get("type") == "text":
                         texts.append(b.get("text", ""))
                 if texts:
@@ -233,6 +240,9 @@ def normalize_claude_code_jsonl(jsonl_path, max_chars=12000,
         lines.append(f"[event:FINAL] AI 최종 응답: {last_assistant_text[:2000]}")
     if file_ops:
         lines.append("[산출물 파일] " + ", ".join(file_ops[:30]))
+    if user_total_words > 200:
+        # 지시문에 붙여넣은 자료 포함 — 사람도 읽어야 할 입력 규모 (읽기 노동 근거)
+        lines.append(f"[입력 자료 규모] 사용자 제공 텍스트 총 ~{user_total_words}단어")
     if artifact_words:
         total = sum(artifact_words.values())
         tops = sorted(artifact_words.items(), key=lambda x: -x[1])[:10]
