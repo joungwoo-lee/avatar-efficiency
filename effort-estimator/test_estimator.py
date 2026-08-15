@@ -113,11 +113,25 @@ AGENT_OUT = {
 }
 
 
-class MockLLM:
-    """프롬프트 내용을 감지해 Prompt A/B/C·agent-path 응답을 돌려준다. 큐 주입도 지원."""
+def _critic_keep_all(prompt):
+    """Prompt D에 나열된 모든 work_item_id에 keep 판정."""
+    import re
+    ids = sorted(set(re.findall(r'"work_item_id":\s*"(W[^"]+)"', prompt)))
+    return {
+        "schema_version": "consistency_review.v1",
+        "prompt_version": "consistency_critic.v1",
+        "verdicts": [{"work_item_id": i, "verdict": "keep",
+                      "issue": "none", "reason": ""} for i in ids],
+        "requirement_issues": [], "overall_notes": [],
+    }
 
-    def __init__(self, queue=None):
+
+class MockLLM:
+    """프롬프트 내용을 감지해 Prompt A/B/C/D·agent-path 응답을 돌려준다. 큐 주입도 지원."""
+
+    def __init__(self, queue=None, critic_out=None):
         self.queue = list(queue) if queue else None
+        self.critic_out = critic_out  # None이면 전원 keep
         self.calls = []
 
     def complete_json(self, prompt, max_tokens):
@@ -126,6 +140,9 @@ class MockLLM:
             return self.queue.pop(0)
         if "Planned Requirement Reconstruction Engine" in prompt:
             return copy.deepcopy(REQ_OUT)
+        if "Consistency Critic" in prompt:  # Pass D
+            return copy.deepcopy(self.critic_out) if self.critic_out \
+                else _critic_keep_all(prompt)
         if "두 실행경로" in prompt:  # agent-path (integ-spec §3)
             return copy.deepcopy(AGENT_OUT)
         return copy.deepcopy(EFFORT_OUT)
@@ -328,7 +345,7 @@ class TestEstimatorFlow(unittest.TestCase):
         llm = MockLLM()
         est = HumanEffortEstimator(llm, trials=200, seed=42)
         est.estimate(SPEC)
-        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(len(llm.calls), 3)  # A + B + D(critic)
         for prompt in llm.calls:
             self.assertNotIn("time_model", prompt)
             self.assertNotIn("min_per_unit", prompt)
@@ -351,11 +368,47 @@ class TestEstimatorFlow(unittest.TestCase):
     def test_retry_on_invalid_then_valid(self):
         llm = MockLLM(queue=[{"garbage": True}, copy.deepcopy(REQ_OUT),
                              copy.deepcopy(EFFORT_OUT)])
-        est = HumanEffortEstimator(llm, trials=200, seed=42)
+        est = HumanEffortEstimator(llm, trials=200, seed=42, critic=False)
         r = est.estimate(SPEC)
         self.assertEqual(len(llm.calls), 3)
         self.assertTrue(any("재시도" in n for n in r["notes"]))
         self.assertGreater(r["effort"]["p50_minutes"], 0)
+
+    def test_critic_drops_invented_work(self):
+        # Pass D가 오분류 항목(drop) 판정 → 미산정 + review_required
+        critic = {
+            "schema_version": "consistency_review.v1",
+            "verdicts": (
+                [{"work_item_id": f"W-00{i}", "verdict": "keep",
+                  "issue": "none", "reason": ""} for i in (1, 2, 3, 5)]
+                + [{"work_item_id": "W-004", "verdict": "drop",
+                    "issue": "invented_requirement",
+                    "reason": "지침서에 없는 산출물"}]),
+            "requirement_issues": [], "overall_notes": [],
+        }
+        est = HumanEffortEstimator(MockLLM(critic_out=critic), trials=200, seed=42)
+        r = est.estimate(SPEC)
+        self.assertEqual(len(r["work_items"]), 4)
+        self.assertTrue(any(u["work_item_id"] == "W-004"
+                            and "Pass D drop" in u["reason"]
+                            for u in r["unscored_items"]))
+        self.assertTrue(r["review_required"])
+        self.assertTrue(any("W-004" in reason for reason in r["review_reasons"]))
+
+    def test_critic_failure_does_not_block(self):
+        # Pass D 2회 실패해도 산정은 진행 + 검토 필요 표시
+        llm = MockLLM(queue=[copy.deepcopy(REQ_OUT), copy.deepcopy(EFFORT_OUT),
+                             {"garbage": True}, {"garbage": True}])
+        est = HumanEffortEstimator(llm, trials=200, seed=42)
+        r = est.estimate(SPEC)
+        self.assertGreater(r["effort"]["p50_minutes"], 0)
+        self.assertTrue(r["review_required"])
+        self.assertTrue(any("Pass D" in reason for reason in r["review_reasons"]))
+
+    def test_review_not_required_when_clean(self):
+        r = HumanEffortEstimator(MockLLM(), trials=200, seed=42).estimate(SPEC)
+        self.assertFalse(r["review_required"])
+        self.assertEqual(r["review_reasons"], [])
 
     def test_fail_after_two_invalid(self):
         llm = MockLLM(queue=[{"garbage": True}, {"garbage": True}])
@@ -420,7 +473,7 @@ class TestCompat(unittest.TestCase):
     def test_llm_call_count_and_no_rate_leak(self):
         llm = MockLLM()
         CounterfactualEstimator(llm=llm).estimate_task("t", "c", "r", [], "d")
-        self.assertEqual(len(llm.calls), 3)  # Prompt A + B + agent-path
+        self.assertEqual(len(llm.calls), 4)  # Prompt A + B + D(critic) + agent-path
         for prompt in llm.calls:
             self.assertNotIn("min_per_unit", prompt)
             self.assertNotIn("time_model", prompt)

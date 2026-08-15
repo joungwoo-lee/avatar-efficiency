@@ -34,7 +34,9 @@
 ## 구성
 
 ```
-estimator.py   오케스트레이터: Prompt A→B(기본) 또는 C(단일호출) → 검증(+재시도 1회) → 엔진
+estimator.py   오케스트레이터: Prompt A→B→D(기본) 또는 C(단일호출) → 검증(+재시도 1회) → 엔진
+               D = Consistency Critic(설계서 §7.1) — 분류·분해 오류 일반 안전망.
+               keep/drop/flag만 가능(부풀리기 불가), 실패·지적 시 review_required 표시
 prompts.py     Prompt A/B/C (설계서 §23~25 각색, Catalog는 시간정보 제거 뷰만 전달)
 engine.py      결정론적 Effort Engine: 분포 표본·검증·Monte Carlo·percentile
 catalog.json   Work Unit Catalog (expert seed, confidence C — calibration 대상)

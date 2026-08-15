@@ -93,7 +93,8 @@ class CounterfactualEstimator:
 
         rationale = ap["rationale"] or "; ".join(
             f"{q['requirement_id']} {q['title']}" for q in r["requirements"])
-        notes = list(r["warnings"]) + list(r["notes"]) + list(ap["notes"])
+        notes = ([f"review_required: {reason}" for reason in r.get("review_reasons", [])]
+                 + list(r["warnings"]) + list(r["notes"]) + list(ap["notes"]))
 
         return {
             "error": None,

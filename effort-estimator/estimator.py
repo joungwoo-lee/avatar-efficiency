@@ -168,6 +168,39 @@ def validate_effort_input(raw, catalog, requirements_meta=None):
     return raw, notes, False
 
 
+def validate_critic_output(raw, item_ids):
+    """Prompt D(Consistency Critic) 출력 검증. 반환: (verdicts, notes, fatal).
+
+    verdicts: {work_item_id: {"verdict", "issue", "reason"}} — 알 수 없는 ID는 무시.
+    """
+    notes = []
+    if not isinstance(raw, dict):
+        return None, ["Pass D 응답이 dict가 아님"], True
+    vlist = raw.get("verdicts")
+    if not isinstance(vlist, list) or not vlist:
+        return None, notes + ["Pass D verdicts 누락"], True
+    verdicts = {}
+    for v in vlist:
+        if not isinstance(v, dict):
+            continue
+        wid = v.get("work_item_id")
+        verdict = v.get("verdict")
+        if wid not in item_ids:
+            notes.append(f"Pass D: 알 수 없는 work_item_id '{wid}' 무시")
+            continue
+        if verdict not in ("keep", "drop", "flag"):
+            notes.append(f"Pass D: {wid} 판정값 불량 '{verdict}' → keep 처리")
+            verdict = "keep"
+        verdicts[wid] = {"verdict": verdict,
+                         "issue": v.get("issue", ""),
+                         "reason": v.get("reason", "")}
+    if not verdicts:
+        return None, notes + ["유효 verdict 0개"], True
+    for wid in item_ids - set(verdicts):
+        notes.append(f"Pass D: {wid} 판정 누락 → keep 처리")
+    return verdicts, notes, False
+
+
 def _resolve_unit_conflicts(items, work_units, notes):
     """Catalog의 conflicts_with 강제 (설계서 §6.2 단위 배타성).
 
@@ -202,9 +235,12 @@ class HumanEffortEstimator:
 
     def __init__(self, llm, catalog_path=DEFAULT_CATALOG_PATH, max_tokens=6000,
                  trials=_engine.DEFAULT_TRIALS, seed=_engine.DEFAULT_SEED,
-                 mode="two_pass", reference_worker=None, scope=None):
+                 mode="two_pass", reference_worker=None, scope=None, critic=None):
         if mode not in ("two_pass", "single"):
             raise ValueError(f"mode는 two_pass 또는 single: {mode!r}")
+        # Pass D(Consistency Critic, 설계서 §7.1): 분류·분해 오류의 일반 안전망.
+        # 정식 산정(two_pass)은 기본 ON, 저지연(single)은 기본 OFF — critic 인자로 강제 가능.
+        self.critic_enabled = critic if critic is not None else (mode == "two_pass")
         self.llm = llm
         self.max_tokens = max_tokens
         self.trials = trials
@@ -260,10 +296,54 @@ class HumanEffortEstimator:
             requirements_view = effort_in.get("requirements", [])
             prompt_versions = [_prompts.PROMPT_C_VERSION]
 
-        result = self._compute(effort_in, work_order_text, requirements_view, notes)
+        review_reasons = []
+        if self.critic_enabled and effort_in["work_items"]:
+            n = self._apply_critic(work_order_text, requirements_view,
+                                   effort_in, review_reasons)
+            notes += n
+            prompt_versions.append(_prompts.PROMPT_D_VERSION)
+
+        result = self._compute(effort_in, work_order_text, requirements_view,
+                               notes, review_reasons)
         result["prompt_versions"] = prompt_versions
         result["mode"] = self.mode
         return result
+
+    def _apply_critic(self, work_order_text, requirements_view, effort_in,
+                      review_reasons):
+        """Pass D 실행·적용. Critic은 산정을 깎거나(drop→미산정) 지적(flag)만 가능 —
+        결과를 부풀릴 수 없다. Critic 자체가 실패하면 산정은 진행하되 검토 필요 표시."""
+        items = effort_in["work_items"]
+        item_ids = {it["work_item_id"] for it in items}
+        prompt = _prompts.build_prompt_d(work_order_text, requirements_view,
+                                         items, self.catalog)
+        try:
+            verdicts, notes = self._call_validated(
+                prompt, lambda raw: validate_critic_output(raw, item_ids), "Pass D")
+        except ValueError as e:
+            review_reasons.append("Pass D(Consistency Critic) 실패 — 미적용, 사람 검토 필요")
+            return [f"Pass D 실패: {e}"]
+
+        kept = []
+        for it in items:
+            v = verdicts.get(it["work_item_id"])
+            if v and v["verdict"] == "drop":
+                effort_in["unmapped_items"].append({
+                    "work_item_id": it["work_item_id"],
+                    "description": it.get("activity_type") or it["work_unit_id"],
+                    "reason": f"Pass D drop({v['issue']}): {v['reason']}",
+                    "candidate_engine": it.get("engine", ""),
+                    "evidence": it.get("evidence", []),
+                })
+                review_reasons.append(
+                    f"{it['work_item_id']} 제외({v['issue']}): {v['reason']}")
+                continue
+            if v and v["verdict"] == "flag":
+                review_reasons.append(
+                    f"{it['work_item_id']} 의심({v['issue']}): {v['reason']}")
+            kept.append(it)
+        effort_in["work_items"] = kept
+        return notes
 
     def estimate_from_effort_input(self, effort_input, work_order_text=""):
         """수동 입력·Review Studio 재계산 경로(설계서 §12 recalculate) —
@@ -272,12 +352,13 @@ class HumanEffortEstimator:
         if fatal:
             raise ValueError("EffortEngineInput 검증 실패: " + "; ".join(notes))
         result = self._compute(parsed, work_order_text,
-                               parsed.get("requirements", []), notes)
+                               parsed.get("requirements", []), notes, [])
         result["prompt_versions"] = []
         result["mode"] = "recalculate"
         return result
 
-    def _compute(self, effort_in, work_order_text, requirements_view, notes):
+    def _compute(self, effort_in, work_order_text, requirements_view, notes,
+                 review_reasons):
         work_items = effort_in["work_items"]
         unmapped = effort_in["unmapped_items"]
         warnings = list(effort_in.get("warnings", []))
@@ -301,6 +382,15 @@ class HumanEffortEstimator:
                        if isinstance(it.get("confidence", 0.5), (int, float))]
         overall_conf = round(sum(confidences) / len(confidences), 2) if confidences else 0.0
 
+        # 사람 검토 게이트 (설계서 §8): 조건 해당 시 결과를 확정값으로 쓰지 말 것
+        review_reasons = list(review_reasons)
+        if unmapped:
+            review_reasons.append(f"미산정 항목 {len(unmapped)}건")
+        if work_items and overall_conf < 0.6:
+            review_reasons.append(f"매핑 신뢰도 낮음({overall_conf})")
+        if any(it.get("engine") == "PROFESSIONAL_REVIEW" for it in work_items):
+            review_reasons.append("전문 판단 업무 포함")
+
         digest = hashlib.sha1(
             (work_order_text + self.catalog["catalog_version"]).encode("utf-8")
         ).hexdigest()[:10]
@@ -320,6 +410,8 @@ class HumanEffortEstimator:
             },
             "simulation": eff["simulation"],
             "confidence": overall_conf,
+            "review_required": bool(review_reasons),
+            "review_reasons": review_reasons,
             "requirements": [
                 {"requirement_id": r.get("requirement_id"),
                  "title": r.get("title"),
@@ -367,6 +459,10 @@ def format_report(result):
         f" / mode {result.get('mode')}",
         f"Confidence : {result['confidence']} (매핑 신뢰도 평균)",
     ]
+    if result.get("review_required"):
+        lines.append("Review     : 사람 검토 필요")
+        for reason in result.get("review_reasons", []):
+            lines.append(f"  - {reason}")
     if result["requirements"]:
         lines.append("Requirements:")
         for r in result["requirements"]:
