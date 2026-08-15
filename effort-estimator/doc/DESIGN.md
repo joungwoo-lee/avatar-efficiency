@@ -1,5 +1,12 @@
 # effort-estimator 설계 근거 (기능·기술 배경·정당화)
 
+> **⚠️ 구 설계 문서 (superseded, 2026-08-15)**: 본 문서는 구 primitive×요율 방식
+> (TAEE Phase 1 MVP, `rates.json`)의 설계 근거다. 모듈은
+> [requirement_based_human_effort_service_design.md](requirement_based_human_effort_service_design.md)
+> (v0.5) 기준으로 재개발되었다 — Work Unit Catalog + Monte Carlo P50/P80,
+> human-equivalent만 산정. 현행 통합 절차는 [INTEGRATION.md](INTEGRATION.md) 참조.
+> 아래 내용은 이력 보존용.
+
 대상 독자: 이 모듈의 산정 방식이 신뢰할 만한지 판단해야 하는 사람(도입 결정자, 감사자, 후임 개발자).
 사용법은 [README.md](../README.md), 통합 절차는 [INTEGRATION.md](INTEGRATION.md),
 전체 설계는 [docs/effort-estimation/task_agentization_effort_estimator_design.md](../../docs/effort-estimation/task_agentization_effort_estimator_design.md) (이하 TAEE 설계서).
