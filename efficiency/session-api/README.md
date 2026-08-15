@@ -8,9 +8,9 @@ speedup = human_min(분자) ÷ agent_min(분모)
 
 분자: 트랜스크립트에서 완료된 요구사항 복원(설계서 §23, 철회 정리·delivered 판정)
       → 사람 w/o 생성형AI 견적  (../human-effort, LLM 2회)
-분모: 트랜스크립트에 기록된 실제 동작 실측 × 요율  (../agent-effort/transcript_actual,
+분모: 트랜스크립트에 기록된 동작 단서 × 요율  (../agent-effort/transcript_actual,
       LLM 미사용 — tool 호출·생성/읽기 단어(기계) + 지시·검토·중단(hitl))
-      서브에이전트 파일의 기계 동작 자동 합산
+      병렬 서브에이전트는 실제 소모 시간이 아니므로 미가산 (자원량 참고 옵션만)
 ```
 
 사전(아바타 정의 시점) 측정은 [`../counterfactual-api`](../counterfactual-api) —

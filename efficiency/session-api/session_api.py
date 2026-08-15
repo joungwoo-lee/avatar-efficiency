@@ -4,8 +4,8 @@
 speedup = human_min(분자) ÷ agent_min(분모)
   분자: 트랜스크립트에서 완료된 요구사항 복원(§23) → 사람 w/o 생성형AI 견적
         (../human-effort — transcript_requirements + estimate_from_requirements)
-  분모: 트랜스크립트에 기록된 실제 동작 실측 × 요율 (LLM 미사용)
-        (../agent-effort/transcript_actual — 서브에이전트 기계분 합산)
+  분모: 트랜스크립트에 기록된 동작 단서 × 요율 (LLM 미사용)
+        (../agent-effort/transcript_actual — 병렬 서브에이전트는 시간 미가산)
 
 아바타(사전) 측정 API는 ../counterfactual-api. 본 모듈은 사후(세션) 전용.
 
@@ -49,24 +49,31 @@ class JsonRetryLLM:
         raise last
 
 
-def measure_agent_actual(jsonl_path, rates=None, include_subagents=True):
-    """분모만: 트랜스크립트 실측 agent_min. LLM 미사용, 결정론적."""
+def measure_agent_actual(jsonl_path, rates=None, include_subagents=False):
+    """분모만: 트랜스크립트 실측 agent_min. LLM 미사용, 결정론적.
+
+    측정 기조: 분모 = "AI를 쓰는 사람의 에포트" + "AI가 실제 소모한 시간".
+    - hitl은 단서(지시 건수·산출물 분량) × 요율 추정 — 산출물 검토·후작업은
+      세션 밖에서 몰아 할 수 있어 세션 wall-clock으로는 못 잡는다.
+    - 서브에이전트는 메인 타임라인과 **병렬**로 돌므로 실제 소모 시간에
+      가산하지 않는다(기본 False). include_subagents=True는 자원량 참고용.
+    """
     rates = rates or load_rates()
     counts = parse_actions(jsonl_path)
-    sub_files = []
-    if include_subagents:
-        sub_files = glob.glob(str(Path(jsonl_path).with_suffix("")) + "/subagents/*.jsonl")
+    sub_files = glob.glob(str(Path(jsonl_path).with_suffix("")) + "/subagents/*.jsonl")
+    if include_subagents:  # 자원량(토큰·동작 총량) 관점 참고용 — 시간 아님
         for sf in sub_files:
             sc = parse_actions(sf)
             for k in ("tool_calls", "tool_result_words", "assistant_words"):
-                counts[k] += sc[k]  # 기계 동작만 합산 — 지시·검토는 메인 세션 사람 것
+                counts[k] += sc[k]
     actual = actual_effort_minutes(counts, rates)
     actual["subagent_files"] = len(sub_files)
+    actual["subagents_included"] = include_subagents
     return actual
 
 
 def measure_session(llm, jsonl_path, rates=None, max_chars=12000,
-                    include_subagents=True, estimator=None):
+                    include_subagents=False, estimator=None):
     """세션 1개 → 분자·분모·speedup.
 
     반환: {
