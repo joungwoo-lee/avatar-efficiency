@@ -231,6 +231,41 @@ class TestValidation(unittest.TestCase):
         self.assertEqual(len(parsed["work_items"]), 4)
         self.assertTrue(any("수량 불량" in u["reason"] for u in parsed["unmapped_items"]))
 
+    def test_sw_engine_scope_guard(self):
+        # 회귀: 운영 업무('RCA 자동화')를 SW 구축으로 오해석 — deliverable_type이
+        # software_*가 아닌 요구사항에 SW 개발 단위가 붙으면 미산정
+        raw = copy.deepcopy(EFFORT_OUT)
+        raw["work_items"].append(_item(
+            "W-SW", "sw.functional_process",
+            {"distribution": "point", "value": 10, "unit": "cfp"}))
+        meta = [{"requirement_id": "R-001", "deliverable_type": "document"}]
+        parsed, notes, fatal = validate_effort_input(raw, CATALOG,
+                                                     requirements_meta=meta)
+        self.assertFalse(fatal)
+        self.assertTrue(any(u["work_item_id"] == "W-SW"
+                            and "오해석" in u["reason"]
+                            for u in parsed["unmapped_items"]))
+
+    def test_sw_engine_allowed_for_software_requirement(self):
+        # 진짜 SW 개발 요구사항이면 SW 단위 유지
+        raw = copy.deepcopy(EFFORT_OUT)
+        raw["work_items"] = [_item(
+            "W-SW", "sw.functional_process",
+            {"distribution": "point", "value": 10, "unit": "cfp"})]
+        meta = [{"requirement_id": "R-001", "deliverable_type": "software_feature"}]
+        parsed, notes, fatal = validate_effort_input(raw, CATALOG,
+                                                     requirements_meta=meta)
+        self.assertFalse(fatal)
+        self.assertEqual(parsed["work_items"][0]["work_item_id"], "W-SW")
+        # 메타 미제공(single 모드·직접 재계산)이면 가드 미적용 — 기존 동작 유지
+        raw2 = copy.deepcopy(EFFORT_OUT)
+        raw2["work_items"] = [_item(
+            "W-SW", "sw.functional_process",
+            {"distribution": "point", "value": 10, "unit": "cfp"})]
+        parsed2, _, fatal2 = validate_effort_input(raw2, CATALOG)
+        self.assertFalse(fatal2)
+        self.assertEqual(len(parsed2["work_items"]), 1)
+
     def test_conflicting_units_deduped(self):
         # 회귀: 같은 요구사항에 short_message + section_draft/edit 중복 계상 시 제거
         raw = copy.deepcopy(EFFORT_OUT)
@@ -415,6 +450,17 @@ MAIL_SPEC = """업무 제목: 메일 회신 초안 작성
 완료조건: 회신 1건 발송 준비 완료
 연결된 스킬: mail-draft, summarize"""
 
+RCA_SPEC = """업무 제목: CP Log KG 및 State Graph 기반 RCA 자동화
+소속 역할: 공정 이상분석 엔지니어
+할 일: 신규 CP 테스트 로그 이상 발생 시 Knowledge Graph와 State Graph를 조회해 근본원인 후보를 도출하고 RCA 보고서를 작성한다.
+업무 상세:
+- jira 스킬로 이상 티켓 1건 확인
+- RAG 스킬로 관련 로그·과거 사례 조회 (약 5건)
+- 원인 후보 2~3개 비교 분석
+- RCA 보고서 1건(약 500단어) 작성 및 티켓 업데이트
+완료조건: RCA 보고서 1건, 티켓 코멘트 업데이트
+연결된 스킬: jira, rag-search, log-analyzer"""
+
 
 def _live():
     from onprem_llm_sim import OnpremLLM
@@ -435,6 +481,20 @@ def _live():
         for c in r["item_contributions"]:
             print(f"  {c['work_item_id']} {c['work_unit_id']}: {c['mean_minutes']} min")
     assert ok, f"소형 업무 인플레이션 회귀 실패: P50={p50}, items={n_items}"
+
+    # 스코프 회귀: '자동화' 제목의 운영 업무가 SW 구축 프로젝트로 오해석되지 않는지
+    print("\n--- scope regression (RCA spec) ---")
+    r = HumanEffortEstimator(OnpremLLM()).estimate(RCA_SPEC)
+    p50 = r["effort"]["p50_minutes"]
+    sw_units = [c["work_unit_id"] for c in r["item_contributions"]
+                if c["work_unit_id"].startswith("sw.")]
+    ok = not sw_units and 10 <= p50 <= 600
+    print(f"P50={p50} min, sw_units={sw_units} "
+          f"→ {'PASS' if ok else 'FAIL'} (기대: SW 단위 0개, 10~600 min)")
+    if not ok:
+        for c in r["item_contributions"]:
+            print(f"  {c['work_item_id']} {c['work_unit_id']}: {c['mean_minutes']} min")
+    assert ok, f"운영 업무 SW 오해석 회귀 실패: P50={p50}, sw={sw_units}"
 
 
 if __name__ == "__main__":

@@ -74,13 +74,27 @@ def validate_requirements_output(raw):
     return raw, notes, False
 
 
-def validate_effort_input(raw, catalog):
+_SW_ENGINES = frozenset({"SW_FUNCTIONAL", "SW_NON_FUNCTIONAL"})
+_SW_DELIVERABLE_TYPES = frozenset({"software_feature", "software_nonfunctional"})
+
+
+def validate_effort_input(raw, catalog, requirements_meta=None):
     """Prompt B/C 출력(EffortEngineInput.v1) 검증.
 
     반환: (parsed, notes, fatal).
       parsed["work_items"]     — Catalog에 존재하고 수량이 유효한 leaf 작업만
       parsed["unmapped_items"] — UNMAPPED + 검증 탈락 항목(사유 포함)
+
+    requirements_meta: two-pass에서 Prompt A의 requirements(deliverable_type 포함).
+    제공되면 SW 엔진 라우팅 교차검증에 사용 — 요구사항 산출물이 software_*가 아닌데
+    SW 개발 Work Unit이 매핑되면 운영 업무의 '자동화' 문구를 시스템 구축 프로젝트로
+    오해석한 스코프 오류로 보고 미산정 처리한다.
     """
+    sw_ok_reqs = None
+    if requirements_meta is not None:
+        sw_ok_reqs = {r.get("requirement_id") for r in requirements_meta
+                      if isinstance(r, dict)
+                      and r.get("deliverable_type") in _SW_DELIVERABLE_TYPES}
     notes = []
     if not isinstance(raw, dict):
         return None, ["Effort 입력이 dict가 아님"], True
@@ -122,6 +136,14 @@ def validate_effort_input(raw, catalog):
         if wu_id not in work_units:
             _to_unmapped(f"Catalog에 없는 work_unit_id '{wu_id}'")
             continue
+        # 스코프 교차검증: SW 개발 단위인데 연결된 요구사항 산출물이 software_*가 아님
+        # → '자동화' 문구를 시스템 구축으로 오해석한 것 (기존 시스템 사용 운영 업무)
+        if sw_ok_reqs is not None and work_units[wu_id]["engine"] in _SW_ENGINES:
+            if not (set(item.get("requirement_ids", [])) & sw_ok_reqs):
+                _to_unmapped(
+                    f"SW 개발 단위 '{wu_id}'가 software_* 산출물 요구사항에 연결되지 "
+                    f"않음 — 운영 업무의 시스템 구축 오해석으로 판정, 미산정")
+                continue
         qty_err = _engine.validate_quantity(item.get("quantity"))
         if qty_err:
             _to_unmapped(f"수량 불량: {qty_err}")
@@ -223,7 +245,9 @@ class HumanEffortEstimator:
             effort_in, n = self._call_validated(
                 _prompts.build_prompt_b(req_out, self.catalog,
                                         self.reference_worker, self.scope),
-                lambda raw: validate_effort_input(raw, self.catalog), "Prompt B")
+                lambda raw: validate_effort_input(
+                    raw, self.catalog, requirements_meta=req_out["requirements"]),
+                "Prompt B")
             notes += n
             requirements_view = req_out["requirements"]
             prompt_versions = [_prompts.PROMPT_A_VERSION, _prompts.PROMPT_B_VERSION]

@@ -58,8 +58,10 @@ EffortEngineInput은 항상 같은 P50/P80을 낸다(`estimate_from_effort_input
 | 2 | 과잉분해 — 교과서식 풀프로세스(범위정의→아웃라인→초안→QA→수정) 강제 재현 | 기준노동 정의(생성형 AI만 배제·도구 전부 사용·최단경로) + 분해 상한(소형 업무 ≤5 items) + QA는 수용기준 명시 시만 + few-shot | Prompt B/C |
 | 3 | 수량 단위 불일치 — message 단위(건당 ~15분)에 단어수 200을 수량으로 → 3014분 | `quantity.unit` ≠ 카탈로그 `unit` → 미산정 처리 (코드 강제) | estimator.py 검증기 |
 | 4 | 중복 계상 — 같은 회신에 short_message + section_draft + edit_proofread 동시 부착 | 카탈로그 `conflicts_with` 배타성 선언 → 동일 요구사항 내 충돌 단위 코드가 제거 | catalog.json + estimator.py |
+| 5 | 운영/구축 오해석 — "X 자동화" 제목의 반복 운영 업무를 "그 시스템을 구축하는 SW 프로젝트"로 추출해 SDLC(기능구현·비기능·테스트·리뷰·배포) 전체 계상 | 운영/구축 구분 규칙 + RCA few-shot + SW 엔진 라우팅↔요구사항 deliverable_type 교차검증(two-pass 코드 강제, 불일치 시 미산정) | Prompt A/B/C + estimator.py |
 
-**결과**: 메일 회신 338.8분 → 16.1분(3연속 재현), 경쟁사 보고서 34h → 7.7h.
+**결과**: 메일 회신 338.8분 → 16.1분(3연속 재현), 경쟁사 보고서 34h → 7.7h,
+RCA 운영 업무 SW 단위 0개(3연속 — 종전 sw.* 합계 ~654분 오계상 제거).
 
 교훈: 소형 백엔드 LLM은 프롬프트 규칙을 자주 위반한다. 산정 무결성에 직결되는 규칙
 (단위 일치, 배타성)은 **프롬프트 순응에 의존하지 말고 결정론적 검증기가 강제**해야 한다.
