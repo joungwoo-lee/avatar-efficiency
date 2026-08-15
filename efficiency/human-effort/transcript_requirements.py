@@ -170,10 +170,12 @@ def normalize_claude_code_jsonl(jsonl_path, max_chars=12000,
           파일 산출물 경로, 도구 사용 통계. thinking·중간 도구결과는 제외.
     """
     import json as _json
+    from pathlib import Path
     user_events = []
     last_assistant_text = ""
     file_ops = []
     tool_counts = {}
+    artifact_words = {}
     with open(jsonl_path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -208,9 +210,17 @@ def normalize_claude_code_jsonl(jsonl_path, max_chars=12000,
                         name = b.get("name", "?")
                         tool_counts[name] = tool_counts.get(name, 0) + 1
                         if name in ("Write", "Edit", "NotebookEdit"):
-                            fp = (b.get("input") or {}).get("file_path")
+                            inp = b.get("input") or {}
+                            fp = inp.get("file_path")
                             if fp and fp not in file_ops:
                                 file_ops.append(fp)
+                            # 산출물 규모(작성 단어량) — AI 경로가 아닌 결과물
+                            # 실측이므로 사람 경로 분해의 수량 근거로 항상 포함
+                            written = (inp.get("content") or
+                                       inp.get("new_string") or
+                                       inp.get("new_source") or "")
+                            if fp and isinstance(written, str) and written:
+                                artifact_words[fp] = artifact_words.get(fp, 0)                                     + len(written.split())
                     elif b.get("type") == "text":
                         texts.append(b.get("text", ""))
                 if texts:
@@ -223,6 +233,12 @@ def normalize_claude_code_jsonl(jsonl_path, max_chars=12000,
         lines.append(f"[event:FINAL] AI 최종 응답: {last_assistant_text[:2000]}")
     if file_ops:
         lines.append("[산출물 파일] " + ", ".join(file_ops[:30]))
+    if artifact_words:
+        total = sum(artifact_words.values())
+        tops = sorted(artifact_words.items(), key=lambda x: -x[1])[:10]
+        detail = ", ".join(f"{Path(f).name if hasattr(f,'rsplit') else f}"
+                           f" ~{w}단어" for f, w in tops)
+        lines.append(f"[산출물 규모] 총 작성·수정 ~{total}단어 — {detail}")
     if tool_counts and include_tool_stats:
         # 주의: 도구 통계는 AI의 실행 경로다 — 사람 경로 분해(primitive_effort)
         # 입력에는 include_tool_stats=False로 제외해 anchoring을 막을 것.
