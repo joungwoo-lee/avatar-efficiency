@@ -279,45 +279,74 @@ class HumanEffortEstimator:
 
     # ---- 파이프라인
 
-    def estimate(self, work_order_text):
-        notes = []
-        requirements_view = []
-
+    def estimate(self, avatar_text):
+        """아바타 케이스 전체 파이프라인: A-avatar(1단계) → 공용 2단계."""
         if self.mode == "two_pass":
-            req_out, n = self._call_validated(
-                _prompts.build_prompt_a_avatar(work_order_text),
+            req_out, notes = self._call_validated(
+                _prompts.build_prompt_a_avatar(avatar_text),
                 validate_requirements_output, "Prompt A(avatar)")
-            notes += n
-            effort_in, n = self._call_validated(
-                _prompts.build_prompt_b(req_out, self.catalog,
-                                        self.reference_worker, self.scope),
-                lambda raw: validate_effort_input(
-                    raw, self.catalog, requirements_meta=req_out["requirements"]),
-                "Prompt B")
-            notes += n
-            requirements_view = req_out["requirements"]
-            prompt_versions = [_prompts.PROMPT_A_AVATAR_VERSION,
-                               _prompts.PROMPT_B_VERSION]
-        else:
-            effort_in, n = self._call_validated(
-                _prompts.build_prompt_c(work_order_text, self.catalog,
-                                        self.reference_worker, self.scope),
-                lambda raw: validate_effort_input(raw, self.catalog), "Prompt C")
-            notes += n
-            requirements_view = effort_in.get("requirements", [])
-            prompt_versions = [_prompts.PROMPT_C_VERSION]
+            result = self._run_stage2(req_out, avatar_text, notes)
+            result["prompt_versions"] = ([_prompts.PROMPT_A_AVATAR_VERSION]
+                                         + result["prompt_versions"])
+            result["input_mode"] = "avatar_description"
+            result["mode"] = "two_pass"
+            return result
 
+        # single: Prompt C 단일호출 (아바타 전제 내장)
+        effort_in, notes = self._call_validated(
+            _prompts.build_prompt_c(avatar_text, self.catalog,
+                                    self.reference_worker, self.scope),
+            lambda raw: validate_effort_input(raw, self.catalog), "Prompt C")
+        requirements_view = effort_in.get("requirements", [])
         review_reasons = []
+        prompt_versions = [_prompts.PROMPT_C_VERSION]
         if self.critic_enabled and effort_in["work_items"]:
-            n = self._apply_critic(work_order_text, requirements_view,
-                                   effort_in, review_reasons)
-            notes += n
+            notes += self._apply_critic(avatar_text, requirements_view,
+                                        effort_in, review_reasons)
             prompt_versions.append(_prompts.PROMPT_D_VERSION)
-
-        result = self._compute(effort_in, work_order_text, requirements_view,
+        result = self._compute(effort_in, avatar_text, requirements_view,
                                notes, review_reasons)
         result["prompt_versions"] = prompt_versions
+        result["input_mode"] = "avatar_description"
         result["mode"] = self.mode
+        return result
+
+    def estimate_from_requirements(self, requirements_output, source_text=""):
+        """공용 2단계 진입점: 외부 1단계 모듈이 만든 requirements.v1 JSON을 받아
+        Prompt B → Effort Engine을 실행한다.
+
+        트랜스크립트 케이스는 transcript_requirements.extract_requirements()로
+        1단계를 수행한 뒤 그 출력을 여기에 넘긴다 — 2단계부터는 아바타 케이스와
+        완전히 동일한 코드 경로다. source_text는 critic·estimate_id용 원문(선택).
+        """
+        parsed, notes, fatal = validate_requirements_output(
+            dict(requirements_output))
+        if fatal:
+            raise ValueError("requirements 입력 검증 실패: " + "; ".join(notes))
+        result = self._run_stage2(parsed, source_text, notes)
+        result["input_mode"] = requirements_output.get(
+            "input_mode", "external_requirements")
+        result["mode"] = "from_requirements"
+        return result
+
+    def _run_stage2(self, req_out, source_text, notes):
+        """공용 2단계: Prompt B(분해·매핑) [+ Pass D] → 결정론적 계산."""
+        effort_in, n = self._call_validated(
+            _prompts.build_prompt_b(req_out, self.catalog,
+                                    self.reference_worker, self.scope),
+            lambda raw: validate_effort_input(
+                raw, self.catalog, requirements_meta=req_out["requirements"]),
+            "Prompt B")
+        notes = notes + n
+        review_reasons = []
+        prompt_versions = [_prompts.PROMPT_B_VERSION]
+        if self.critic_enabled and effort_in["work_items"]:
+            notes += self._apply_critic(source_text, req_out["requirements"],
+                                        effort_in, review_reasons)
+            prompt_versions.append(_prompts.PROMPT_D_VERSION)
+        result = self._compute(effort_in, source_text, req_out["requirements"],
+                               notes, review_reasons)
+        result["prompt_versions"] = prompt_versions
         return result
 
     def _apply_critic(self, work_order_text, requirements_view, effort_in,

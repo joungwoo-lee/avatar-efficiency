@@ -324,7 +324,7 @@ _EFFORT_INPUT_SCHEMA = f"""{{
       "requirement_id": "R-001",
       "title": "string",
       "description": "string",
-      "status": "planned",
+      "status": "planned | delivered | partial",
       "evidence": [{{"source_id": "string", "locator": "string"}}],
       "confidence": "number 0..1"
     }}
@@ -383,10 +383,15 @@ def build_prompt_b(requirements_json, catalog, reference_worker, scope):
     return f"""당신은 Human Work Decomposer, Effort Method Router, Work Unit Mapper다.
 
 목표:
-입력된 Requirement JSON(status=planned, 업무 실행 전 산정)을 기준으로, 숙련 실무자가
-생성형 AI 없이 동일한 요청 범위와 품질을 만들기 위해 수행할 인간 작업(WBS)을
-복원한다. 각 leaf 작업을 허용된 Work Unit Catalog에 매핑하고 Effort Engine이 계산할
-JSON을 출력한다.
+입력된 Requirement JSON을 기준으로, 숙련 실무자가 생성형 AI 없이 동일한 범위와
+품질을 만들기 위해 수행할 인간 작업(WBS)을 복원한다. 각 leaf 작업을 허용된
+Work Unit Catalog에 매핑하고 Effort Engine이 계산할 JSON을 출력한다.
+
+산정 범위(status별):
+- planned: 요청 범위 전체를 산정한다 (실행 전 산정).
+- delivered: 완료 범위 전체를 산정한다.
+- partial: delivered_scope와 delivered_quantities에 명시된 완료 부분만 산정한다.
+- not_delivered, uncertain, rejected_or_superseded: 산정하지 않는다.
 
 {_MAPPING_RULES}
 

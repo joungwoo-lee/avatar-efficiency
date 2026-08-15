@@ -14,11 +14,22 @@
 → [코드] 견적`이다. 본 모듈은 **첫 단계만 아바타 특화로 교체**한 케이스:
 
 - 트랜스크립트 케이스(원안 Prompt A, §23): 수행된 일의 **복원** — 철회·대체 정리,
-  수행상태 판정 필요. 본 모듈 미사용.
+  수행상태(delivered/partial) 판정. **`transcript_requirements.py` 별도 1단계 모듈**로
+  제공 — `extract_requirements(llm, transcript)` → `estimate_from_requirements(req)`.
 - **아바타 케이스(본 모듈, Prompt A-avatar)**: 업무 정의의 **변환**. 아바타 입력의
   확정 의미(스킬=이미 존재하는 도구, 반복 업무 1회분, 명시 산출물만, 역할=기준 인물)를
   전제로 하므로 "자동화 → 시스템 구축" 같은 복원식 오해석이 끼어들 여지가 없다.
-- 이후 단계(Prompt B → Effort Engine)는 두 케이스 공용.
+- 이후 단계(Prompt B → Effort Engine)는 두 케이스 공용 —
+  `HumanEffortEstimator.estimate_from_requirements(requirements_v1_json)`이 공용 진입점.
+
+```python
+# 트랜스크립트 케이스 사용법 (1단계 모듈 → 공용 2단계)
+from transcript_requirements import extract_requirements
+from estimator import HumanEffortEstimator
+req, notes = extract_requirements(llm, transcript_text)      # 1단계: 복원 (§23)
+result = HumanEffortEstimator(llm).estimate_from_requirements(req, transcript_text)
+# status: delivered=전체, partial=완료범위만, not_delivered=제외 (§24)
+```
 
 ## 3계층 분리 (설계서 §1)
 
@@ -49,7 +60,9 @@
 estimator.py   오케스트레이터: Prompt A-avatar→B(기본, 2회) 또는 C(단일호출) → 검증 → 엔진
                critic=True 옵션: Pass D Consistency Critic(설계서 §7.1) 추가 —
                keep/drop/flag만 가능(부풀리기 불가), 기본 OFF
-prompts.py     Prompt A-avatar/A/B/C/D (Catalog는 시간정보 제거 뷰만 전달)
+prompts.py     Prompt A-avatar/B/C/D (Catalog는 시간정보 제거 뷰만 전달)
+transcript_requirements.py  1단계 모듈(트랜스크립트 케이스, 설계서 §23 Prompt A)
+               — extract_requirements() 출력이 estimate_from_requirements()로 연결
 engine.py      결정론적 Effort Engine: 분포 표본·검증·Monte Carlo·percentile
 catalog.json   Work Unit Catalog (expert seed, confidence C — calibration 대상)
 agent_path.py  agent/hitl 경로 산정 (doc/integ-spec.md §3 — primitive count × rates.json)

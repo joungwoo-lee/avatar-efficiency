@@ -418,6 +418,38 @@ class TestEstimatorFlow(unittest.TestCase):
         with self.assertRaises(ValueError):
             est.estimate(SPEC)
 
+    def test_estimate_from_requirements_shared_stage2(self):
+        # 공용 2단계 진입점: 외부 1단계(트랜스크립트 등) 출력 → B+엔진만 실행
+        llm = MockLLM()
+        est = HumanEffortEstimator(llm, trials=500, seed=42)
+        r = est.estimate_from_requirements(copy.deepcopy(REQ_OUT), SPEC)
+        self.assertEqual(len(llm.calls), 1)  # Prompt B만
+        self.assertEqual(r["mode"], "from_requirements")
+        self.assertGreater(r["effort"]["p50_minutes"], 0)
+        # 같은 requirements를 아바타 two_pass의 2단계에 넣은 것과 결과 동일해야 함
+        r2 = HumanEffortEstimator(MockLLM(), trials=500, seed=42).estimate(SPEC)
+        self.assertEqual(r["effort"], r2["effort"])
+
+    def test_estimate_from_requirements_rejects_garbage(self):
+        est = HumanEffortEstimator(MockLLM(), trials=200, seed=42)
+        with self.assertRaises(ValueError):
+            est.estimate_from_requirements({"requirements": []})
+
+    def test_transcript_extractor_module(self):
+        from transcript_requirements import (extract_requirements,
+                                             build_prompt_a_transcript)
+        prompt = build_prompt_a_transcript("사용자: 보고서 만들어줘\nAI: 완료했습니다")
+        self.assertIn("<TRANSCRIPT", prompt)
+        self.assertIn("Delivered Requirement Reconstruction Engine", prompt)
+        self.assertNotIn("time_model", prompt)
+        llm = MockLLM(queue=[copy.deepcopy(REQ_OUT)])
+        req, notes = extract_requirements(llm, "사용자: 보고서 만들어줘")
+        self.assertEqual(req["requirements"][0]["requirement_id"], "R-001")
+        # 추출 결과가 공용 2단계로 그대로 이어지는지
+        r = HumanEffortEstimator(MockLLM(), trials=200, seed=42) \
+            .estimate_from_requirements(req)
+        self.assertGreater(r["effort"]["p50_minutes"], 0)
+
     def test_recalculate_without_llm(self):
         est = HumanEffortEstimator(MockLLM(), trials=500, seed=42)
         r = est.estimate_from_effort_input(copy.deepcopy(EFFORT_OUT), SPEC)

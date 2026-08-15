@@ -30,7 +30,8 @@ git clone https://github.com/joungwoo-lee/avatar-efficiency.git   # 또는 기�
 (하이픈 아님, 언더스코어)** 이름의 폴더로 복사한다:
 
 ```
-estimator.py  engine.py  prompts.py  catalog.json     # human 경로 (v0.6)
+estimator.py  engine.py  prompts.py  catalog.json     # human 경로 (v0.6, 아바타 케이스)
+transcript_requirements.py                            # 1단계 모듈(트랜스크립트 케이스, §23)
 agent_path.py  rates.json                             # agent 경로 (integ-spec §3)
 compat.py  __init__.py  onprem_llm_sim.py
 ```
