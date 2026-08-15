@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """분모(agent_min) 계산 모듈 — README.md 방법론의 구현.
 
-speedup = human_min(분자, effort-estimator) ÷ agent_min(분모, 본 모듈)
+speedup = human_min(분자, ../human-effort) ÷ agent_min(분모, 본 모듈)
 
 방식 (구 방식 그대로):
   LLM 1회 호출 → agent(기계) + hitl(사람감독) primitive count 분해
@@ -230,7 +230,7 @@ def main(argv):
         print("usage: python agent_effort.py <spec.txt> [--json]", file=sys.stderr)
         return 2
     spec_text = Path(args[0]).read_text(encoding="utf-8")
-    sys.path.insert(0, str(_HERE.parent / "effort-estimator"))
+    sys.path.insert(0, str(_HERE.parent / "human-effort"))
     from onprem_llm_sim import OnpremLLM
     r = estimate_agent_min(OnpremLLM(), spec_text)
     if "--json" in argv:
