@@ -179,6 +179,26 @@ class TestEngine(unittest.TestCase):
             {"distribution": "discrete", "values": [1, 2], "probabilities": [0.5, 0.5],
              "unit": "x"}))
 
+    def test_lightweight_units_exist_and_small(self):
+        # 소형 업무 과잉산정 방지 — 경량 단위 6종 존재 + mode ≤ 10분
+        for wu_id in ("research.document_skim", "research.quick_lookup",
+                      "writing.short_message", "writing.quick_edit",
+                      "analysis.quick_calculation", "office.simple_operation"):
+            self.assertIn(wu_id, CATALOG["work_units"], wu_id)
+            self.assertLessEqual(CATALOG["work_units"][wu_id]["time_model"]["mode"], 10)
+
+    def test_small_task_sane_minutes(self):
+        # 회귀: 메일 회신급 소형 업무(훑어읽기 1 + 단문 1)가 한 자릿수~수십분대인지
+        items = [
+            _item("W-1", "research.document_skim",
+                  {"distribution": "point", "value": 1, "unit": "document"}),
+            _item("W-2", "writing.short_message",
+                  {"distribution": "point", "value": 1, "unit": "message"}),
+        ]
+        r = engine.compute_effort(items, CATALOG, trials=1000, seed=1)
+        self.assertGreater(r["p50_minutes"], 5)
+        self.assertLess(r["p80_minutes"], 40)
+
     def test_forbidden_key_strip(self):
         notes = []
         obj = {"work_items": [{"work_unit_id": "a", "minutes": 5,
@@ -210,6 +230,35 @@ class TestValidation(unittest.TestCase):
         self.assertFalse(fatal)
         self.assertEqual(len(parsed["work_items"]), 4)
         self.assertTrue(any("수량 불량" in u["reason"] for u in parsed["unmapped_items"]))
+
+    def test_conflicting_units_deduped(self):
+        # 회귀: 같은 요구사항에 short_message + section_draft/edit 중복 계상 시 제거
+        raw = copy.deepcopy(EFFORT_OUT)
+        raw["work_items"] = [
+            _item("W-1", "writing.short_message",
+                  {"distribution": "point", "value": 1, "unit": "message"}),
+            _item("W-2", "writing.section_draft",
+                  {"distribution": "point", "value": 2, "unit": "section"}),
+            _item("W-3", "writing.edit_proofread",
+                  {"distribution": "point", "value": 1, "unit": "page"}),
+        ]
+        parsed, notes, fatal = validate_effort_input(raw, CATALOG)
+        self.assertFalse(fatal)
+        kept = [it["work_item_id"] for it in parsed["work_items"]]
+        self.assertEqual(kept, ["W-1"])
+        self.assertTrue(any("중복 계상" in n for n in notes))
+
+    def test_unit_mismatch_goes_unmapped(self):
+        # 회귀: message 단위 Work Unit에 단어수 200을 넣는 인플레이션 차단
+        raw = copy.deepcopy(EFFORT_OUT)
+        raw["work_items"].append(_item(
+            "W-MISMATCH", "writing.short_message",
+            {"distribution": "point", "value": 200, "unit": "word"}))
+        parsed, notes, fatal = validate_effort_input(raw, CATALOG)
+        self.assertFalse(fatal)
+        self.assertTrue(any(u["work_item_id"] == "W-MISMATCH"
+                            and "단위 불일치" in u["reason"]
+                            for u in parsed["unmapped_items"]))
 
     def test_forbidden_time_fields_stripped_and_noted(self):
         raw = copy.deepcopy(EFFORT_OUT)
@@ -360,12 +409,32 @@ class TestCompat(unittest.TestCase):
         self.assertGreater(r["human_min"], 0)
 
 
+MAIL_SPEC = """업무 제목: 메일 회신 초안 작성
+소속 역할: PM
+할 일: 첨부 보고서(약 800단어) 검토 후 부서장 승인 요청 회신(200단어 내외) 작성
+완료조건: 회신 1건 발송 준비 완료
+연결된 스킬: mail-draft, summarize"""
+
+
 def _live():
     from onprem_llm_sim import OnpremLLM
     from estimator import format_report
     est = HumanEffortEstimator(OnpremLLM())
     result = est.estimate(SPEC)
     print(format_report(result))
+
+    # 인플레이션 회귀: 소형 업무(메일 회신)가 숙련자+일반도구 기준 상식 범위인지
+    print("\n--- inflation regression (mail spec) ---")
+    r = HumanEffortEstimator(OnpremLLM()).estimate(MAIL_SPEC)
+    p50 = r["effort"]["p50_minutes"]
+    n_items = len(r["work_items"])
+    ok = 5 <= p50 <= 90 and n_items <= 5
+    print(f"P50={p50} min, work_items={n_items} "
+          f"→ {'PASS' if ok else 'FAIL'} (기대: 5~90 min, ≤5 items)")
+    if not ok:
+        for c in r["item_contributions"]:
+            print(f"  {c['work_item_id']} {c['work_unit_id']}: {c['mean_minutes']} min")
+    assert ok, f"소형 업무 인플레이션 회귀 실패: P50={p50}, items={n_items}"
 
 
 if __name__ == "__main__":

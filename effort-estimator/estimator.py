@@ -126,6 +126,13 @@ def validate_effort_input(raw, catalog):
         if qty_err:
             _to_unmapped(f"수량 불량: {qty_err}")
             continue
+        # 단위 불일치 = 시간 폭증/붕괴 직결 (예: message 단위에 단어수 200) — 산정 금지
+        cat_unit = str(work_units[wu_id].get("unit", "")).strip().lower()
+        qty_unit = str(item["quantity"].get("unit", "")).strip().lower()
+        if qty_unit and cat_unit and qty_unit != cat_unit:
+            _to_unmapped(f"수량 단위 불일치: quantity.unit='{qty_unit}' ≠ "
+                         f"Work Unit unit='{cat_unit}'")
+            continue
         if not item.get("evidence"):
             notes.append(f"{item_id}: 증거 없음 (추적성 저하)")
         valid_items.append(item)
@@ -133,9 +140,37 @@ def validate_effort_input(raw, catalog):
     if not valid_items and not unmapped:
         return None, notes + ["유효 work_item 0개"], True
 
+    valid_items = _resolve_unit_conflicts(valid_items, work_units, notes)
     raw["work_items"] = valid_items
     raw["unmapped_items"] = unmapped
     return raw, notes, False
+
+
+def _resolve_unit_conflicts(items, work_units, notes):
+    """Catalog의 conflicts_with 강제 (설계서 §6.2 단위 배타성).
+
+    어떤 Work Unit이 conflicts_with를 선언하면, 같은 requirement를 공유하는
+    충돌 단위 Work Item은 중복 계상으로 보고 제거한다(선언한 경량 단위가 노동을
+    이미 포함). 예: writing.short_message가 있는 요구사항에 section_draft·
+    edit_proofread를 얹으면 얹힌 쪽이 제거된다.
+    """
+    drop_ids = set()
+    for item in items:
+        conflicts = set(work_units[item["work_unit_id"]].get("conflicts_with", []))
+        if not conflicts:
+            continue
+        reqs = set(item.get("requirement_ids", []))
+        for other in items:
+            if other is item or other["work_item_id"] in drop_ids:
+                continue
+            if other["work_unit_id"] in conflicts and \
+                    reqs & set(other.get("requirement_ids", [])):
+                drop_ids.add(other["work_item_id"])
+                notes.append(
+                    f"{other['work_item_id']}: {other['work_unit_id']}가 "
+                    f"{item['work_unit_id']}({item['work_item_id']})와 동일 요구사항에서 "
+                    f"중복 계상 — 제거(카탈로그 conflicts_with)")
+    return [it for it in items if it["work_item_id"] not in drop_ids]
 
 
 # ---------------------------------------------------------------- 산정기
