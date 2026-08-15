@@ -1,26 +1,21 @@
 # -*- coding: utf-8 -*-
-"""구 시스템(mm_app counterfactual.py CounterfactualEstimator) drop-in 호환 어댑터.
+"""구 시스템(mm_app counterfactual.py CounterfactualEstimator) 호환 어댑터.
 
 구 계약:
     CounterfactualEstimator.estimate_task(title, context, role, skill_names, detail) -> dict
     반환 키: error, human_min, agent_min, agent_human_min, agent_ai_min,
              saved_min, speedup, human_breakdown, agent_breakdown, rationale
 
-매핑 (신규 EffortEstimator 출력 기준):
-    agent_ai_min    = agent.machine.minutes   (기계 활성시간, ai_io 포함)
-    agent_human_min = agent.hitl.minutes      (감독 + 잔여 직접작업)
-    agent_min       = agent.minutes           (= machine + hitl)
-    saved_min       = human_min - agent_min   (구 예시 수치 기준: 12.5-4.2=8.3)
-    speedup         = human_min / agent_min   (구 예시 수치 기준: 12.5/4.2=2.98)
-    breakdown       = primitive -> minutes flat map (machine·hitl 동명 primitive는 합산)
-    agent_breakdown["ai_io"] = {"input_words", "output_words", "minutes"}
-
-예외를 raise하지 않는다 — 실패 시 error 필드에 문자열, 수치는 None.
+주의 — 방법론 변경 (doc/requirement_based_human_effort_service_design.md v0.5):
+    신규 산정기는 Human-Equivalent Effort(P50/P80)만 산출한다. agent/machine/hitl
+    경로 산정은 신규 방법론의 범위 밖(비목표 §2.3)이므로 agent_min, agent_human_min,
+    agent_ai_min, saved_min, speedup은 None으로 반환한다. 소비 측은 human_min
+    (P50 분)과 부가 필드 human_p80_min만 사용할 것.
 """
 try:  # 패키지로 복사된 경우 (effort_estimator/)
-    from .estimator import EffortEstimator, DEFAULT_RATES_PATH
+    from .estimator import HumanEffortEstimator, DEFAULT_CATALOG_PATH
 except ImportError:  # 폴더를 직접 sys.path에 놓고 쓰는 경우 (개발·테스트)
-    from estimator import EffortEstimator, DEFAULT_RATES_PATH
+    from estimator import HumanEffortEstimator, DEFAULT_CATALOG_PATH
 
 _SPEC_TEMPLATE = """업무 제목: {title}
 업무 맥락: {context}
@@ -37,18 +32,11 @@ _ERROR_RESULT = {
 }
 
 
-def _flat(breakdown):
-    """[{primitive, minutes}, ...] -> {primitive: minutes} (동명 합산)."""
-    out = {}
-    for b in breakdown:
-        out[b["primitive"]] = round(out.get(b["primitive"], 0.0) + b["minutes"], 2)
-    return out
-
-
 class CounterfactualEstimator:
     """실환경에서는 llm에 실물 OnpremLLM 인스턴스를 명시 주입할 것. 미지정 시 시뮬레이터."""
 
-    def __init__(self, llm=None, rates_path=DEFAULT_RATES_PATH, max_tokens=2000):
+    def __init__(self, llm=None, catalog_path=DEFAULT_CATALOG_PATH, max_tokens=6000,
+                 mode="two_pass"):
         if llm is None:
             # 실환경 경로(mm_app/onprem-llm)는 하이픈 폴더라 자동 import 불가 —
             # 실환경에서는 반드시 llm을 명시 주입할 것. 미주입 시 시뮬레이터 사용.
@@ -57,7 +45,8 @@ class CounterfactualEstimator:
             except ImportError:
                 from onprem_llm_sim import OnpremLLM
             llm = OnpremLLM()
-        self._est = EffortEstimator(llm, rates_path=rates_path, max_tokens=max_tokens)
+        self._est = HumanEffortEstimator(llm, catalog_path=catalog_path,
+                                         max_tokens=max_tokens, mode=mode)
 
     def estimate_task(self, title, context, role, skill_names, detail):
         try:
@@ -68,28 +57,25 @@ class CounterfactualEstimator:
         except Exception as e:  # LLM 통신 실패·2회 검증 실패 등 — 구 계약대로 error 필드로
             return dict(_ERROR_RESULT, error=f"{type(e).__name__}: {e}")
 
-        human_min = r["human_only"]["minutes"]
-        machine = r["agent"]["machine"]
-        hitl = r["agent"]["hitl"]
-        agent_min = r["agent"]["minutes"]
-
-        agent_bd = _flat(machine["breakdown"])
-        for name, minutes in _flat(hitl["breakdown"]).items():
-            agent_bd[name] = round(agent_bd.get(name, 0.0) + minutes, 2)
-        agent_bd["ai_io"] = machine["ai_io"]
-
+        breakdown = {c["work_unit_id"]: c["mean_minutes"]
+                     for c in r["item_contributions"]}
+        rationale = "; ".join(f"{q['requirement_id']} {q['title']}"
+                              for q in r["requirements"])
         return {
             "error": None,
-            "human_min": human_min,
-            "agent_min": agent_min,
-            "agent_human_min": hitl["minutes"],
-            "agent_ai_min": machine["minutes"],
-            "saved_min": round(human_min - agent_min, 2),
-            "speedup": round(human_min / agent_min, 2) if agent_min > 0 else None,
-            "human_breakdown": _flat(r["human_only"]["breakdown"]),
-            "agent_breakdown": agent_bd,
-            "rationale": r["rationale"],
+            "human_min": r["effort"]["p50_minutes"],
+            "agent_min": None,          # 신규 방법론 범위 밖 (docstring 참조)
+            "agent_human_min": None,
+            "agent_ai_min": None,
+            "saved_min": None,
+            "speedup": None,
+            "human_breakdown": breakdown,
+            "agent_breakdown": {},
+            "rationale": rationale,
             # 구 스키마 외 부가 정보 (무시해도 무방, 저장 권장)
+            "human_p80_min": r["effort"]["p80_minutes"],
+            "estimate_id": r["estimate_id"],
+            "catalog_version": r["catalog_version"],
             "confidence": r["confidence"],
-            "confidence_notes": r["confidence_notes"],
+            "warnings": r["warnings"] + r["notes"],
         }
