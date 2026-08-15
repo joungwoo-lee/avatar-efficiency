@@ -52,7 +52,7 @@ class TestCompat(unittest.TestCase):
         self.assertGreater(r["human_min"], 0)
         self.assertGreaterEqual(r["human_p80_min"], r["human_min"])
         self.assertAlmostEqual(r["agent_ai_min"], 1.69, places=2)
-        self.assertAlmostEqual(r["agent_human_min"], 5.2, places=2)
+        self.assertAlmostEqual(r["agent_human_min"], 3.9, places=2)
         self.assertAlmostEqual(
             r["agent_min"], r["agent_human_min"] + r["agent_ai_min"], places=2)
         self.assertAlmostEqual(r["saved_min"], r["human_min"] - r["agent_min"], places=2)

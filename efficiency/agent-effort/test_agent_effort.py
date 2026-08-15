@@ -32,11 +32,11 @@ class TestAgentEffort(unittest.TestCase):
     def test_math_hand_check(self):
         # 기계: read 800×0.0005 + draft 200×0.002 + verify 1×0.5 = 1.3
         # ai_io: 900×0.00002 + 250×0.0015 = 0.39 → agent_ai = 1.69
-        # hitl: 3.0 + 200×0.006 + 1.0 = 5.2 → agent_min = 6.89
+        # hitl: instruct 1×1.7(실측 평균) + 200×0.006 + 1.0 = 3.9 → agent_min = 5.59
         r = estimate_agent_min(MockLLM(), "spec")
         self.assertAlmostEqual(r["agent_ai_min"], 1.69, places=2)
-        self.assertAlmostEqual(r["agent_human_min"], 5.2, places=2)
-        self.assertAlmostEqual(r["agent_min"], 6.89, places=2)
+        self.assertAlmostEqual(r["agent_human_min"], 3.9, places=2)
+        self.assertAlmostEqual(r["agent_min"], 5.59, places=2)
 
     def test_speedup_definition(self):
         # 사람이 AI 없이 100분, AI 써서 10분 → 효율 10배
@@ -94,9 +94,9 @@ class TestTranscriptActual(unittest.TestCase):
             self.assertEqual(c["interrupts"], 1)
             m = actual_effort_minutes(c)
             # machine = 1×0.3 + 100×0.0005 + 20×0.002 = 0.39
-            # hitl = 2×3.0 + 20×0.006 + 1×4.0 = 10.12
+            # hitl(보정 모델) = 2건×(0.5+0.05×2단어) + 20×0.006 + 1×4.0 = 5.32
             self.assertAlmostEqual(m["machine_min"], 0.39, places=2)
-            self.assertAlmostEqual(m["hitl_min"], 10.12, places=2)
+            self.assertAlmostEqual(m["hitl_min"], 5.32, places=2)
             self.assertEqual(m["total_min"],
                              actual_effort_minutes(parse_actions(p))["total_min"])
         finally:

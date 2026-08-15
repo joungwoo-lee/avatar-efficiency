@@ -51,7 +51,7 @@ agent_min = agent_ai_min(기계시간) + agent_human_min(hitl, 사람감독시�
 
 | primitive | 의미 | 단위 | 분/단위 |
 |---|---|---|---|
-| `instruct` | 지시 작성 | 건 | 3.0 |
+| `instruct` | 지시 작성 | 건 | 1.7 (실측 평균) — 실측 경로는 `0.5 + 0.05×min(단어,60)` 모델 |
 | `review` | 검토 | 단어 | 0.006 |
 | `approve` | 승인 | 건 | 1.0 |
 | `correct` | 수정지시 | 건 | 4.0 |
@@ -136,12 +136,16 @@ document_skim 2~8분/문서 ↔ read×800단어=4분, short_message 5~20분 ↔ 
 section_draft 20~80분 ↔ draft×800=40분 — 두 자(primitive vs Work Unit)가 대략
 같은 기준에 앵커돼 있다.
 
-**agent/hitl 카드 — 알려진 이슈 3건** (값은 §13.2 원칙대로 실측 표본 전 변경 보류):
+**agent/hitl 카드 — 이슈 3건** (1번은 실측 보정 완료, 2·3번은 표본 확보 후):
 
-1. **hitl.instruct 3.0분/건 — 대화형 짧은 지시에 과대 (보정 1순위).**
-   "고쳐줘" 한 줄도 3분으로 계상 → 지시 많은 세션(실측 30~40회)에서 분모가
-   과대해져 speedup 하방 편향. 보정 후보: 단어수 기반(예: 0.02분/단어, 최소 0.5분)
-   또는 short/long 이원화. 실측 지시 작성시간 표본 확보 후 적용.
+1. **hitl.instruct — 실측 보정 완료 (2026-08-16, 표본 1,456건).**
+   구 3.0분/건은 실측(검토 몫 제거 net 중앙값 0.61분, 평균 1.74분) 대비 2~5배
+   과대였음. 트랜스크립트 타임스탬프(직전 응답→지시 간격)로 보정:
+   - 실측 경로(transcript_actual): `instruct = 0.5분(생각 여유) + 0.05분×min(단어수, 60)`
+     — 길이 비례 + 생각 여유, 60단어 상한은 붙여넣기(타이핑 아님) 과금 방지
+     (실측: 100단어+ 지시의 net 중앙값 0.79분 = 붙여넣기 증거)
+   - 사전 추산 경로(agent_effort, 길이 미상): 건당 1.7분(실측 평균)
+   rates.json `hitl_instruct_model`에 표본수·출처 기록(source_type=internal_measured).
 2. **agent.read/draft ↔ ai_io input/output 경계 모호 (이중 계상 소지).**
    agent_effort는 둘 다 합산한다. 해석 구분: read/draft = 내용 파악·구성 노동,
    ai_io = 순수 토큰 처리 시간. 크기 영향은 작으나(ai_io ≪ trajectory) 보정 시

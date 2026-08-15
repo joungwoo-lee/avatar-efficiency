@@ -61,6 +61,7 @@ def parse_actions(jsonl_path):
     """
     counts = {"tool_calls": 0, "tool_result_words": 0, "assistant_words": 0,
               "user_instructions": 0, "user_words": 0, "interrupts": 0,
+              "instruction_word_list": [],
               "session_id": None, "first_ts": None, "last_ts": None}
     with open(jsonl_path, encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -108,7 +109,9 @@ def parse_actions(jsonl_path):
                     counts["interrupts"] += 1
                 else:
                     counts["user_instructions"] += 1
-                    counts["user_words"] += _words(human_text)
+                    w = _words(human_text)
+                    counts["user_words"] += w
+                    counts["instruction_word_list"].append(w)
     return counts
 
 
@@ -123,8 +126,16 @@ def actual_effort_minutes(counts, rates=None):
         "read": counts["tool_result_words"] * a["read"]["min_per_unit"],
         "draft": counts["assistant_words"] * a["draft"]["min_per_unit"],
     }
+    im = r.get("hitl_instruct_model")
+    if im:  # 실측 보정 모델: base + per_word×min(단어수, cap) — 붙여넣기 과금 방지
+        wl = counts.get("instruction_word_list") or              [0] * counts["user_instructions"]
+        instruct_min = sum(im["base_min"]
+                           + im["per_word_min"] * min(w, im["word_cap"])
+                           for w in wl)
+    else:  # 폴백: 건당 평균 요율
+        instruct_min = counts["user_instructions"] * h["instruct"]["min_per_unit"]
     hitl = {
-        "instruct": counts["user_instructions"] * h["instruct"]["min_per_unit"],
+        "instruct": instruct_min,
         "review": counts["assistant_words"] * h["review"]["min_per_unit"],
         "correct": counts["interrupts"] * h["correct"]["min_per_unit"],
     }
