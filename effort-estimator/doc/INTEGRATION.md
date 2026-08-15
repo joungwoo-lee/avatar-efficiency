@@ -198,6 +198,11 @@ r["item_contributions"], r["unscored_items"], r["warnings"]
 
 # Review Studio식 수정 후 재계산 (LLM 미호출, 결정론적)
 r2 = est.estimate_from_effort_input(edited_effort_engine_input_json)
+
+# 트랜스크립트 케이스 (1단계 별도 모듈 → 공용 2단계)
+from effort_estimator import extract_requirements
+req, notes = extract_requirements(llm, transcript_text)   # §23 복원: 철회 정리·상태 판정
+r3 = est.estimate_from_requirements(req, transcript_text) # 2단계부터 아바타와 동일 경로
 ```
 
 검증 2회 실패 시 `ValueError` raise (compat과 달리 예외 사용).

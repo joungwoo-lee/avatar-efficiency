@@ -105,12 +105,29 @@ Critic이 수량 불일치("로그 6건 ≠ 명시 5건")·중복 의심을 일�
 simple_operation)을 두고, 프롬프트가 경량 우선을 지시하며, 정의문에 경량↔중량 경계를
 명시한다.
 
-## 3. 실행 모드
+## 3. 실행 구조 — 1단계 입력별 분리, 2단계부터 공용
 
+```
+[1단계 — 입력별 모듈]
+  아바타 디스크립션:  Prompt A-avatar (prompts.py)               ┐
+  트랜스크립트:       transcript_requirements.py (설계서 §23)     ┴→ requirements.v1
+[공용 진입점]  HumanEffortEstimator.estimate_from_requirements(req)
+[2단계]  Prompt B — 인간 WBS 분해·Work Unit 매핑 (status별 산정 범위: planned=요청
+         전체, delivered=완료 전체, partial=완료 부분만, 그 외 제외 — §24)
+[3단계]  결정론적 엔진 — Monte Carlo → P50/P80
+```
+
+한 케이스의 1단계를 다른 케이스에 유용하지 않는다 — 복원 로직(트랜스크립트용)을
+업무 정의(아바타)에 적용한 것이 §2.3의 오해석 사고 원인이었다. 아바타 two_pass의
+내부도 동일한 `_run_stage2()`를 타므로, 같은 requirements 입력이면 어느 경로든
+결과가 동일하다(테스트로 고정).
+
+실행 모드:
 - **two_pass (기본)**: Prompt A-avatar(요구사항 변환) → Prompt B(분해·매핑). 단계별 감사·재처리
   가능. 각 호출 검증 실패 시 1회 자동 재시도.
 - **single**: Prompt C 단일호출. 저지연·대량 배치용. 두 모드는 산정 편향이 다르므로
   혼용하지 않고 하나로 고정할 것.
+- **from_requirements**: 외부 1단계 모듈 출력으로 2단계부터 실행 (트랜스크립트 케이스 경로).
 
 ## 4. 불확실성 표현
 
