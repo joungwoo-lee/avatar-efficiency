@@ -84,7 +84,7 @@ integ-spec §4~5 그대로 무수정.
 
 ```bash
 # 4-1. 오프라인 단위테스트 (네트워크·LLM 불필요, mock)
-cd effort_estimator && python test_estimator.py        # "OK" (27 tests) 확인
+cd effort_estimator && python test_estimator.py        # "OK" 확인
 ```
 
 ```python

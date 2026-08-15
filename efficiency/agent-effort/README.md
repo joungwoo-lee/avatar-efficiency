@@ -127,6 +127,31 @@ speedup(human_min, r["agent_min"])       # = human_min / agent_min
 LLM 백엔드는 cursor-proxy(127.0.0.1:18741) — `../human-effort/onprem_llm_sim.py`
 계약(`complete_json(prompt, max_tokens) -> dict`)과 동일.
 
+## 요율 합당성 리뷰 (2026-08-16, 실측 보정 전 seed 평가)
+
+**human 카드 — 전반 합당.** 통상 인간 작업속도 범위와 일치:
+read 0.005분/단어=정독 200단어/분, draft 0.05분/단어=초안 20단어/분(생각하며 작성),
+edit 50단어/분, execute 2분/조작, verify 3분/증거. **catalog.json과 교차 정합 확인**:
+document_skim 2~8분/문서 ↔ read×800단어=4분, short_message 5~20분 ↔ draft×200=10분,
+section_draft 20~80분 ↔ draft×800=40분 — 두 자(primitive vs Work Unit)가 대략
+같은 기준에 앵커돼 있다.
+
+**agent/hitl 카드 — 알려진 이슈 3건** (값은 §13.2 원칙대로 실측 표본 전 변경 보류):
+
+1. **hitl.instruct 3.0분/건 — 대화형 짧은 지시에 과대 (보정 1순위).**
+   "고쳐줘" 한 줄도 3분으로 계상 → 지시 많은 세션(실측 30~40회)에서 분모가
+   과대해져 speedup 하방 편향. 보정 후보: 단어수 기반(예: 0.02분/단어, 최소 0.5분)
+   또는 short/long 이원화. 실측 지시 작성시간 표본 확보 후 적용.
+2. **agent.read/draft ↔ ai_io input/output 경계 모호 (이중 계상 소지).**
+   agent_effort는 둘 다 합산한다. 해석 구분: read/draft = 내용 파악·구성 노동,
+   ai_io = 순수 토큰 처리 시간. 크기 영향은 작으나(ai_io ≪ trajectory) 보정 시
+   통합 검토 대상.
+3. agent.search 0.5분/쿼리는 API 호출 자체(수 초)가 아니라 결과 스캔 포함 가정 —
+   정의 주석으로 명확화 필요.
+
+human↔agent 배율(read 10배, draft 25배, execute ~7배)은 "AI가 왜 빠른가"의 seed
+가정치이며 실측 근거 없음(confidence C) — 절대값 주장에 쓰지 말 것.
+
 ## 요율 보정
 
 `rates.json`만 수정 (cold-start seed, confidence C). 실측 trajectory가 쌓이면 교체.

@@ -49,7 +49,7 @@ LLM 백엔드: cursor-proxy(127.0.0.1:18741), 계약 `complete_json(prompt, max_
 ## 테스트
 
 ```bash
-cd human-effort && python test_estimator.py          # 30종 (+ --live)
+cd human-effort && python test_estimator.py          # 33종 (+ --live)
 cd agent-effort && python test_agent_effort.py       # 6종
 cd counterfactual-api && python test_compat.py       # 4종
 cd session-api && python test_session_api.py         # 4종

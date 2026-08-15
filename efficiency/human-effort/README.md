@@ -98,6 +98,10 @@ result["effort"]["p50_minutes"], result["effort"]["p80_minutes"]
 
 # Review Studio 수정 후 재계산 (LLM 미호출, 재현 가능)
 est.estimate_from_effort_input(edited_effort_engine_input)
+
+# 구버전(Phase1) 분자 — 교차확인용 (LLM 1회, primitive×human 요율)
+from primitive_effort import estimate_human_min
+estimate_human_min(llm, spec_text)["human_min"]
 ```
 
 ## 실환경(mm_app) 연결

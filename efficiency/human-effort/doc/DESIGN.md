@@ -117,6 +117,12 @@ simple_operation)을 두고, 프롬프트가 경량 우선을 지시하며, 정�
 [3단계]  결정론적 엔진 — Monte Carlo → P50/P80
 ```
 
+분자 대안 자(교차확인용): `primitive_effort.py` — 구버전(Phase1) 방식.
+LLM 1회가 human 경로를 primitive 행동+count로 분해하고(사람 경로를 독립 구성,
+AI 시행착오 추종 금지 규칙) rates.json human 카드 요율을 단순 곱셈.
+Monte Carlo·Work Unit 없음. v0.6과 값이 다르며(자가 다름) 괴리가 큰 케이스는
+사람 검토 트리거로 활용.
+
 한 케이스의 1단계를 다른 케이스에 유용하지 않는다 — 복원 로직(트랜스크립트용)을
 업무 정의(아바타)에 적용한 것이 §2.3의 오해석 사고 원인이었다. 아바타 two_pass의
 내부도 동일한 `_run_stage2()`를 타므로, 같은 requirements 입력이면 어느 경로든
@@ -161,6 +167,7 @@ rates.json)을 유지해 채운다:
 
 ## 7. 검증 체계
 
-- 오프라인 27종 (mock): 엔진 결정성, P80≥P50, tier·parameter 효과, 단위 불일치 차단,
-  conflicts 중복 제거, 금지필드 제거, 재시도, 요율 미노출, compat 키·수치검산.
+- 오프라인 33종 (mock): 엔진 결정성, P80≥P50, tier·parameter 효과, 단위 불일치 차단,
+  conflicts 중복 제거, 금지필드 제거, 재시도, 요율 미노출, 공용 2단계 경로 동일성,
+  구버전 primitive 수기검산. (compat 검증은 ../../counterfactual-api/test_compat.py)
 - `--live`: 프록시 실호출 + 소형 업무 인플레이션 회귀(메일 스펙 P50 5~90분, ≤5 items).
