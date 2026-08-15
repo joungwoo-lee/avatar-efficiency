@@ -158,3 +158,73 @@ def extract_requirements(llm, transcript_text, artifact_context=None,
         if fatal:
             raise ValueError("트랜스크립트 요구사항 추출 2회 실패: " + "; ".join(notes))
     return parsed, notes
+
+
+# ---------------------------------------------------------------- 정규화
+
+def normalize_claude_code_jsonl(jsonl_path, max_chars=12000):
+    """Claude Code 세션 JSONL → 요구사항 추출용 압축 이벤트 텍스트 (단계 0, 설계서 §4.1).
+
+    포함: 사용자 지시 전문(개별 1500자 절단), 최종 assistant 응답(2000자),
+          파일 산출물 경로, 도구 사용 통계. thinking·중간 도구결과는 제외.
+    """
+    import json as _json
+    user_events = []
+    last_assistant_text = ""
+    file_ops = []
+    tool_counts = {}
+    with open(jsonl_path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = _json.loads(line)
+            except _json.JSONDecodeError:
+                continue
+            if not isinstance(rec, dict) or rec.get("isMeta"):
+                continue
+            rtype = rec.get("type")
+            msg = rec.get("message") or {}
+            content = msg.get("content")
+            if isinstance(content, str):
+                blocks = [{"type": "text", "text": content}]
+            elif isinstance(content, list):
+                blocks = content
+            else:
+                blocks = []
+            if rtype == "user":
+                text = " ".join(b.get("text", "") for b in blocks
+                                if isinstance(b, dict) and b.get("type") == "text").strip()
+                if text and not text.startswith("[Request interrupted"):
+                    user_events.append(text[:1500])
+            elif rtype == "assistant":
+                texts = []
+                for b in blocks:
+                    if not isinstance(b, dict):
+                        continue
+                    if b.get("type") == "tool_use":
+                        name = b.get("name", "?")
+                        tool_counts[name] = tool_counts.get(name, 0) + 1
+                        if name in ("Write", "Edit", "NotebookEdit"):
+                            fp = (b.get("input") or {}).get("file_path")
+                            if fp and fp not in file_ops:
+                                file_ops.append(fp)
+                    elif b.get("type") == "text":
+                        texts.append(b.get("text", ""))
+                if texts:
+                    last_assistant_text = " ".join(texts).strip()
+
+    lines = []
+    for i, t in enumerate(user_events, 1):
+        lines.append(f"[event:U{i}] 사용자 지시: {t}")
+    if last_assistant_text:
+        lines.append(f"[event:FINAL] AI 최종 응답: {last_assistant_text[:2000]}")
+    if file_ops:
+        lines.append("[산출물 파일] " + ", ".join(file_ops[:30]))
+    if tool_counts:
+        stat = ", ".join(f"{k}x{v}" for k, v in
+                         sorted(tool_counts.items(), key=lambda x: -x[1])[:12])
+        lines.append(f"[도구 사용 통계] {stat}")
+    text = "\n".join(lines)
+    return text[:max_chars]
