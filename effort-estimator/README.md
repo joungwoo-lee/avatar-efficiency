@@ -1,7 +1,8 @@
 # effort-estimator — 요구사항 기반 Human-Equivalent Effort 산정기
 
-방법론: [doc/requirement_based_human_effort_service_design.md](doc/requirement_based_human_effort_service_design.md) (v0.5)
-— 구 설계(doc/DESIGN.md, doc/INTEGRATION.md, primitive×요율 방식)는 이 문서로 대체됨.
+방법론: [doc/requirement_based_human_effort_service_design.md](doc/requirement_based_human_effort_service_design.md) (v0.6)
+· 설계 근거: [doc/DESIGN.md](doc/DESIGN.md) · 통합 런북: [doc/INTEGRATION.md](doc/INTEGRATION.md)
+· 구 API 계약: [doc/integ-spec.md](doc/integ-spec.md)
 
 **입력**: `할일+역할+업무상세+스킬` 작업 지침서 자유 텍스트 (**업무 실행 전**)
 **출력**: 숙련자가 생성형 AI 없이 동일 결과를 만들 때의 Human-Equivalent Effort
@@ -40,7 +41,7 @@ catalog.json   Work Unit Catalog (expert seed, confidence C — calibration 대�
 agent_path.py  agent/hitl 경로 산정 (doc/integ-spec.md §3 — primitive count × rates.json)
 rates.json     agent 경로 요율표 (integ-spec §3 계약, 프롬프트 미노출)
 compat.py      구 시스템(CounterfactualEstimator.estimate_task) drop-in 어댑터
-               — human_min은 v0.5 엔진 P50, agent_min 계열은 agent_path 산정 (integ-spec 완전 준수)
+               — human_min은 v0.6 엔진 P50, agent_min 계열은 agent_path 산정 (integ-spec 완전 준수)
 onprem_llm_sim.py  OnpremLLM.complete_json(prompt, max_tokens)->dict 시뮬 (cursor-proxy)
 test_estimator.py  단위테스트(mock) + --live 프록시 실호출
 examples/      샘플 작업 지침서
@@ -77,8 +78,9 @@ est.estimate_from_effort_input(edited_effort_engine_input)
 
 구 계약 소비자는 `compat.CounterfactualEstimator.estimate_task` 그대로 사용
 (doc/integ-spec.md §2/§6 완전 준수 — `analysis_cf.py`/`server.py` 무수정 drop-in).
-`human_min`=v0.5 P50, `agent_min`=machine+hitl 수치, `speedup`·`saved_min` 계산됨.
-human 쪽 방법론 상향으로 speedup이 구보다 계통적으로 커짐 — 해석 기준 갱신 필요.
+`human_min`=v0.6 P50, `agent_min`=machine+hitl 수치, `speedup`·`saved_min` 계산됨.
+human 쪽만 방법론이 바뀌어 정식 산출물 업무의 speedup이 구보다 커지는 경향 —
+대시보드 해석 기준 갱신 필요 (doc/INTEGRATION.md 구 대비 표 참조).
 
 ## 한계 (Phase A~B 수준)
 

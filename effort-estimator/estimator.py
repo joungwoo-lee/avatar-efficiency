@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """요구사항 기반 Human-Equivalent Effort 산정기.
 
-방법론: doc/requirement_based_human_effort_service_design.md (v0.5)
+방법론: doc/requirement_based_human_effort_service_design.md (v0.6)
 입력: '할일+역할+업무상세+스킬' 작업 지침서 자유 텍스트 (업무 실행 전)
 출력: 숙련자가 생성형 AI 없이 동일 결과를 만들 때의 Human-Equivalent Effort
       — 최종 총공수분포에서 한 번 산출한 P50/P80 (분 단위)
@@ -32,7 +32,7 @@ except ImportError:
 _HERE = Path(__file__).resolve().parent
 DEFAULT_CATALOG_PATH = _HERE / "catalog.json"
 
-METHODOLOGY_VERSION = "0.5.0"
+METHODOLOGY_VERSION = "0.6.0"
 UNMAPPED = "UNMAPPED_WORK_UNIT"
 
 DEFAULT_REFERENCE_WORKER = {

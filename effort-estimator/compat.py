@@ -11,7 +11,7 @@
     - agent_min 계열 반드시 수치 (§6.4 — None이면 analyze_card TypeError)
 
 산정 구성 (하이브리드):
-    human_min       = v0.5 Work Unit 엔진 P50 (estimator.HumanEffortEstimator,
+    human_min       = v0.6 Work Unit 엔진 P50 (estimator.HumanEffortEstimator,
                       catalog.json Monte Carlo) — 재개발된 human-equivalent 방법론
     agent_ai_min    = agent primitive count × rates.json 요율 + ai_io, revision factor 곱
     agent_human_min = hitl primitive count × rates.json 요율 (감독 + 잔여 직접작업)
@@ -43,8 +43,8 @@ _ERROR_RESULT = {
     "confidence": None, "confidence_notes": [],
 }
 
-# v0.5 파이프라인(Prompt A/B) 프롬프트가 커서 스펙 기본 max_tokens(2000)로는 부족 —
-# agent-path 호출에는 호출자 값을 그대로 쓰고, v0.5 쪽은 최소 6000을 보장한다.
+# v0.6 파이프라인(Prompt A/B) 프롬프트가 커서 스펙 기본 max_tokens(2000)로는 부족 —
+# agent-path 호출에는 호출자 값을 그대로 쓰고, v0.6 쪽은 최소 6000을 보장한다.
 _V05_MIN_TOKENS = 6000
 
 
@@ -75,7 +75,7 @@ class CounterfactualEstimator:
             spec = _SPEC_TEMPLATE.format(
                 title=title or "", context=context or "", role=role or "",
                 skills=skills, detail=detail or "")
-            r = self._est.estimate(spec)                       # human 경로 (v0.5)
+            r = self._est.estimate(spec)                       # human 경로 (v0.6)
             ap = _agent_path.estimate_agent_path(              # agent 경로 (spec §3)
                 self.llm, spec, self.rates, self.max_tokens)
         except Exception as e:  # LLM 통신 실패·검증 2회 실패 등 — 구 계약대로 error 필드로

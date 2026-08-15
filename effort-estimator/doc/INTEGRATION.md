@@ -3,14 +3,17 @@
 이 문서는 **기존 시스템(mm_app)에서 구 `CounterfactualEstimator`를 본 모듈로 교체하는
 작업을 수행하는 AI/개발자를 위한 실행 절차**다. 이 문서만으로 통합을 완주할 수 있어야 한다.
 구 API 계약은 [integ-spec.md](integ-spec.md), 방법론 설계서는
-[requirement_based_human_effort_service_design.md](requirement_based_human_effort_service_design.md) (v0.5),
-모듈 개요는 [README.md](../README.md).
+[requirement_based_human_effort_service_design.md](requirement_based_human_effort_service_design.md) (v0.6),
+설계 근거는 [DESIGN.md](DESIGN.md), 모듈 개요는 [README.md](../README.md).
 
-> **산정 구성 (하이브리드)**: `human_min`은 v0.5 Work Unit 엔진
+> **산정 구성 (하이브리드)**: `human_min`은 v0.6 Work Unit 엔진
 > (catalog.json × Monte Carlo P50)이, `agent_min` 계열(machine+hitl)은
 > integ-spec §3의 primitive×rates.json 방식(agent_path.py)이 산정한다.
 > `estimate_task` 시그니처·출력 키·수치 타입은 integ-spec §2/§6에 100% 맞춰져 있어
 > `analysis_cf.py`/`server.py`/`app.js` 무수정 drop-in 교체 가능.
+> human 경로에는 기준노동("생성형 AI만 배제, 일반 도구 전부 사용, 최단 경로")
+> 강제와 인플레이션 통제(요구사항 발명 금지·분해 상한·단위 일치·`conflicts_with`
+> 중복 제거)가 적용된다 — 배경은 DESIGN.md §2.3.
 
 교체 대상: `mm_app` `counterfactual.py`의
 `CounterfactualEstimator.estimate_task(title, context, role, skill_names, detail) -> dict`
@@ -27,7 +30,7 @@ git clone https://github.com/joungwoo-lee/avatar-efficiency.git   # 또는 기�
 (하이픈 아님, 언더스코어)** 이름의 폴더로 복사한다:
 
 ```
-estimator.py  engine.py  prompts.py  catalog.json     # human 경로 (v0.5)
+estimator.py  engine.py  prompts.py  catalog.json     # human 경로 (v0.6)
 agent_path.py  rates.json                             # agent 경로 (integ-spec §3)
 compat.py  __init__.py  onprem_llm_sim.py
 ```
@@ -56,7 +59,7 @@ llm 계약 (integ-spec §1, 실물이 이미 만족함): `complete_json(prompt: 
 호출별 1회 재시도, 최악 6회). 지연이 문제면
 `CounterfactualEstimator(llm=..., mode="single")`로 human 경로를 Prompt C 단일호출로
 줄일 수 있다(총 2회) — 단 두 모드는 산정 편향이 다르므로 하나로 고정.
-`max_tokens` 인자는 agent-path 호출에 적용되고, v0.5 파이프라인은 내부적으로
+`max_tokens` 인자는 agent-path 호출에 적용되고, v0.6 파이프라인은 내부적으로
 최소 6000을 보장한다.
 
 ## Step 3. 호출부 교체
@@ -78,7 +81,7 @@ integ-spec §4~5 그대로 무수정.
 
 ```bash
 # 4-1. 오프라인 단위테스트 (네트워크·LLM 불필요, mock)
-cd effort_estimator && python test_estimator.py        # "OK" (23 tests) 확인
+cd effort_estimator && python test_estimator.py        # "OK" (27 tests) 확인
 ```
 
 ```python
@@ -102,9 +105,12 @@ assert "ai_io" in r["agent_breakdown"]
 
 # 4-4. 구 구현체 대조 — 구 시스템을 아직 지우기 전이라면
 같은 입력 3~5건을 구/신 양쪽에 넣고 비교. agent_min은 동일 방식이라 근접해야 한다.
-human_min은 방법론이 바뀌어(primitive→Work Unit WBS 분해) 구보다 크게 나오는 경향 —
-따라서 saved_min·speedup도 계통적으로 커진다. 이는 의도된 변화이며,
-절대값 신뢰는 Step 5 보정 후에. 대시보드·리포트의 speedup 해석 기준을 함께 갱신할 것.
+human_min은 방법론이 바뀌어(primitive→Work Unit WBS 분해) 값이 달라진다 — 소형 업무는
+경량 단위·분해 상한 통제로 상식 범위(메일 회신 ~16분), 정식 산출물 업무는 구보다
+큰 경향. 절대값 신뢰는 Step 5 보정 후에. 대시보드의 speedup 해석 기준을 함께 갱신할 것.
+
+# 4-5. 인플레이션 회귀 — 소형 업무가 수십배로 나오지 않는지
+python test_estimator.py --live  # 메일 스펙 P50 5~90분·≤5 items 자동 검증 포함
 ```
 
 ## Step 5. 보정 (정확도 — 실측 축적 후)
@@ -131,22 +137,23 @@ human_min은 방법론이 바뀌어(primitive→Work Unit WBS 분해) 구보다 
 ```jsonc
 {
   "error": null,                    // 실패 시 문자열. 예외를 raise하지 않음
-  "human_min": 338.8,               // v0.5 엔진 P50 (분) — 숙련자, 생성형 AI 미사용
+  "human_min": 16.1,                // v0.6 엔진 P50 (분) — 숙련자, 생성형 AI만 미사용
   "agent_min": 6.89,                // = agent_human_min + agent_ai_min
   "agent_human_min": 5.2,           // hitl: 감독(지시·검토·승인) + 잔여 직접작업
   "agent_ai_min": 1.69,             // 기계 시간 (ai_io 포함, revision factor 곱)
-  "saved_min": 331.91,              // human_min - agent_min
-  "speedup": 49.17,                 // human_min / agent_min (agent_min<=0이면 null)
-  "human_breakdown": {"research.synthesis": 120.5, "...": 0},   // work_unit_id→평균 분
+  "saved_min": 9.21,                // human_min - agent_min
+  "speedup": 2.34,                  // human_min / agent_min (agent_min<=0이면 null)
+  "human_breakdown": {"research.document_skim": 4.7,            // work_unit_id→평균 분
+                      "writing.short_message": 11.7},
   "agent_breakdown": {"draft": 0.4, "instruct": 3.0,            // primitive→분 (기계·사람 합산)
     "ai_io": {"input_words": 900.0, "output_words": 250.0, "minutes": 0.39}},
   "rationale": "한 줄 근거 문자열",
   "confidence": "C (cold-start seed rates/catalog, 미보정)",
   "confidence_notes": [],           // 비어있지 않으면 저신뢰 처리 권장
   // 부가 키 (구 소비측은 무시 가능, 저장 권장)
-  "human_p80_min": 401.2,           // P80 (분) — 계획·예산용 보수값
+  "human_p80_min": 20.0,            // P80 (분) — 계획·예산용 보수값
   "estimate_id": "E-xxxxxxxxxx",    // 동일 입력+동일 catalog면 동일 (재현성 추적)
-  "catalog_version": "core-0.5.0-seed"
+  "catalog_version": "core-0.6.0-seed"
 }
 ```
 
@@ -154,7 +161,7 @@ human_min은 방법론이 바뀌어(primitive→Work Unit WBS 분해) 구보다 
 
 | 항목 | 구 | 신규 |
 |---|---|---|
-| `human_min` | human primitive count × rates 점추정 | v0.5 Work Unit WBS 분해 × catalog.json 분포 → Monte Carlo **P50** (+`human_p80_min`). 구보다 크게 나오는 경향 |
+| `human_min` | human primitive count × rates 점추정 | v0.6 Work Unit WBS 분해 × catalog.json 분포 → Monte Carlo **P50** (+`human_p80_min`). 소형 업무는 경량 단위·분해 상한으로 상식 범위, 정식 산출물 업무는 구보다 큰 경향 |
 | `agent_*` | primitive×rates | **동일 방식 유지** (agent_path.py + rates.json) |
 | `saved_min`/`speedup` | 동일 방법론 쌍의 차/비 | human 쪽만 방법론 상향 → 계통적으로 커짐. 시계열 비교 시 단절점 표기 필요 |
 | `human_breakdown` 키 | primitive 이름 | work_unit_id (예: `research.synthesis`) |
@@ -167,12 +174,14 @@ human_min은 방법론이 바뀌어(primitive→Work Unit WBS 분해) 구보다 
 |---|---|
 | LLM 출력 스키마 불량 | 해당 호출 자동 1회 재시도 → 그래도 불량이면 `error` 필드에 기록 (raise 안 함) |
 | Catalog에 없는 work_unit_id·수량 불량 (human) | 해당 항목만 미산정 분리, `confidence_notes`에 과소추정 경고 |
+| quantity.unit ↔ Work Unit unit 불일치 (human) | 요율 오적용 방지 위해 해당 항목 미산정 분리 + 경고 |
+| 동일 요구사항에 배타 단위 중복 계상 (human) | 카탈로그 `conflicts_with` 기준으로 중복 항목 제거 + notes 기록 |
 | 미등록 primitive·음수 count (agent) | 해당 항목만 폐기, `confidence_notes`에 기록 |
 | hitl 빈 배열 | agent_human_min=0 + notes 경고 (leverage 과대평가 위험) |
 | LLM이 시간 필드(minutes/p50 등) 출력 | 검증기가 재귀 제거 후 진행, notes 기록 |
 | LLM 통신 실패 | `error` 필드에 예외 문자열, 수치 전부 null |
 
-## 심화 사용 (v0.5 신규 스키마 직접 사용 시)
+## 심화 사용 (v0.6 신규 스키마 직접 사용 시)
 
 compat 없이 human-equivalent 전체 구조(요구사항, Work Item 기여도, 증거, P50/P80)가 필요하면:
 

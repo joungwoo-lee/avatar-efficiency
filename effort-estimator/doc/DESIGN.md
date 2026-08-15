@@ -1,139 +1,116 @@
 # effort-estimator 설계 근거 (기능·기술 배경·정당화)
 
-> **⚠️ 구 설계 문서 (superseded, 2026-08-15)**: 본 문서는 구 primitive×요율 방식
-> (TAEE Phase 1 MVP, `rates.json`)의 설계 근거다. 모듈은
-> [requirement_based_human_effort_service_design.md](requirement_based_human_effort_service_design.md)
-> (v0.5) 기준으로 재개발되었다 — Work Unit Catalog + Monte Carlo P50/P80,
-> human-equivalent만 산정. 현행 통합 절차는 [INTEGRATION.md](INTEGRATION.md) 참조.
-> 아래 내용은 이력 보존용.
-
 대상 독자: 이 모듈의 산정 방식이 신뢰할 만한지 판단해야 하는 사람(도입 결정자, 감사자, 후임 개발자).
+방법론 전체는 [requirement_based_human_effort_service_design.md](requirement_based_human_effort_service_design.md) (v0.6, 이하 "방법론 문서"),
 사용법은 [README.md](../README.md), 통합 절차는 [INTEGRATION.md](INTEGRATION.md),
-전체 설계는 [docs/effort-estimation/task_agentization_effort_estimator_design.md](../../docs/effort-estimation/task_agentization_effort_estimator_design.md) (이하 TAEE 설계서).
+구 API 계약은 [integ-spec.md](integ-spec.md).
+
+> 구 primitive×요율 방식(TAEE Phase 1 MVP)의 설계 근거 문서는 본 문서로 대체되었다.
+> 구 방식은 agent 경로 산정(agent_path.py)에만 남아 있다.
 
 ---
 
-## 1. 기능 — 이 함수는 무엇을 하는가
+## 1. 기능 — 이 모듈은 무엇을 하는가
 
 **입력**: `할일 + 역할 + 업무 상세 + 사용할 스킬`이 담긴 작업 지침서 텍스트 (업무 실행 **전**).
 
-**출력**: 같은 완료조건을 기준으로 한 두 실행경로의 예상 활성 노동시간(분):
+**출력**: 숙련 실무자가 **생성형 AI 없이**(그 외 일반 업무 도구는 전부 사용) 같은 완료조건을
+달성할 때 필요한 Human-Equivalent Effort — 최종 총공수분포에서 한 번 산출한 **P50/P80 (분)**.
 
-| 값 | 의미 |
-|---|---|
-| `human_only` | AI를 전혀 쓰지 않는 기준 숙련자의 활성 노동시간 |
-| `agent.machine` | 에이전트/도구의 기계 활성시간 (LLM 생성 시간 포함) |
-| `agent.hitl` | 에이전트를 운용하기 위해 사람이 실제로 쓰는 시간 (지시·검토·승인·수동검증 + 에이전트가 못 하는 잔여 직접작업) |
+부가로 구 Counterfactual API(integ-spec.md) 호환을 위해 agent 경로(machine+hitl) 분도
+산정한다(§5 하이브리드).
 
-파생 지표: `human_labor_leverage`(human÷hitl — 사람 노동 1시간이 몇 시간어치 결과를 만드나),
-`automation_share`(1 − hitl/human — 사람 직접 노동이 얼마나 제거되나).
+## 2. 핵심 설계 결정과 근거
 
-**하지 않는 것**: 금액 산정(시간에 임금/요금 모델을 곱하는 것은 소비측 몫),
-완료 경과시간(elapsed) 예측, P80 구간 추정(Phase 2~3, TAEE 설계서 §36).
+### 2.1 LLM에게 시간을 추정시키지 않는다
 
-## 2. 기술 배경
+LLM의 자유서술 시간 추정은 보정 불가·재현 불가·감사 불가다. 대신:
 
-### 2.1 계보
+```
+LLM      = 요구사항 추출 → 인간 WBS 분해 → Work Unit 매핑·수량화 (시간 필드 금지)
+Catalog  = catalog.json — Work Unit별 인간 시간분포 (프롬프트 미노출)
+Code     = engine.py — 수량분포 × 시간분포 Monte Carlo(고정 seed) → P50/P80 1회 산출
+```
 
-ACEM(El-Ramly, *A Cost Estimation Model for Agentic Software Engineering*, arXiv:2608.02582)의
-구조를 시간 단위로 변형한 TAEE 설계서의 Phase 1 MVP 구현이다. ACEM에서 가져온 것:
+- LLM 출력에 `minutes/hours/p50/...` 필드가 있으면 검증기가 재귀 제거한다.
+- 시간분포·요율은 프롬프트에 절대 노출하지 않는다 — 노출 시 LLM이 목표 시간에서
+  수량을 역산하는 오염이 생긴다(회귀 테스트가 감시).
+- percentile은 최종 총공수분포에서 한 번만 계산한다. 단위별 P50을 합산하면
+  분산이 왜곡된다(방법론 문서 §4.6).
 
-- **계층 분해**: 업무 → 행동(primitive) → 수량. 업무 크기와 실행 메커니즘을 분리한다.
-- **비용 3분해**: 기계 시간 / 사람 감독 시간(HITL) / (인프라 — 본 모듈은 범위 밖).
-- **거친 명세 → 보정된 실행자원**: 사용자는 모든 행동을 나열하지 않는다. 시스템이 분해하고
-  과거 보정치(요율)로 시간을 만든다.
+### 2.2 재현성
 
-버린 것: 화폐 비용, 토큰 중심 산정(토큰은 `ai_io` 중간 feature로만), 인프라 비용.
+고정 seed Monte Carlo(기본 5000회, seed 42) + temperature 0 + 버전 기록
+(methodology/catalog/prompt version, estimate_id는 입력+카탈로그 해시). 같은
+EffortEngineInput은 항상 같은 P50/P80을 낸다(`estimate_from_effort_input` 재계산 경로).
 
-### 2.2 산정 방식 — 두 경로 모두 "가상 트레젝토리 × 요율"
+### 2.3 기준 노동 정의의 코드화 (인플레이션 사건과 통제)
 
-비용 추정은 세 방식으로 나뉜다: ① 실행경로 기반 사후추정, ② 완성물 기반 사후추정,
-③ 요구사항 기반 사전추정. 본 모듈은 ③을 구현하되, 계산 기계는 ①의 것을 빌린다 —
-**요구사항을 가상 실행경로(primitive 행동 × 수량)로 변환한 뒤 요율로 환산**한다.
+**사건**: 초기 구현에서 소형 업무(800단어 보고서 검토 + 200단어 회신)가 338.8분으로
+산정되는 수십배 상방 편향이 실측됐다. 원인 분석 결과 "human without AI" 취지가
+방법론 문서 §3에만 있고 프롬프트·카탈로그·검증기에 전달되지 않았다.
 
-두 경로의 차이는 계산기가 아니라 **합성 정책**이다:
+**원인 4개와 통제** (전부 구현·회귀 테스트 존재):
 
-| | Human-only 경로 | Agentic 경로 |
-|---|---|---|
-| 합성 정책 | **최소 합리적 직행 경로** — 완료상태를 고정하고 기준 숙련자의 정당한 최단 작업량을 역산 (②의 논리) | **현실적 실행 경로** — 재시도·검증 포함 |
-| 행동 어휘 | human 카드 10종 | agent 카드 9종 + hitl 카드 10종 |
-| 마찰 계수 | 없음 (탐색적 방황 배제; 통상적 결함수정은 수량에 포함) | `revision_factor` (기본 1.0, rates.json) |
+| # | 원인 | 통제 | 위치 |
+|---|---|---|---|
+| 1 | 요구사항 발명 — "검토"라는 중간 활동을 "핵심 요약 작성"이라는 없는 산출물 Requirement로 승격 → 거기에 section_draft 등 부착 (최대 기여 요인) | 명시된 최종 산출물만 Requirement, 중간 활동은 과정, Requirement 수 ≤ 명시 산출물 수 | Prompt A/C |
+| 2 | 과잉분해 — 교과서식 풀프로세스(범위정의→아웃라인→초안→QA→수정) 강제 재현 | 기준노동 정의(생성형 AI만 배제·도구 전부 사용·최단경로) + 분해 상한(소형 업무 ≤5 items) + QA는 수용기준 명시 시만 + few-shot | Prompt B/C |
+| 3 | 수량 단위 불일치 — message 단위(건당 ~15분)에 단어수 200을 수량으로 → 3014분 | `quantity.unit` ≠ 카탈로그 `unit` → 미산정 처리 (코드 강제) | estimator.py 검증기 |
+| 4 | 중복 계상 — 같은 회신에 short_message + section_draft + edit_proofread 동시 부착 | 카탈로그 `conflicts_with` 배타성 선언 → 동일 요구사항 내 충돌 단위 코드가 제거 | catalog.json + estimator.py |
 
-이 비대칭은 의도적이다: 인간 기준선에 시행착오를 넣으면 human_only가 부풀어
-leverage가 과대평가된다. 짝 설계서(counterfactual_human_effort_design.md)가 같은 원칙을
-사후 산정 쪽에서 정식화한다 — "AI가 실제 거친 시행착오 경로를 사람 노동으로 환산하지 않는다".
+**결과**: 메일 회신 338.8분 → 16.1분(3연속 재현), 경쟁사 보고서 34h → 7.7h.
 
-### 2.3 공정성 규칙 (TAEE 설계서 §2.3)
+교훈: 소형 백엔드 LLM은 프롬프트 규칙을 자주 위반한다. 산정 무결성에 직결되는 규칙
+(단위 일치, 배타성)은 **프롬프트 순응에 의존하지 말고 결정론적 검증기가 강제**해야 한다.
 
-두 경로는 같은 업무 범위·품질·검증 수준을 만족해야 한다. 프롬프트가 이를 강제하고,
-그 결과 hitl에 수동검증이 human_only와 같은 수량으로 계상된다. Agentic 경로에서 검증을
-생략해 놓고 비교하는 것은 이 지표의 가장 흔한 조작 수법이라 설계로 차단했다.
+### 2.4 경량 Work Unit 계층
 
-## 3. 정당화 — 왜 이 구조가 합리적인가
+카탈로그가 정식 산출물급 단위(최소 10분+)만 가지면 LLM이 소형 업무를 중량 단위에
+강제 매핑해 바닥값 인플레이션이 생긴다. 1~10분급 경량 단위 6종
+(document_skim, quick_lookup, short_message, quick_edit, quick_calculation,
+simple_operation)을 두고, 프롬프트가 경량 우선을 지시하며, 정의문에 경량↔중량 경계를
+명시한다.
 
-### 3.1 LLM은 수량만, 시간은 결정론 엔진이 (TAEE 설계서 §37 규칙 2·3)
+## 3. 실행 모드
 
-LLM에게 "이 일은 몇 시간?"을 직접 묻지 않는다. LLM의 역할은 지침서에 명시된 수량 단서
-(단어수·문서수·건수)를 primitive 행동 수량으로 옮기는 **구조화**뿐이고, 시간은
-`수량 × rates.json 요율`로 결정론 계산한다. 근거:
+- **two_pass (기본)**: Prompt A(요구사항 추출) → Prompt B(분해·매핑). 단계별 감사·재처리
+  가능. 각 호출 검증 실패 시 1회 자동 재시도.
+- **single**: Prompt C 단일호출. 저지연·대량 배치용. 두 모드는 산정 편향이 다르므로
+  혼용하지 않고 하나로 고정할 것.
 
-- **감사 가능성**: "human 187.5분"이 아니라 "read 7,500단어×0.005 + draft 2,000단어×0.05 + …"
-  로 나온다. 모든 출력에 breakdown과 rationale이 붙어 수량의 출처를 추적할 수 있다.
-- **보정 가능성**: 오차가 나면 요율(카드 셀)을 고치면 되고, 고친 요율은 모든 추정에
-  일관되게 반영된다. LLM이 시간을 직접 찍으면 오차의 원인 분리가 불가능하다.
-- **일관성**: 같은 업무 두 번 넣었을 때 시간 차이는 수량 차이에서만 나온다(temperature 0).
+## 4. 불확실성 표현
 
-### 3.2 요율을 프롬프트에 노출하지 않는 이유
+- LLM은 수량의 불확실성만 표현한다: `point` / `triangular` / `discrete`.
+- Catalog는 시간의 불확실성을 보유한다: `triangular`(expert seed) / `lognormal` /
+  `uniform` / `point`, 조건(parameter)별 추가 시간분포, quality tier 스케일.
+- 엔진이 두 분포를 곱·합성해 전체 분포를 만들고 P50(중앙)·P80(계획·예산용)을 산출한다.
+- 미매핑·검증 탈락 항목은 시간을 추측하지 않고 `unscored_items`로 분리, 과소추정
+  경고를 부착한다.
 
-LLM이 단가를 보면 "그럴듯한 총시간"을 역산해 count를 맞추는 오염이 생긴다 —
-규칙 2의 우회 위반. 요율은 엔진에만 존재하며, 회귀 테스트(`test_rates_not_in_prompt`)가
-노출을 감시한다.
+## 5. 하이브리드 compat (구 API 유지)
 
-### 3.3 hitl을 machine과 분리하는 이유
+integ-spec.md §6.4가 `agent_min` 계열 수치를 요구한다(None이면 소비측 TypeError).
+agent 경로는 v0.6 방법론 범위 밖이므로 구 primitive×rates 방식(agent_path.py +
+rates.json)을 유지해 채운다:
 
-사람 1분과 기계 1분은 다른 자원이다. 기계 시간은 병렬화·저비용이고, 사람 시간은
-human_only와 직접 비교되는 희소 자원이다. 합쳐서 한 값으로 내면:
+- `human_min` = v0.6 Work Unit 엔진 P50 (방법론 상향)
+- `agent_ai_min` / `agent_human_min` = 구 방식 (machine + hitl)
+- `speedup` = human_min / agent_min — human 쪽만 방법론이 바뀌어 구 대비 값이
+  커지는 경향. 시계열 비교 시 단절점 표기 필요.
 
-- leverage(human÷hitl) 계산 불가 — 노동 절감이라는 핵심 질문에 답 못 함
-- 사람 감독시간이 기계시간에 숨어 효율 과대포장
+## 6. 신뢰수준과 보정 경로
 
-실측 예가 필요성을 보여준다: 경쟁사 조사 샘플에서 machine 28.5분 < hitl 50.0분 —
-이 업무의 병목은 기계가 아니라 사람 감독이다. 합산 단일값에선 이 사실이 보이지 않는다.
+- 현재 `catalog.json`은 expert seed(`source_type=expert`, `sample_count=0`,
+  confidence C). 절대값은 실측 보정 전까지 업무 간 상대 비교 용도.
+- 보정: 실측 인간 작업시간 축적 → Work Unit별 `time_model` 갱신 →
+  `source_type=internal_measured`, `sample_count` 갱신 (방법론 문서 §13).
+  충분한 표본 없이 개별 사례로 변경 금지.
+- 큰 업무에서 run 간 분해 편차 존재(소형 백엔드 모델 한계) — 정식 산정은 two_pass +
+  사람 검토, Golden Dataset 회귀평가로 관리.
 
-hitl에는 감독 행동(지시·검토·승인·수정지시·수동검증)뿐 아니라 **에이전트가 수행할 수 없어
-사람이 직접 마저 하는 잔여 작업**(draft/edit/data_entry/execute/decide)도 포함한다 —
-부분 자동화 업무에서 사람 시간을 과소평가하지 않기 위해서다.
+## 7. 검증 체계
 
-### 3.4 단일 "에이전트화 점수"를 만들지 않는 이유
-
-노동 절감(leverage)과 완료 속도(speedup)는 다른 현상이다(TAEE 설계서 §20).
-사람이 1시간 붙어 10시간짜리 일을 3시간 만에 끝내는 경우: leverage 10배, speedup 3.3배 —
-어느 한 숫자로 합치면 의사결정 정보가 사라진다. 본 모듈은 세 시간값을 분리 출력하고
-지표 합성은 소비측에 맡긴다.
-
-### 3.5 검증 가드가 있는 이유
-
-LLM 출력은 신뢰 경계 밖이다. 엔진이 스키마 검증(실패 시 1회 재시도), 미등록 primitive
-폐기, 음수 count 폐기를 수행하고 모든 개입을 `confidence_notes`에 남긴다. hitl이 비면
-경고를 남긴다(감독시간 0 = leverage 무한대 오류의 전형적 원인).
-
-## 4. 한계 — 정당화의 경계 (아는 척하지 않는 부분)
-
-1. **요율은 cold-start seed다** (confidence C). 읽기 200wpm, 작성 20wpm, 검증 3분/건 등은
-   상식적 초기값이지 실측이 아니다. **절대값의 신뢰는 실측 보정 후에만 생긴다.**
-   보정 전엔 업무 간·스킬조합 간 **상대 비교** 용도로 쓰는 것이 정직하다
-   (같은 seed 요율을 쓰므로 요율 오차가 비교에서 상쇄된다).
-2. **수량 추정은 LLM 품질에 의존한다.** 지침서에 수량 단서가 없으면 수량이 흔들리고,
-   이는 rationale·breakdown으로 감사할 수는 있어도 막을 수는 없다.
-3. **P50 점추정만 낸다.** 불확실성 구간(P80), Monte Carlo, 병렬성·critical path는
-   Phase 2~3 범위다.
-4. **큰 업무는 단발 분해가 약하다.** Work Unit 분해 후 단위별 수량 산정(같은 LLM 함수
-   2회 체인)이 다음 단계다.
-5. **ACEM 자체가 실데이터 미검증 이론 모델이다** (2026-08 공개). 그래서 논문의 예시
-   상수를 쓰지 않고 구조만 차용했으며, 요율은 조직 실측으로 채우는 것을 전제한다.
-
-## 5. 신뢰를 올리는 경로
-
-`avatar-efficiency` 본체 파이프라인(sweeper)이 이미 실 세션 transcript에서 활동시간·토큰을
-수집한다. 이 실측 trajectory로 agent 카드·revision_factor를, 수작업 앵커·DHEE 산정값으로
-human 카드를 보정하면 confidence가 C → B로 올라간다 (TAEE 설계서 §22~24).
+- 오프라인 27종 (mock): 엔진 결정성, P80≥P50, tier·parameter 효과, 단위 불일치 차단,
+  conflicts 중복 제거, 금지필드 제거, 재시도, 요율 미노출, compat 키·수치검산.
+- `--live`: 프록시 실호출 + 소형 업무 인플레이션 회귀(메일 스펙 P50 5~90분, ≤5 items).
