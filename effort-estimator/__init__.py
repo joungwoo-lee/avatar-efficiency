@@ -11,9 +11,10 @@ from .estimator import (
     validate_requirements_output,
 )
 from .compat import CounterfactualEstimator
+from .agent_path import DEFAULT_RATES_PATH
 
 __all__ = [
     "HumanEffortEstimator", "CounterfactualEstimator",
-    "DEFAULT_CATALOG_PATH", "METHODOLOGY_VERSION",
+    "DEFAULT_CATALOG_PATH", "DEFAULT_RATES_PATH", "METHODOLOGY_VERSION",
     "validate_effort_input", "validate_requirements_output",
 ]

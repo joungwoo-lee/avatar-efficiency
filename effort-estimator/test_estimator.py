@@ -98,8 +98,23 @@ EFFORT_OUT = {
 }
 
 
+AGENT_OUT = {
+    "human": [{"primitive": "read", "count": 800},
+              {"primitive": "draft", "count": 200},
+              {"primitive": "verify", "count": 1}],
+    "agent": [{"primitive": "read", "count": 800},
+              {"primitive": "draft", "count": 200},
+              {"primitive": "verify", "count": 1}],
+    "hitl": [{"primitive": "instruct", "count": 1},
+             {"primitive": "review", "count": 200},
+             {"primitive": "approve", "count": 1}],
+    "ai_io": {"input_words": 900, "output_words": 250},
+    "rationale": "AI가 초안 생성, 사람은 지시·검토·승인만 수행",
+}
+
+
 class MockLLM:
-    """프롬프트 내용을 감지해 Prompt A/B/C 응답을 돌려준다. 큐 주입도 지원."""
+    """프롬프트 내용을 감지해 Prompt A/B/C·agent-path 응답을 돌려준다. 큐 주입도 지원."""
 
     def __init__(self, queue=None):
         self.queue = list(queue) if queue else None
@@ -111,6 +126,8 @@ class MockLLM:
             return self.queue.pop(0)
         if "Planned Requirement Reconstruction Engine" in prompt:
             return copy.deepcopy(REQ_OUT)
+        if "두 실행경로" in prompt:  # agent-path (integ-spec §3)
+            return copy.deepcopy(AGENT_OUT)
         return copy.deepcopy(EFFORT_OUT)
 
 
@@ -280,24 +297,67 @@ class TestEstimatorFlow(unittest.TestCase):
 
 # ---------------------------------------------------------------- compat
 
+SPEC_KEYS = ("error", "human_min", "agent_min", "agent_human_min", "agent_ai_min",
+             "saved_min", "speedup", "human_breakdown", "agent_breakdown",
+             "rationale", "confidence", "confidence_notes")
+
+
 class TestCompat(unittest.TestCase):
     def test_estimate_task_contract(self):
         ce = CounterfactualEstimator(llm=MockLLM())
         r = ce.estimate_task("월간 경쟁사 동향", "정기 보고", "애널리스트",
                              ["research-web"], "경쟁사 5곳 조사 후 보고서")
+        for k in SPEC_KEYS:  # integ-spec §2: 키 전부 존재
+            self.assertIn(k, r)
         self.assertIsNone(r["error"])
         self.assertGreater(r["human_min"], 0)
         self.assertGreaterEqual(r["human_p80_min"], r["human_min"])
-        self.assertIsNone(r["agent_min"])
+        # integ-spec §6.4: agent 계열 반드시 수치
+        self.assertIsInstance(r["agent_min"], float)
+        self.assertGreater(r["agent_min"], 0)
+        self.assertAlmostEqual(
+            r["agent_min"], r["agent_human_min"] + r["agent_ai_min"], places=2)
+        self.assertAlmostEqual(r["saved_min"], r["human_min"] - r["agent_min"], places=2)
+        self.assertAlmostEqual(r["speedup"], round(r["human_min"] / r["agent_min"], 2))
         self.assertIn("research.source_search", r["human_breakdown"])
+        self.assertIn("ai_io", r["agent_breakdown"])
+        self.assertIn("minutes", r["agent_breakdown"]["ai_io"])
+        self.assertIsInstance(r["confidence"], str)  # integ-spec §2: 문자열
+        self.assertIsInstance(r["confidence_notes"], list)
 
-    def test_error_path(self):
+    def test_agent_path_math(self):
+        # AGENT_OUT 기준 수기검산: machine=(0.4+0.4+0.5 + ai_io 0.39)*1.0, hitl=3+1.2+1
+        ce = CounterfactualEstimator(llm=MockLLM())
+        r = ce.estimate_task("t", "c", "r", [], "d")
+        self.assertAlmostEqual(r["agent_ai_min"], 1.69, places=2)
+        self.assertAlmostEqual(r["agent_human_min"], 5.2, places=2)
+        self.assertAlmostEqual(r["agent_min"], 6.89, places=2)
+
+    def test_llm_call_count_and_no_rate_leak(self):
+        llm = MockLLM()
+        CounterfactualEstimator(llm=llm).estimate_task("t", "c", "r", [], "d")
+        self.assertEqual(len(llm.calls), 3)  # Prompt A + B + agent-path
+        for prompt in llm.calls:
+            self.assertNotIn("min_per_unit", prompt)
+            self.assertNotIn("time_model", prompt)
+
+    def test_error_path_all_keys_null(self):
         class Boom:
             def complete_json(self, p, m):
                 raise RuntimeError("down")
         r = CounterfactualEstimator(llm=Boom()).estimate_task("t", "c", "r", [], "d")
+        for k in SPEC_KEYS:
+            self.assertIn(k, r)
         self.assertIsNotNone(r["error"])
-        self.assertIsNone(r["human_min"])
+        for k in ("human_min", "agent_min", "agent_human_min", "agent_ai_min",
+                  "saved_min", "speedup"):
+            self.assertIsNone(r[k])
+
+    def test_none_inputs_tolerated(self):
+        r = CounterfactualEstimator(llm=MockLLM()).estimate_task(
+            None, None, None, None, None)
+        self.assertIsNone(r["error"])
+        self.assertGreater(r["human_min"], 0)
 
 
 def _live():

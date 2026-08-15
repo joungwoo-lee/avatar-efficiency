@@ -2,18 +2,18 @@
 
 이 문서는 **기존 시스템(mm_app)에서 구 `CounterfactualEstimator`를 본 모듈로 교체하는
 작업을 수행하는 AI/개발자를 위한 실행 절차**다. 이 문서만으로 통합을 완주할 수 있어야 한다.
-방법론 설계서는 [requirement_based_human_effort_service_design.md](requirement_based_human_effort_service_design.md) (v0.5),
+구 API 계약은 [integ-spec.md](integ-spec.md), 방법론 설계서는
+[requirement_based_human_effort_service_design.md](requirement_based_human_effort_service_design.md) (v0.5),
 모듈 개요는 [README.md](../README.md).
 
-> **방법론 변경 고지 (중요)**: 본 모듈은 v0.5 설계서 기준으로 재개발되어
-> **Human-Equivalent Effort(P50/P80, 분 단위)만** 산정한다. 구 모듈의
-> agent/machine/hitl 경로 산정은 범위 밖(설계서 §2.3 비목표)이 되었고,
-> compat의 `agent_min` 계열 반환값은 **`None`** 이다. 소비측이 `agent_min`,
-> `saved_min`, `speedup`을 실사용 중이면 **교체 전에 해당 로직을 먼저 분리**할 것.
+> **산정 구성 (하이브리드)**: `human_min`은 v0.5 Work Unit 엔진
+> (catalog.json × Monte Carlo P50)이, `agent_min` 계열(machine+hitl)은
+> integ-spec §3의 primitive×rates.json 방식(agent_path.py)이 산정한다.
+> `estimate_task` 시그니처·출력 키·수치 타입은 integ-spec §2/§6에 100% 맞춰져 있어
+> `analysis_cf.py`/`server.py`/`app.js` 무수정 drop-in 교체 가능.
 
 교체 대상: `mm_app` `counterfactual.py`의
 `CounterfactualEstimator.estimate_task(title, context, role, skill_names, detail) -> dict`
-— 본 모듈 `compat.py`가 같은 시그니처를 제공한다(반환 의미는 위 고지 참조).
 
 ---
 
@@ -23,15 +23,17 @@
 git clone https://github.com/joungwoo-lee/avatar-efficiency.git   # 또는 기존 클론 git pull
 ```
 
-`effort-estimator/` 폴더에서 다음 7개 파일을 mm_app 안에 **`effort_estimator/`
+`effort-estimator/` 폴더에서 다음 9개 파일을 mm_app 안에 **`effort_estimator/`
 (하이픈 아님, 언더스코어)** 이름의 폴더로 복사한다:
 
 ```
-estimator.py  engine.py  prompts.py  catalog.json  compat.py  __init__.py  onprem_llm_sim.py
+estimator.py  engine.py  prompts.py  catalog.json     # human 경로 (v0.5)
+agent_path.py  rates.json                             # agent 경로 (integ-spec §3)
+compat.py  __init__.py  onprem_llm_sim.py
 ```
 
 - 폴더명이 `effort_estimator`(언더스코어)여야 Python import가 된다. 하이픈이면 실패.
-- `catalog.json`은 필수 — Work Unit Catalog(시간분포)가 여기만 있다. `rates.json`은 폐기됨.
+- `catalog.json`(human 시간분포)과 `rates.json`(agent/hitl 요율) 둘 다 필수.
 - `onprem_llm_sim.py`는 테스트용 — 운영에 불필요하면 복사 후 제외 가능.
 - `test_estimator.py`, `examples/`도 복사하면 Step 4 검증을 그 자리에서 돌릴 수 있다.
 
@@ -47,12 +49,15 @@ from effort_estimator import CounterfactualEstimator
 ce = CounterfactualEstimator(llm=onprem_llm_instance)
 ```
 
-llm 계약 (실물이 이미 만족함): `complete_json(prompt: str, max_tokens: int) -> dict`
+llm 계약 (integ-spec §1, 실물이 이미 만족함): `complete_json(prompt: str, max_tokens: int) -> dict`
 (파싱 완료된 dict 반환. JSON 문자열 아님.)
 
-주의: 신규는 기본 **two-pass(A→B)라 LLM을 2회 호출**한다(+검증 실패 시 단계별 1회 재시도,
-최악 4회). 지연이 문제면 `CounterfactualEstimator(llm=..., mode="single")`로 Prompt C
-단일호출 사용 — 단 두 모드는 산정 편향이 다르므로(설계서 §25) 혼용하지 말고 하나로 고정.
+주의: task당 **LLM 3회 호출**(Prompt A→B two-pass + agent-path 1회. 검증 실패 시
+호출별 1회 재시도, 최악 6회). 지연이 문제면
+`CounterfactualEstimator(llm=..., mode="single")`로 human 경로를 Prompt C 단일호출로
+줄일 수 있다(총 2회) — 단 두 모드는 산정 편향이 다르므로 하나로 고정.
+`max_tokens` 인자는 agent-path 호출에 적용되고, v0.5 파이프라인은 내부적으로
+최소 6000을 보장한다.
 
 ## Step 3. 호출부 교체
 
@@ -62,58 +67,57 @@ llm 계약 (실물이 이미 만족함): `complete_json(prompt: str, max_tokens:
 # 구:  from counterfactual import CounterfactualEstimator
 # 신:
 from effort_estimator import CounterfactualEstimator
-ce = CounterfactualEstimator(llm=...)   # 생성자: (llm=None, catalog_path=..., max_tokens=6000, mode="two_pass")
+ce = CounterfactualEstimator(llm=...)   # 생성자: (llm=None, rates_path=DEFAULT_RATES_PATH, max_tokens=2000)
 r = ce.estimate_task(title, context, role, skill_names, detail)   # 호출부 변경 없음
 ```
 
-구 생성자 시그니처가 위와 다르면(예: 인자 없이 내부 생성) 생성부 한 줄만 맞춰 수정.
-`skill_names`는 list 또는 str 모두 허용.
-
-**소비측 값 사용 변경**: `human_min`(=P50 분)과 부가 키 `human_p80_min`만 사용.
-`agent_min`/`agent_human_min`/`agent_ai_min`/`saved_min`/`speedup`은 항상 `None` —
-이 값을 읽어 연산하는 코드는 None-guard 또는 제거.
+`skill_names`는 list 또는 str 모두 허용. `analyze_card`/`average_cards`/`server.py`는
+integ-spec §4~5 그대로 무수정.
 
 ## Step 4. 검증 (순서대로, 전부 통과해야 완료)
 
 ```bash
 # 4-1. 오프라인 단위테스트 (네트워크·LLM 불필요, mock)
-cd effort_estimator && python test_estimator.py        # "OK" (20 tests) 확인
+cd effort_estimator && python test_estimator.py        # "OK" (23 tests) 확인
 ```
 
 ```python
-# 4-2. 실물 LLM 스모크 — 작은 업무 1건
+# 4-2. 실물 LLM 스모크 — 작은 업무 1건 (integ-spec §2 키·수치 검증)
 r = ce.estimate_task("메일 회신 초안 작성", "부서장 승인 요청", "PM",
                      ["mail-draft", "summarize"], "첨부 보고서(약 800단어) 검토 후 회신(200단어) 작성")
 assert r["error"] is None, r["error"]
-assert r["human_min"] and r["human_min"] > 0
-assert r["human_p80_min"] >= r["human_min"]
-assert r["agent_min"] is None                      # 신규 계약 — None이 정상
-assert r["human_breakdown"], "work unit breakdown 비어 있음"
+for k in ("human_min", "agent_min", "agent_human_min", "agent_ai_min",
+          "saved_min", "speedup", "human_breakdown", "agent_breakdown",
+          "rationale", "confidence", "confidence_notes"):
+    assert k in r, f"missing key: {k}"
+assert r["agent_min"] > 0 and r["agent_human_min"] > 0   # §6.4 — 수치 필수
+assert abs(r["agent_min"] - (r["agent_human_min"] + r["agent_ai_min"])) < 0.01
+assert abs(r["saved_min"] - (r["human_min"] - r["agent_min"])) < 0.01
+assert "ai_io" in r["agent_breakdown"]
 ```
 
 ```text
 # 4-3. 재현성 — 같은 입력 2회 호출 시 human_min 동일해야 함
-(엔진은 고정 seed Monte Carlo. 차이가 나면 LLM 비결정성 — temperature 0 확인)
+(human 엔진은 고정 seed Monte Carlo. 차이가 나면 LLM 비결정성 — temperature 0 확인)
 
 # 4-4. 구 구현체 대조 — 구 시스템을 아직 지우기 전이라면
-같은 입력 3~5건을 구/신 양쪽에 넣고 human_min 자릿수(order of magnitude)를 비교.
-신규 catalog.json은 expert seed(confidence C)라 절대값 차이는 정상 —
-계통적으로 5배 이상 차이면 Work Unit 매핑 결과(warnings, unscored)를 먼저 확인.
+같은 입력 3~5건을 구/신 양쪽에 넣고 비교. agent_min은 동일 방식이라 근접해야 한다.
+human_min은 방법론이 바뀌어(primitive→Work Unit WBS 분해) 구보다 크게 나오는 경향 —
+따라서 saved_min·speedup도 계통적으로 커진다. 이는 의도된 변화이며,
+절대값 신뢰는 Step 5 보정 후에. 대시보드·리포트의 speedup 해석 기준을 함께 갱신할 것.
 ```
 
-## Step 5. Catalog 보정 (정확도 — 실측 축적 후)
+## Step 5. 보정 (정확도 — 실측 축적 후)
 
-구 `rates.json` 요율 이관은 **하지 않는다** — primitive 체계(행동×count)와 Work Unit
-체계(작업단위×시간분포)는 구조가 달라 호환되지 않는다.
+두 카탈로그를 각각 보정한다. 값은 **파일에만** 넣고 프롬프트에 절대 노출하지 않는다
+(count/수량 역산 오염 — 회귀 테스트 `test_llm_call_count_and_no_rate_leak`이 감시).
 
-대신 `catalog.json`의 Work Unit별 `time_model`(triangular min/mode/max, 분/단위)을
-조직 실측 인간 작업시간으로 보정한다(설계서 §13):
+| 대상 | 파일 | 보정 방법 |
+|---|---|---|
+| human 경로 | `catalog.json` | Work Unit별 `time_model`(triangular min/mode/max, 분/단위)을 실측 인간 작업시간으로 갱신(설계서 §13). `source_type`→`internal_measured`, `sample_count` 갱신 |
+| agent 경로 | `rates.json` | 구 `counterfactual.py` `PRIMITIVES`에 튜닝값이 있으면 agent/hitl 카드에 이관. 실측 trajectory 축적 시 갱신 |
 
-- 값을 **catalog.json에만** 넣는다. 프롬프트에는 시간정보가 절대 들어가지 않는다
-  (`prompts.catalog_prompt_view`가 time_model을 제거 — 회귀 테스트
-  `test_two_pass_calls_and_no_rate_leak`이 감시).
-- 보정 시 `source_type`을 `internal_measured`로, `sample_count`를 표본 수로 갱신.
-- 충분한 표본 없이 개별 사례로 값을 바꾸지 말 것(설계서 §13.2).
+충분한 표본 없이 개별 사례로 값을 바꾸지 말 것(설계서 §13.2).
 
 ## Step 6. 정리
 
@@ -122,26 +126,27 @@ assert r["human_breakdown"], "work unit breakdown 비어 있음"
 
 ---
 
-## 반환 스키마 (구 키 유지 + 의미 변경 + 부가 키)
+## 반환 스키마 (integ-spec §2 완전 준수 + 부가 키)
 
 ```jsonc
 {
-  "error": null,                    // 실패 시 문자열. 예외를 raise하지 않음 (구 계약 동일)
-  "human_min": 2054.8,              // Human-Equivalent Effort P50 (분)
-  "agent_min": null,                // ▼ 신규 방법론 범위 밖 — 항상 null
-  "agent_human_min": null,
-  "agent_ai_min": null,
-  "saved_min": null,
-  "speedup": null,
-  "human_breakdown": {"research.source_deep_review": 377.5, "...": 0},  // work_unit_id→평균 분
-  "agent_breakdown": {},            // 항상 빈 객체
-  "rationale": "R-001 경쟁사 5곳 ...; R-002 ...",   // 요구사항 제목 목록
+  "error": null,                    // 실패 시 문자열. 예외를 raise하지 않음
+  "human_min": 338.8,               // v0.5 엔진 P50 (분) — 숙련자, 생성형 AI 미사용
+  "agent_min": 6.89,                // = agent_human_min + agent_ai_min
+  "agent_human_min": 5.2,           // hitl: 감독(지시·검토·승인) + 잔여 직접작업
+  "agent_ai_min": 1.69,             // 기계 시간 (ai_io 포함, revision factor 곱)
+  "saved_min": 331.91,              // human_min - agent_min
+  "speedup": 49.17,                 // human_min / agent_min (agent_min<=0이면 null)
+  "human_breakdown": {"research.synthesis": 120.5, "...": 0},   // work_unit_id→평균 분
+  "agent_breakdown": {"draft": 0.4, "instruct": 3.0,            // primitive→분 (기계·사람 합산)
+    "ai_io": {"input_words": 900.0, "output_words": 250.0, "minutes": 0.39}},
+  "rationale": "한 줄 근거 문자열",
+  "confidence": "C (cold-start seed rates/catalog, 미보정)",
+  "confidence_notes": [],           // 비어있지 않으면 저신뢰 처리 권장
   // 부가 키 (구 소비측은 무시 가능, 저장 권장)
-  "human_p80_min": 2241.1,          // P80 (분) — 계획·예산용 보수값
+  "human_p80_min": 401.2,           // P80 (분) — 계획·예산용 보수값
   "estimate_id": "E-xxxxxxxxxx",    // 동일 입력+동일 catalog면 동일 (재현성 추적)
-  "catalog_version": "core-0.5.0-seed",
-  "confidence": 0.79,               // Work Item 매핑 신뢰도 평균 (0~1)
-  "warnings": []                    // 미산정(unscored)·저신뢰·전문검토 경고 — 비면 정상
+  "catalog_version": "core-0.5.0-seed"
 }
 ```
 
@@ -149,35 +154,34 @@ assert r["human_breakdown"], "work unit breakdown 비어 있음"
 
 | 항목 | 구 | 신규 |
 |---|---|---|
-| 산정 대상 | human + agent(machine/hitl) 2경로 | **human-equivalent만** (설계서 §2.3) |
-| 산정 방식 | primitive count × rates.json 점요율 | Work Unit 수량분포 × catalog.json 시간분포 → Monte Carlo |
-| 출력 | P50 점추정 | 최종 총공수분포에서 P50/P80 1회 산출 |
-| `human_min` | primitive 합산 점추정 | 분포 P50. `human_p80_min` 병용 권장 |
-| `agent_*`, `saved_min`, `speedup` | 수치 | **null** |
-| 요율/기준 | `rates.json` | `catalog.json` (Work Unit Catalog) |
-| LLM 호출 | 1회(+재시도 1회) | two-pass 2회 / single 1회 (+단계별 재시도 1회) |
+| `human_min` | human primitive count × rates 점추정 | v0.5 Work Unit WBS 분해 × catalog.json 분포 → Monte Carlo **P50** (+`human_p80_min`). 구보다 크게 나오는 경향 |
+| `agent_*` | primitive×rates | **동일 방식 유지** (agent_path.py + rates.json) |
+| `saved_min`/`speedup` | 동일 방법론 쌍의 차/비 | human 쪽만 방법론 상향 → 계통적으로 커짐. 시계열 비교 시 단절점 표기 필요 |
+| `human_breakdown` 키 | primitive 이름 | work_unit_id (예: `research.synthesis`) |
+| `confidence` | 문자열 "C (...)" | 동일 형식 유지 |
+| LLM 호출 | 1회(+재시도) | 3회: A+B+agent-path (single 모드는 2회) |
 
 ## 오류 모드
 
 | 상황 | 동작 |
 |---|---|
-| LLM 출력 스키마 불량 | 해당 단계 자동 1회 재호출 → 그래도 불량이면 `error` 필드에 기록 (raise 안 함) |
-| Catalog에 없는 work_unit_id·수량 불량 | 해당 항목만 unscored로 분리, `warnings`에 과소추정 경고 |
-| LLM이 시간 필드(minutes/p50 등) 출력 | 검증기가 재귀 제거 후 계속 진행, warnings에 기록 |
-| PROFESSIONAL_REVIEW 포함 | 결과는 나오되 "전문가 검토 없이 확정값 사용 금지" 경고 부착 |
-| LLM 통신 실패 | `error` 필드에 예외 문자열 |
+| LLM 출력 스키마 불량 | 해당 호출 자동 1회 재시도 → 그래도 불량이면 `error` 필드에 기록 (raise 안 함) |
+| Catalog에 없는 work_unit_id·수량 불량 (human) | 해당 항목만 미산정 분리, `confidence_notes`에 과소추정 경고 |
+| 미등록 primitive·음수 count (agent) | 해당 항목만 폐기, `confidence_notes`에 기록 |
+| hitl 빈 배열 | agent_human_min=0 + notes 경고 (leverage 과대평가 위험) |
+| LLM이 시간 필드(minutes/p50 등) 출력 | 검증기가 재귀 제거 후 진행, notes 기록 |
+| LLM 통신 실패 | `error` 필드에 예외 문자열, 수치 전부 null |
 
-## 심화 사용 (신규 스키마 직접 사용 시)
+## 심화 사용 (v0.5 신규 스키마 직접 사용 시)
 
-compat 없이 전체 구조(요구사항, Work Item별 기여도, 증거, 시뮬레이션 파라미터)가 필요하면:
+compat 없이 human-equivalent 전체 구조(요구사항, Work Item 기여도, 증거, P50/P80)가 필요하면:
 
 ```python
 from effort_estimator import HumanEffortEstimator
 est = HumanEffortEstimator(llm)                    # mode="two_pass"|"single", seed, trials 조정 가능
 r = est.estimate(spec_text)                        # spec_text: 자유 텍스트 작업 지침서
-r["effort"]                                        # {p50_minutes, p80_minutes, mean_minutes, p50/p80_person_hours}
-r["item_contributions"]                            # Work Item별 평균 기여 분·비중
-r["unscored_items"], r["warnings"], r["notes"]     # 미산정·경고
+r["effort"]                                        # {p50_minutes, p80_minutes, mean_minutes, ...}
+r["item_contributions"], r["unscored_items"], r["warnings"]
 
 # Review Studio식 수정 후 재계산 (LLM 미호출, 결정론적)
 r2 = est.estimate_from_effort_input(edited_effort_engine_input_json)
@@ -187,9 +191,10 @@ r2 = est.estimate_from_effort_input(edited_effort_engine_input_json)
 
 ## 금지 사항
 
-- 프롬프트에 `catalog.json`의 `time_model`·시간값 노출 금지 — 수량 역산 오염.
-  (`test_two_pass_calls_and_no_rate_leak`이 회귀 감시.)
-- LLM에게 시간(분·시)·P50/P80을 직접 출력시키는 프롬프트 개조 금지 — Work Unit 수량만.
+- 프롬프트에 `catalog.json`의 `time_model`·`rates.json`의 `min_per_unit` 노출 금지 —
+  수량/count 역산 오염. (`test_llm_call_count_and_no_rate_leak` 등이 회귀 감시.)
+- LLM에게 시간(분·시)·P50/P80을 직접 출력시키는 프롬프트 개조 금지 — 수량·count만.
 - Work Unit 단계에서 P50/P80을 먼저 뽑아 합산하는 구조 개조 금지 —
   percentile은 최종 총공수분포에서 한 번만(설계서 §4.6).
-- `human_p80_min`을 버리고 `human_min`만 저장하지 말 것 — 계획·예산은 P80 기준.
+- `agent_human_min`/`agent_ai_min` 세부값을 버리고 `agent_min`만 저장하지 말 것 —
+  사람 시간과 기계 시간은 다른 자원.

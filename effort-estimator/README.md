@@ -28,7 +28,10 @@ estimator.py   오케스트레이터: Prompt A→B(기본) 또는 C(단일호출
 prompts.py     Prompt A/B/C (설계서 §23~25 각색, Catalog는 시간정보 제거 뷰만 전달)
 engine.py      결정론적 Effort Engine: 분포 표본·검증·Monte Carlo·percentile
 catalog.json   Work Unit Catalog (expert seed, confidence C — calibration 대상)
-compat.py      구 시스템(CounterfactualEstimator.estimate_task) 어댑터 — human만 유효
+agent_path.py  agent/hitl 경로 산정 (doc/integ-spec.md §3 — primitive count × rates.json)
+rates.json     agent 경로 요율표 (integ-spec §3 계약, 프롬프트 미노출)
+compat.py      구 시스템(CounterfactualEstimator.estimate_task) drop-in 어댑터
+               — human_min은 v0.5 엔진 P50, agent_min 계열은 agent_path 산정 (integ-spec 완전 준수)
 onprem_llm_sim.py  OnpremLLM.complete_json(prompt, max_tokens)->dict 시뮬 (cursor-proxy)
 test_estimator.py  단위테스트(mock) + --live 프록시 실호출
 examples/      샘플 작업 지침서
@@ -63,9 +66,10 @@ est.estimate_from_effort_input(edited_effort_engine_input)
 `OnpremLLM.complete_json(prompt: str, max_tokens: int) -> dict` 계약과 동일.
 `HumanEffortEstimator(OnpremLLM())`에 실물 인스턴스를 주입하면 끝.
 
-구 계약 소비자는 `compat.CounterfactualEstimator.estimate_task` 유지 —
-단 신규 방법론은 human-equivalent만 산정하므로 `agent_min` 계열은 `None`
-(`human_min`=P50, 부가 필드 `human_p80_min` 사용).
+구 계약 소비자는 `compat.CounterfactualEstimator.estimate_task` 그대로 사용
+(doc/integ-spec.md §2/§6 완전 준수 — `analysis_cf.py`/`server.py` 무수정 drop-in).
+`human_min`=v0.5 P50, `agent_min`=machine+hitl 수치, `speedup`·`saved_min` 계산됨.
+human 쪽 방법론 상향으로 speedup이 구보다 계통적으로 커짐 — 해석 기준 갱신 필요.
 
 ## 한계 (Phase A~B 수준)
 
