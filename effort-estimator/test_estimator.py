@@ -138,7 +138,8 @@ class MockLLM:
         self.calls.append(prompt)
         if self.queue is not None:
             return self.queue.pop(0)
-        if "Planned Requirement Reconstruction Engine" in prompt:
+        if ("Avatar Task Requirement Converter" in prompt
+                or "Planned Requirement Reconstruction Engine" in prompt):
             return copy.deepcopy(REQ_OUT)
         if "Consistency Critic" in prompt:  # Pass D
             return copy.deepcopy(self.critic_out) if self.critic_out \
@@ -345,7 +346,7 @@ class TestEstimatorFlow(unittest.TestCase):
         llm = MockLLM()
         est = HumanEffortEstimator(llm, trials=200, seed=42)
         est.estimate(SPEC)
-        self.assertEqual(len(llm.calls), 3)  # A + B + D(critic)
+        self.assertEqual(len(llm.calls), 2)  # A-avatar + B (critic 기본 OFF)
         for prompt in llm.calls:
             self.assertNotIn("time_model", prompt)
             self.assertNotIn("min_per_unit", prompt)
@@ -368,7 +369,7 @@ class TestEstimatorFlow(unittest.TestCase):
     def test_retry_on_invalid_then_valid(self):
         llm = MockLLM(queue=[{"garbage": True}, copy.deepcopy(REQ_OUT),
                              copy.deepcopy(EFFORT_OUT)])
-        est = HumanEffortEstimator(llm, trials=200, seed=42, critic=False)
+        est = HumanEffortEstimator(llm, trials=200, seed=42)
         r = est.estimate(SPEC)
         self.assertEqual(len(llm.calls), 3)
         self.assertTrue(any("재시도" in n for n in r["notes"]))
@@ -386,7 +387,8 @@ class TestEstimatorFlow(unittest.TestCase):
                     "reason": "지침서에 없는 산출물"}]),
             "requirement_issues": [], "overall_notes": [],
         }
-        est = HumanEffortEstimator(MockLLM(critic_out=critic), trials=200, seed=42)
+        est = HumanEffortEstimator(MockLLM(critic_out=critic), trials=200, seed=42,
+                                   critic=True)
         r = est.estimate(SPEC)
         self.assertEqual(len(r["work_items"]), 4)
         self.assertTrue(any(u["work_item_id"] == "W-004"
@@ -399,7 +401,7 @@ class TestEstimatorFlow(unittest.TestCase):
         # Pass D 2회 실패해도 산정은 진행 + 검토 필요 표시
         llm = MockLLM(queue=[copy.deepcopy(REQ_OUT), copy.deepcopy(EFFORT_OUT),
                              {"garbage": True}, {"garbage": True}])
-        est = HumanEffortEstimator(llm, trials=200, seed=42)
+        est = HumanEffortEstimator(llm, trials=200, seed=42, critic=True)
         r = est.estimate(SPEC)
         self.assertGreater(r["effort"]["p50_minutes"], 0)
         self.assertTrue(r["review_required"])
@@ -473,7 +475,7 @@ class TestCompat(unittest.TestCase):
     def test_llm_call_count_and_no_rate_leak(self):
         llm = MockLLM()
         CounterfactualEstimator(llm=llm).estimate_task("t", "c", "r", [], "d")
-        self.assertEqual(len(llm.calls), 4)  # Prompt A + B + D(critic) + agent-path
+        self.assertEqual(len(llm.calls), 3)  # A-avatar + B + agent-path
         for prompt in llm.calls:
             self.assertNotIn("min_per_unit", prompt)
             self.assertNotIn("time_model", prompt)

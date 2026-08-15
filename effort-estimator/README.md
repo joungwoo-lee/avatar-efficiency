@@ -4,9 +4,21 @@
 · 설계 근거: [doc/DESIGN.md](doc/DESIGN.md) · 통합 런북: [doc/INTEGRATION.md](doc/INTEGRATION.md)
 · 구 API 계약: [doc/integ-spec.md](doc/integ-spec.md)
 
-**입력**: `할일+역할+업무상세+스킬` 작업 지침서 자유 텍스트 (**업무 실행 전**)
+**입력**: 아바타 디스크립션 — `할일+역할+업무상세+스킬` 업무 정의 텍스트 (**업무 실행 전**)
 **출력**: 숙련자가 생성형 AI 없이 동일 결과를 만들 때의 Human-Equivalent Effort
 — 최종 총공수분포에서 한 번 산출한 **P50/P80 (분 단위)**
+
+## 케이스 분리
+
+기본 구조(설계서 원안)는 `클로드코드 트랜스크립트 → [A] 요구사항 추출 → [B] 분해·매핑
+→ [코드] 견적`이다. 본 모듈은 **첫 단계만 아바타 특화로 교체**한 케이스:
+
+- 트랜스크립트 케이스(원안 Prompt A, §23): 수행된 일의 **복원** — 철회·대체 정리,
+  수행상태 판정 필요. 본 모듈 미사용.
+- **아바타 케이스(본 모듈, Prompt A-avatar)**: 업무 정의의 **변환**. 아바타 입력의
+  확정 의미(스킬=이미 존재하는 도구, 반복 업무 1회분, 명시 산출물만, 역할=기준 인물)를
+  전제로 하므로 "자동화 → 시스템 구축" 같은 복원식 오해석이 끼어들 여지가 없다.
+- 이후 단계(Prompt B → Effort Engine)는 두 케이스 공용.
 
 ## 3계층 분리 (설계서 §1)
 
@@ -34,10 +46,10 @@
 ## 구성
 
 ```
-estimator.py   오케스트레이터: Prompt A→B→D(기본) 또는 C(단일호출) → 검증(+재시도 1회) → 엔진
-               D = Consistency Critic(설계서 §7.1) — 분류·분해 오류 일반 안전망.
-               keep/drop/flag만 가능(부풀리기 불가), 실패·지적 시 review_required 표시
-prompts.py     Prompt A/B/C (설계서 §23~25 각색, Catalog는 시간정보 제거 뷰만 전달)
+estimator.py   오케스트레이터: Prompt A-avatar→B(기본, 2회) 또는 C(단일호출) → 검증 → 엔진
+               critic=True 옵션: Pass D Consistency Critic(설계서 §7.1) 추가 —
+               keep/drop/flag만 가능(부풀리기 불가), 기본 OFF
+prompts.py     Prompt A-avatar/A/B/C/D (Catalog는 시간정보 제거 뷰만 전달)
 engine.py      결정론적 Effort Engine: 분포 표본·검증·Monte Carlo·percentile
 catalog.json   Work Unit Catalog (expert seed, confidence C — calibration 대상)
 agent_path.py  agent/hitl 경로 산정 (doc/integ-spec.md §3 — primitive count × rates.json)

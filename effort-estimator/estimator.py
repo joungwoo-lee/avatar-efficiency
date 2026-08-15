@@ -2,18 +2,27 @@
 """요구사항 기반 Human-Equivalent Effort 산정기.
 
 방법론: doc/requirement_based_human_effort_service_design.md (v0.6)
-입력: '할일+역할+업무상세+스킬' 작업 지침서 자유 텍스트 (업무 실행 전)
+입력: 아바타 디스크립션 — '할일+역할+업무상세+스킬' 업무 정의 텍스트 (업무 실행 전)
 출력: 숙련자가 생성형 AI 없이 동일 결과를 만들 때의 Human-Equivalent Effort
       — 최종 총공수분포에서 한 번 산출한 P50/P80 (분 단위)
 
+기본 구조(설계서 원안)는 '클로드코드 트랜스크립트 → 요구사항 추출 → 견적'이다.
+본 모듈은 그 구조에서 **첫 단계만 아바타 특화로 교체**한 케이스다:
+  트랜스크립트 케이스: Prompt A(§23) — 수행된 일의 복원 (본 모듈 미사용)
+  아바타 케이스(본 모듈): Prompt A-avatar — 업무 정의를 요구사항으로 변환.
+    아바타 입력의 확정 의미(스킬=기존 도구, 반복 업무 1회분, 명시 산출물만)를
+    전제로 하므로 트랜스크립트식 복원 해석이 끼어들 여지가 없다.
+  이후 단계(Prompt B → Effort Engine)는 두 케이스 공용.
+
 3계층 분리 (설계서 §1):
-  LLM      = 요구사항 추출 + 인간 작업분해 + Work Unit 매핑·수량화 (시간 출력 금지)
+  LLM      = 요구사항 변환 + 인간 작업분해 + Work Unit 매핑·수량화 (시간 출력 금지)
   Catalog  = 인간 노동 기준 (catalog.json — Work Unit별 시간분포, 프롬프트 미노출)
   Code     = 수량×시간분포 Monte Carlo 합성 → P50/P80 1회 산출 (engine.py)
 
 실행 모드 (설계서 §7.5):
-  two_pass (기본): Prompt A(요구사항 추출) → Prompt B(분해·매핑) — 단계별 감사·재처리 가능
+  two_pass (기본): Prompt A-avatar(요구사항 변환) → Prompt B(분해·매핑) — 2회 호출
   single   (저지연): Prompt C 단일호출
+  critic=True (선택): Pass D Consistency Critic 추가 — 기본 OFF
 
 LLM 계약: OnpremLLM.complete_json(prompt: str, max_tokens: int) -> dict
 """
@@ -238,9 +247,10 @@ class HumanEffortEstimator:
                  mode="two_pass", reference_worker=None, scope=None, critic=None):
         if mode not in ("two_pass", "single"):
             raise ValueError(f"mode는 two_pass 또는 single: {mode!r}")
-        # Pass D(Consistency Critic, 설계서 §7.1): 분류·분해 오류의 일반 안전망.
-        # 정식 산정(two_pass)은 기본 ON, 저지연(single)은 기본 OFF — critic 인자로 강제 가능.
-        self.critic_enabled = critic if critic is not None else (mode == "two_pass")
+        # Pass D(Consistency Critic, 설계서 §7.1): 선택 안전망. 아바타 특화 A로
+        # 첫 단계 해석 오류원이 제거되어 기본 OFF(호출 2회 유지) — critic=True로 활성화.
+        # 결정론적 가드(단위 일치·conflicts_with·SW 교차검증)와 review 게이트는 무비용이라 상시.
+        self.critic_enabled = bool(critic)
         self.llm = llm
         self.max_tokens = max_tokens
         self.trials = trials
@@ -275,8 +285,8 @@ class HumanEffortEstimator:
 
         if self.mode == "two_pass":
             req_out, n = self._call_validated(
-                _prompts.build_prompt_a(work_order_text),
-                validate_requirements_output, "Prompt A")
+                _prompts.build_prompt_a_avatar(work_order_text),
+                validate_requirements_output, "Prompt A(avatar)")
             notes += n
             effort_in, n = self._call_validated(
                 _prompts.build_prompt_b(req_out, self.catalog,
@@ -286,7 +296,8 @@ class HumanEffortEstimator:
                 "Prompt B")
             notes += n
             requirements_view = req_out["requirements"]
-            prompt_versions = [_prompts.PROMPT_A_VERSION, _prompts.PROMPT_B_VERSION]
+            prompt_versions = [_prompts.PROMPT_A_AVATAR_VERSION,
+                               _prompts.PROMPT_B_VERSION]
         else:
             effort_in, n = self._call_validated(
                 _prompts.build_prompt_c(work_order_text, self.catalog,
@@ -398,7 +409,7 @@ class HumanEffortEstimator:
             "estimate_id": f"E-{digest}",
             "methodology_version": METHODOLOGY_VERSION,
             "catalog_version": self.catalog["catalog_version"],
-            "input_mode": "work_order",
+            "input_mode": "avatar_description",
             "reference_worker": self.reference_worker,
             "scope": self.scope,
             "effort": {

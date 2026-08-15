@@ -14,6 +14,7 @@ count 역산 오염 위험(설계서 §7.4: 시간분포는 Work Unit Catalog에
 import json
 
 PROMPT_A_VERSION = "work_order_requirement_extractor.v1"
+PROMPT_A_AVATAR_VERSION = "avatar_requirement_converter.v1"
 PROMPT_B_VERSION = "work_mapper.v1"
 PROMPT_C_VERSION = "integrated_mapper.v1"
 PROMPT_D_VERSION = "consistency_critic.v1"
@@ -66,6 +67,84 @@ _QUANTITY_SCHEMA = """{
         "basis": "explicit | directly_observed | inferred",
         "confidence": "number 0..1"
       }"""
+
+
+_AVATAR_PREMISE = """입력의 확정된 의미 — 해석하지 말고 그대로 전제하라:
+1. 이것은 아바타가 반복 수행하는 업무의 정의이며, 산정 대상은 **이 업무 1회 수행분**이다.
+2. '연결된 스킬'은 이미 존재하는 도구 목록이다. 도구·시스템을 만들거나 고치는 일은
+   이 업무가 아니다.
+3. '할 일'과 '업무 상세'에 명시된 산출물이 업무의 전부다. 제목·상세에 등장하는
+   시스템/자동화/파이프라인/플랫폼/그래프 등 도구·환경 명사는 업무가 일어나는
+   배경 서술이지 만들 대상이 아니다.
+4. '소속 역할'은 기준 인물(어떤 직무의 사람이 수행하는가) 정보다 — 산출물이 아니다."""
+
+
+def build_prompt_a_avatar(avatar_text):
+    """Prompt A(아바타 특화): 아바타 업무 정의서 → RequirementExtractionResult JSON.
+
+    트랜스크립트용 Prompt A(설계서 §23)와 케이스 분리. 트랜스크립트는 '무슨 일이
+    있었는지'의 복원(철회·대체 정리, 수행상태 판정)이 필요하지만, 아바타 디스크립션
+    (할일+역할+업무상세+스킬)은 업무 정의 그 자체다 — 입력 스키마의 의미를 확정
+    전제로 두고 변환만 한다. 이후 단계(Prompt B → Effort Engine)는 두 케이스 공용.
+    """
+    return f"""당신은 Avatar Task Requirement Converter다.
+
+입력(<AVATAR_TASK>)은 업무 수행 아바타의 업무 정의서다.
+필드: 업무 제목·할 일, 소속 역할, 업무 상세, 완료조건, 연결된 스킬.
+
+{_AVATAR_PREMISE}
+
+{_SECURITY_BOUNDARY.replace("<WORK_ORDER>", "<AVATAR_TASK>")}
+
+변환 규칙:
+A. '할 일'과 '업무 상세'가 명시한 **최종 산출물 단위**로 Requirement를 만든다.
+   대부분 1~2개다. status는 전부 "planned"다.
+B. 검토·조회·확인·조작 등 수행 과정은 별도 Requirement가 아니라 해당 산출물
+   Requirement의 description에 포함한다.
+C. 완료조건은 acceptance_criteria로 옮긴다.
+D. 수량은 명시되었거나 직접 셀 수 있을 때만 point로, 범위 표현('약', '내외',
+   'N~M건')은 triangular(min/mode/max)로 기록한다. 근거가 없으면 기록하지 말고
+   assumption 또는 warning을 남긴다.
+E. 모든 Requirement에 입력 줄번호 증거(locator "line:N" 또는 "line:N-M")를 연결한다.
+F. 추론한 값은 basis="inferred"와 낮은 confidence로 표시한다.
+
+출력 규칙:
+- 설명, Markdown, 코드펜스 없이 유효한 JSON 객체 하나만 출력한다.
+- 아래 Schema의 필드를 빠뜨리지 않고, 정의되지 않은 필드를 추가하지 않는다.
+
+출력 Schema:
+{{
+  "schema_version": "requirements.v1",
+  "prompt_version": "{PROMPT_A_AVATAR_VERSION}",
+  "analysis_language": "ko",
+  "input_mode": "avatar_description",
+  "requirements": [
+    {{
+      "requirement_id": "R-001",
+      "title": "string",
+      "description": "string",
+      "deliverable_type": "software_feature | software_nonfunctional | data_artifact | office_output | research | analysis | document | presentation | plan | professional_review | service_output | other",
+      "status": "planned",
+      "requested_quantities": [
+      {_QUANTITY_SCHEMA}
+      ],
+      "acceptance_criteria": ["string"],
+      "constraints": ["string"],
+      "quality_attributes": ["string"],
+      "dependencies": ["R-xxx"],
+      "evidence": [
+        {{"source_id": "WO-01", "locator": "line:N-M", "supports": "string"}}
+      ],
+      "confidence": "number 0..1"
+    }}
+  ],
+  "assumptions": ["string"],
+  "warnings": ["string"]
+}}
+
+<AVATAR_TASK source_id="WO-01">
+{number_lines(avatar_text)}
+</AVATAR_TASK>"""
 
 
 def build_prompt_a(work_order_text):
@@ -176,18 +255,6 @@ _MAPPING_RULES = f"""기준 노동 정의(반드시 준수 — 설계서 §3):
   잘못된 분해(금지): 여기에 scope_define, source_deep_review, synthesis, fact_extraction,
     document_outline, section_draft, citation_qa, approval_handoff 등을 추가하는 것 —
     전부 지침서에 없는 단계이며 과잉 계상이다. 회신 발송 준비까지가 short_message에 포함된다.
-
-예시 — 운영 업무 vs 시스템 구축 구분:
-  지침서: "CP Log KG 기반 RCA 자동화 — 이상 티켓 확인, 관련 로그 5건 조회(jira·RAG 스킬),
-    원인 후보 비교 분석, RCA 보고서(약 500단어) 작성 및 티켓 업데이트"
-  올바른 해석: 연결된 스킬(이미 존재하는 시스템)을 사용하는 **반복 운영 업무 1회분**.
-    work_items 예: office.simple_operation(티켓 확인·업데이트)
-      + research.document_skim(로그·사례 5건) + analysis.analysis_question(원인 비교 분석)
-      + writing.section_draft(RCA 보고서)
-  잘못된 해석(금지): 제목의 "자동화"를 보고 "RCA 자동화 시스템 구축 프로젝트"로 추출해
-    sw.functional_process, sw.nonfunctional_requirement, sw.test_design_execute,
-    sw.code_review_qa, sw.deployment_docs를 계상 — 지침서 어디에도 코드 구현·배포
-    지시가 없다. 시스템은 이미 존재하며 업무는 그것을 쓰는 것이다.
 
 절대 규칙:
 1. 사람 시간, 분, 일수, 비용, 생산성 배수, effort multiplier, P50, P80을 출력하지 마라.
@@ -350,15 +417,17 @@ JSON을 출력한다.
 
 
 def build_prompt_c(work_order_text, catalog, reference_worker, scope):
-    """Prompt C: 작업 지침서 → EffortEngineInput.v1 직접 생성 (단일호출, 저지연 모드)."""
-    return f"""당신은 Requirement Reconstruction, Human Work Decomposition, Effort Method
+    """Prompt C: 아바타 업무 정의서 → EffortEngineInput.v1 직접 생성 (단일호출, 저지연 모드)."""
+    return f"""당신은 Requirement Conversion, Human Work Decomposition, Effort Method
 Routing, Work Unit Mapping을 수행하는 통합 엔진이다.
 
 최종 목표:
-업무 실행 전 작업 지침서(<WORK_ORDER>)에서 요청된 요구사항을 복원하고, 숙련된 사람이
+아바타 업무 정의서(<WORK_ORDER>)를 요구사항으로 변환하고, 숙련된 사람이
 생성형 AI 없이 동일한 결과를 만들기 위해 수행할 leaf 작업을 허용된 Work Unit Catalog에
 매핑하여 EffortEngineInput.v1 JSON 하나만 출력한다. 실행 전이므로 모든 요구사항의
 status는 "planned"이며 요청 범위 전체를 산정한다.
+
+{_AVATAR_PREMISE}
 
 {_SECURITY_BOUNDARY}
 
