@@ -42,6 +42,10 @@ efficiency/
 - 요율(rates.json)·시간분포(catalog.json)는 프롬프트에 절대 미노출.
 - 분자·분모는 서로 다른 산정 자(Work Unit vs primitive) — 실측 보정 전까지
   speedup 절대값은 상대 비교 용도 (agent-effort/README.md 한계 절).
+- 분자는 두 자 병행: 요구사항 기반(v0.6, 기본)과 구버전 primitive(교차확인).
+  실세션 6개 검증 결과 합산 2% 차 수렴하나 파일 산출물 없는 조사·판단 업무는
+  primitive가 과소 — 두 값의 괴리가 큰 케이스는 사람 검토 트리거
+  (human-effort/README.md 실측 검증 절).
 
 LLM 백엔드: cursor-proxy(127.0.0.1:18741), 계약 `complete_json(prompt, max_tokens) -> dict`
 (`human-effort/onprem_llm_sim.py`).

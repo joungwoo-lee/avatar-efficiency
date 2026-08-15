@@ -104,6 +104,17 @@ from primitive_effort import estimate_human_min
 estimate_human_min(llm, spec_text)["human_min"]
 ```
 
+### primitive 방식 실측 검증 (2026-08-16, 실세션 6개)
+
+- 입력에서 **AI 도구 사용 통계는 제외**(경로 anchoring 오염), **산출물 규모 실측**
+  (Write/Edit 기록된 작성 단어량)은 포함해야 한다. 규모 신호 없이는 측량 불가 —
+  13.8h짜리 구현 세션이 54분으로 붕괴함(합산이 요구사항 기반의 28%).
+  규모 신호 포함 시 합산 기준 요구사항 기반과 2% 차로 수렴 (1,411 vs 1,439분).
+- **잔여 한계**: 파일 산출물이 없는 조사·검토·판단 업무는 primitive가 구조적으로
+  과소(작성량에 노동이 안 잡힘 — 조사 세션 28 vs 75분, 채점 54 vs 172분).
+  이런 유형은 요구사항 기반(v0.6)이 맞는 자다.
+- **운용 원칙**: 두 자 병행, 괴리가 큰 케이스(3배↑/0.3배↓)는 사람 검토 트리거.
+
 ## 실환경(mm_app) 연결
 
 `onprem_llm_sim.OnpremLLM`은 실환경 `mm_app/onprem-llm/onprem_llm.py`의
