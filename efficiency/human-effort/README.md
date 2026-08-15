@@ -65,9 +65,9 @@ transcript_requirements.py  1단계 모듈(트랜스크립트 케이스, 설계�
                — extract_requirements() 출력이 estimate_from_requirements()로 연결
 engine.py      결정론적 Effort Engine: 분포 표본·검증·Monte Carlo·percentile
 catalog.json   Work Unit Catalog (expert seed, confidence C — calibration 대상)
-session_path_effort.py  세션 경로 기반 human w/o AI 산정(대안 방식) — 기록된 동작
-               count × human 요율(rates.json human 카드). LLM 미사용·결정론적.
-               요구사항 기반과 편향 방향이 달라 교차확인용
+primitive_effort.py  분자 구버전(Phase1) 방식 — LLM 1회가 human 경로를 primitive
+               행동+count로 분해 × rates.json human 카드 요율 단순 곱셈.
+               Monte Carlo·Work Unit 없음. v0.6과 같은 분자를 재는 다른 자(교차확인용)
 onprem_llm_sim.py  OnpremLLM.complete_json(prompt, max_tokens)->dict 시뮬 (cursor-proxy)
 test_estimator.py  단위테스트(mock) + --live 프록시 실호출
 examples/      샘플 작업 지침서

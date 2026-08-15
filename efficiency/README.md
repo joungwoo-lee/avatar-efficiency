@@ -13,8 +13,8 @@ efficiency/
 ├─ human-effort/        [부품·분자] human w/o AI — 방식 2개:
 │                       ① 요구사항 기반(기본): Work Unit Catalog × Monte Carlo → P50/P80,
 │                         입력 1단계 케이스별(아바타 정의 A-avatar / 트랜스크립트 복원 §23)
-│                       ② 세션 경로 기반(session_path_effort.py): 기록된 동작 × human 요율,
-│                         LLM 미사용·결정론적 — 교차확인용
+│                       ② 구버전 Phase1(primitive_effort.py): LLM 1회 human 행동
+│                         count 분해 × human 요율 점값 곱셈 — 교차확인용
 ├─ agent-effort/        [부품·분모] agent_min
 │                       agent_effort.py = 사전 추산 (LLM이 예상 경로 count 분해 × 요율)
 │                       transcript_actual.py = 사후 실측 (기록된 동작 집계, LLM 미사용)

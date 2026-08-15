@@ -507,37 +507,48 @@ def _live():
 
 
 
-class TestSessionPathEffort(unittest.TestCase):
-    def test_hand_check_and_determinism(self):
-        # 세션 경로 기반 human w/o AI: 동일 count × human 요율
-        import tempfile, os
-        from session_path_effort import human_path_minutes, measure_session_path
-        counts = {"tool_calls": 10, "tool_result_words": 1000,
-                  "assistant_words": 500, "user_instructions": 3,
-                  "user_words": 50, "interrupts": 0, "session_id": "s",
-                  "first_ts": None, "last_ts": None}
-        r = human_path_minutes(counts)
-        # execute 10×2.0=20 + read 1000×0.005=5 + draft 500×0.05=25 = 50
-        self.assertAlmostEqual(r["human_path_min"], 50.0, places=2)
-        lines = [
-            {"type": "assistant", "message": {"role": "assistant", "content": [
-                {"type": "text", "text": "단어 " * 100},
-                {"type": "tool_use", "name": "Bash", "input": {}}]}},
-            {"type": "user", "message": {"role": "user", "content": [
-                {"type": "tool_result", "content": "ok " * 200}]}},
-        ]
-        fd, p = tempfile.mkstemp(suffix=".jsonl")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            for ln in lines:
-                f.write(json.dumps(ln, ensure_ascii=False) + "\n")
-        try:
-            m1 = measure_session_path(p)
-            m2 = measure_session_path(p)
-            # 2.0 + 200×0.005(1.0) + 100×0.05(5.0) = 8.0
-            self.assertAlmostEqual(m1["human_path_min"], 8.0, places=2)
-            self.assertEqual(m1, m2)
-        finally:
-            os.unlink(p)
+class TestPrimitiveEffort(unittest.TestCase):
+    class _Mock:
+        def __init__(self, queue):
+            self.queue = list(queue)
+            self.calls = []
+
+        def complete_json(self, prompt, max_tokens):
+            self.calls.append(prompt)
+            return self.queue.pop(0)
+
+    def test_hand_check(self):
+        # read 800×0.005=4 + draft 200×0.05=10 + verify 1×3=17
+        from primitive_effort import estimate_human_min
+        out = {"human": [{"primitive": "read", "count": 800},
+                         {"primitive": "draft", "count": 200},
+                         {"primitive": "verify", "count": 1}],
+               "rationale": "t"}
+        r = estimate_human_min(self._Mock([out]), "spec")
+        self.assertAlmostEqual(r["human_min"], 17.0, places=2)
+
+    def test_no_rate_leak_and_retry(self):
+        from primitive_effort import estimate_human_min, build_prompt
+        from agent_effort import load_rates
+        prompt = build_prompt("spec", load_rates())
+        self.assertNotIn("min_per_unit", prompt)
+        self.assertNotIn("0.005", prompt)
+        llm = self._Mock([{"garbage": 1},
+                          {"human": [{"primitive": "read", "count": 100}]}])
+        r = estimate_human_min(llm, "spec")
+        self.assertEqual(len(llm.calls), 2)
+        self.assertAlmostEqual(r["human_min"], 0.5, places=2)
+
+    def test_bad_items_dropped(self):
+        from primitive_effort import validate_llm_output
+        from agent_effort import load_rates
+        out = {"human": [{"primitive": "nonexistent", "count": 5},
+                         {"primitive": "read", "count": -1},
+                         {"primitive": "read", "count": 100}]}
+        parsed, notes, fatal = validate_llm_output(out, load_rates())
+        self.assertFalse(fatal)
+        self.assertEqual(len(parsed["human"]), 1)
+
 
 
 if __name__ == "__main__":
