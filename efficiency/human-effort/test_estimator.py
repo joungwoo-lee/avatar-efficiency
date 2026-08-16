@@ -651,6 +651,45 @@ class TestRequirementActions(unittest.TestCase):
         bd2 = {b["primitive"]: b for b in r2["breakdown"]}
         self.assertEqual(bd2["read"]["count"], 1000)
 
+    def test_navigation_structure_decomposition(self):
+        # AI 전수 탐색 읽기량 → 사람 항해 구조(기여 정독 + 후보 훑기) 변환
+        import tempfile, os, json as _json
+        from requirement_actions import (collect_record_stats,
+                                         estimate_actions_from_requirements)
+        lines = [
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Read", "input": {"file_path": "a.py"}},
+                {"type": "tool_use", "name": "Read", "input": {"file_path": "b.py"}},
+                {"type": "tool_use", "name": "Read", "input": {"file_path": "c.py"}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "content": "코드 " * 5000}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Edit",
+                 "input": {"file_path": "a.py", "new_string": "수정 " * 50}},
+                {"type": "text", "text": "b.py 의 로직을 참고해 a.py 를 고쳤다"}]}},
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(_json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            rs = collect_record_stats(p)
+            # a.py=편집됨, b.py=답변에 언급 → 기여 2 / c.py → 훑기 1
+            self.assertEqual(rs["contributed_docs"], 2)
+            self.assertEqual(rs["scanned_docs"], 1)
+            # 읽기 닻: AI가 5000단어 읽었어도 사람 = 2×300 + 1×60 = 660단어
+            req = {"requirements": [{"title": "수정", "requested_quantities": [],
+                                     "acceptance_criteria": []}]}
+            out = {"human": [{"primitive": "read", "count": 5000},
+                             {"primitive": "edit", "count": 50}]}
+            r = estimate_actions_from_requirements(self._Mock([out]), req,
+                                                   record_stats=rs)
+            bd = {b["primitive"]: b for b in r["breakdown"]}
+            self.assertEqual(bd["read"]["count"], 660)
+            self.assertEqual(r["anchors"]["structured_read_words"], 660)
+        finally:
+            os.unlink(p)
+
     def test_no_rate_leak(self):
         from requirement_actions import build_prompt, build_prompt_single
         from agent_effort import load_rates

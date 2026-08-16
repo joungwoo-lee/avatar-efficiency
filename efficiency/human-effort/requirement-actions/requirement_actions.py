@@ -133,6 +133,14 @@ def derive_anchors(requirements, record_stats=None, rates=None):
     if task_read:
         anchors["task_read_words"] = round(task_read)
     rs = record_stats or {}
+    # 구조 기반 읽기 수요 (기록 실측): 기여 자료는 정독, 훑은 후보는 스캔 소액.
+    # AI가 읽은 총량이 아니라 "사람이 밟았을 항해 구조"로 환산 — 결정론적.
+    if rs.get("contributed_docs") or rs.get("scanned_docs"):
+        structured = (rs.get("contributed_docs", 0) * rm.get("words_per_item", 0)
+                      + rs.get("scanned_docs", 0) * rm.get("skim_words_per_doc", 0)
+                      + rs.get("input_words", 0))
+        if structured:
+            anchors["structured_read_words"] = round(structured)
     if out_words:
         anchors["out_words"] = out_words          # 요구사항 명시 분량 → 목표
         anchors["out_words_kind"] = "explicit"
@@ -174,13 +182,19 @@ def apply_anchors(items, anchors, notes):
         notes.append(f"닻 적용: {label} 총량 {total:.0f}→{target:.0f} ({mode})")
 
     task_read = anchors.get("task_read_words")
+    structured_read = anchors.get("structured_read_words")
     measured_read = anchors.get("read_words")
     if task_read:
-        # 할일 수량 × 사람 건당 정독량 = 목표. 단 실측(존재하는 자료량)을 넘지 않음
+        # 1순위: 할일 명시 건수 × 선별 정독량 (요구가 정의한 검토 대상)
         target = min(task_read, measured_read) if measured_read else task_read
         rescale(_WORD_READ, target, "읽기 단어수(할일 기반: 건수×선별 정독량)")
+    elif structured_read:
+        # 2순위: 기록 구조 기반 — 기여 자료 정독 + 후보 훑기 (항해 모델)
+        target = min(structured_read, measured_read) if measured_read             else structured_read
+        rescale(_WORD_READ, target,
+                "읽기 단어수(항해 구조: 기여 정독+후보 훑기)")
     else:
-        rescale(_WORD_READ, measured_read, "읽기 단어수(실측)", cap_only=True)
+        rescale(_WORD_READ, measured_read, "읽기 단어수(실측 상한)", cap_only=True)
     rescale(_WORD_WRITE, anchors.get("out_words"),
             "작성 단어수(명시)" if anchors.get("out_words_kind") == "explicit"
             else "작성 단어수(실측)",
@@ -272,10 +286,20 @@ def estimate_actions_from_requirements(llm, requirements, record_stats=None,
 def collect_record_stats(jsonl_path):
     """트랜스크립트에서 닻용 실측치 수집 (LLM 미사용, 결정론적).
 
-    반환: {reviewed_words, artifact_words, input_words}
+    반환: {reviewed_words, artifact_words, input_words,
+           contributed_docs, scanned_docs}
+
+    contributed/scanned: AI가 읽은 파일의 구조 분해 —
+      기여 자료 = 읽힌 파일 중 이후 편집됐거나 최종 답변에 이름이 언급된 것
+                  (사람도 도달해 관련 부분을 정독할 목적지)
+      훑은 후보 = 읽혔지만 결과에 안 쓰인 것 (사람은 훑고 지나감)
+    AI의 전수 탐색(brute-force) 읽기량을 사람의 전략적 항해 구조로 변환하는 근거.
     """
     reviewed = input_w = 0
     artifact = {}
+    read_files = set()
+    edited_files = set()
+    final_answer = ""
     with open(jsonl_path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -308,20 +332,37 @@ def collect_record_stats(jsonl_path):
                                 if isinstance(c, dict) and c.get("type") == "text":
                                     reviewed += len(c.get("text", "").split())
             elif rtype == "assistant":
+                texts = []
                 for b in blocks:
-                    if isinstance(b, dict) and b.get("type") == "tool_use":
-                        inp = b.get("input") or {}
-                        fp = inp.get("file_path")
-                        if not fp:
-                            continue
-                        if b.get("name") == "Write":
-                            artifact[fp] = len((inp.get("content") or "").split())
-                        else:
-                            new = inp.get("new_string") or inp.get("new_source") or ""
-                            if isinstance(new, str) and new:
-                                artifact[fp] = artifact.get(fp, 0) + len(new.split())
+                    if not isinstance(b, dict):
+                        continue
+                    if b.get("type") == "text":
+                        texts.append(b.get("text", ""))
+                    if b.get("type") != "tool_use":
+                        continue
+                    inp = b.get("input") or {}
+                    fp = inp.get("file_path")
+                    if not fp:
+                        continue
+                    name = b.get("name")
+                    if name in ("Read", "NotebookRead"):
+                        read_files.add(fp)
+                    elif name == "Write":
+                        edited_files.add(fp)
+                        artifact[fp] = len((inp.get("content") or "").split())
+                    else:
+                        edited_files.add(fp)
+                        new = inp.get("new_string") or inp.get("new_source") or ""
+                        if isinstance(new, str) and new:
+                            artifact[fp] = artifact.get(fp, 0) + len(new.split())
+                if texts:
+                    final_answer = " ".join(texts)
+    contributed = {f for f in read_files
+                   if f in edited_files or Path(f).name in final_answer}
     return {"reviewed_words": reviewed, "input_words": input_w,
-            "artifact_words": sum(artifact.values())}
+            "artifact_words": sum(artifact.values()),
+            "contributed_docs": len(contributed),
+            "scanned_docs": len(read_files - contributed)}
 
 
 # ---------------------------------------------------------------- 단일호출 모드
