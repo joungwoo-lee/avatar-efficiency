@@ -30,10 +30,10 @@ git clone https://github.com/joungwoo-lee/avatar-efficiency.git   # 또는 기�
 이름의 **한 폴더로 모아** 복사한다 (compat.py는 동일 폴더 import를 우선 시도):
 
 ```
-human-effort/:       estimator.py engine.py prompts.py catalog.json
-                     transcript_requirements.py onprem_llm_sim.py     # 분자 (v0.6)
-agent-effort/:       agent_effort.py rates.json                       # 분모 (integ-spec §3)
-counterfactual-api/: compat.py                                        # drop-in 어댑터
+human-effort/requirement-based/:  estimator.py engine.py prompts.py catalog.json
+human-effort/shared/:             transcript_requirements.py onprem_llm_sim.py
+agent-effort/:                    agent_effort.py rates.json          # 분모 (integ-spec §3)
+counterfactual-api/:              compat.py                           # drop-in 어댑터
 ```
 
 - 폴더명이 `effort_estimator`(언더스코어)여야 Python import가 된다. 하이픈이면 실패.
