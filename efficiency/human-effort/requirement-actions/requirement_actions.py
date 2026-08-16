@@ -356,7 +356,6 @@ def collect_record_stats(jsonl_path, detail=False):
     edited_files = set()
     internal = set()         # 세션 내부 부산물 (분류 제외, 건수만 보고)
     final_answer = ""
-    all_text = []            # 모든 assistant 발언 (신호② 이름 언급)
     read_regions = {}        # (fp, offset) → 횟수 (신호③ — 같은 구간 재방문만)
     tool_i = 0               # 도구 호출 순번
     turn_search_i = None     # 이 턴의 마지막 검색 시점 (신호④ — 턴 단위)
@@ -472,22 +471,33 @@ def collect_record_stats(jsonl_path, detail=False):
                             artifact[fp] = artifact.get(fp, 0) + len(new.split())
                 if texts:
                     final_answer = " ".join(texts)
-                    all_text.append(final_answer)
     _end_turn()  # 마지막 턴 마감
-    spoken = " ".join(all_text)
 
     # 신호⑤ 준비: 턴별 마무리 답변들의 6단어 연속 조각·식별자 집합
     ans_text = " ".join(answers)
     ans_words = ans_text.lower().split()
     ans_shingles = {" ".join(ans_words[i:i + 6])
                     for i in range(len(ans_words) - 5)}
-    ans_idents = set(re.findall(r"[A-Za-z_][A-Za-z0-9_./-]{7,}", ans_text))
+    # 구조적 식별자만: _·.·/ 를 포함한 코드 토큰 (complete_json, rates.json,
+    # a/b.py). 순수 영단어(Analysis, Accepted …)는 배제 — 일반 단어 겹침으로
+    # 전 파일이 정독 승격되는 과대 발화가 실측 확인됨 (§25: S2 6/6 오승격)
+    ans_idents = {t for t in re.findall(r"[A-Za-z_][A-Za-z0-9_./-]{7,}", ans_text)
+                  if re.search(r"[._/]", t)}
+    # 변별력 필터: 읽은 파일 여러 곳에 흔한 토큰(max_tokens, complete_json 등
+    # 코드베이스 공용 어휘)은 특정 파일의 기여 증거가 못 된다 — 읽은 파일 중
+    # 2개 이하에만 나타나는 식별자만 증거로 인정 (결정론)
+    if len(read_content) > 2:
+        _spread = {t: sum(1 for ct in read_content.values() if t in ct)
+                   for t in ans_idents}
+        ans_idents = {t for t in ans_idents if _spread[t] <= 2}
 
     def _overlaps(fp):
+        # ⑤ 발화 조건: 6단어 연속 조각 1회 이상(직접 인용 증거) 또는
+        # 변별력 있는 구조적 식별자 2개 이상(공용 어휘·우연 일치 방지)
         content = read_content.get(fp, "")
         if not content:
             return False
-        if any(t in content for t in ans_idents):
+        if sum(1 for t in ans_idents if t in content) >= 2:
             return True
         cw = content.lower().split()
         return any(" ".join(cw[i:i + 6]) in ans_shingles
@@ -497,7 +507,7 @@ def collect_record_stats(jsonl_path, detail=False):
     contributed = {
         f for f in read_files
         if f in edited_files                                   # ① 편집
-        or Path(f).name in spoken                              # ② 이름 언급
+        or Path(f).name in ans_text                            # ② 이름 언급(마무리 답변만 — 진행 나레이션 제외)
         or f in revisited                                      # ③ 같은 구간 재방문
         or f in signal4                                        # ④ 탐색 착지(턴 단위)
         or _overlaps(f)                                        # ⑤ 내용 겹침(턴별 답변)
