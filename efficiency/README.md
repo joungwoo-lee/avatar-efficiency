@@ -1,72 +1,54 @@
-# efficiency — AI 효율(speedup) 측정 서브시스템
+# efficiency — AI 효율(speedup) 측정
 
 ```
-speedup = human_min(분자) ÷ agent_min(분모)
-  분자 = 사람이 생성형 AI 없이 직접 하면 걸리는 시간
-  분모 = AI 에이전트 + HITL 사람감독을 합쳐서 걸리는 시간
+speedup = human_min ÷ agent_min
+  human_min = 사람이 생성형 AI 없이 직접 하면 걸리는 시간 (분)
+  agent_min = AI가 쓴 시간 + 감독하는 사람이 쓴 시간 (분)
 ```
 
-측정 구도: **사람과 AI 에이전트의 협업**. 분모는 협업의 두 주체가 각자 쓴
-에포트를 같은 단위(분)로 합산한 총 투입 — 사람 몫(지시·검토·승인·잔여작업)과
-AI 몫(실제 소모 시간)을 따로 세서 더한다. 어느 한쪽만 세면 협업 비용이
-왜곡된다(사람만 세면 AI 자원 공짜, AI만 세면 감독 노동 은폐).
+측정 구도: 사람과 AI의 **협업** — 두 주체의 에포트를 같은 단위(분)로 합산.
+숫자 산출 원칙: **LLM은 "무엇을 몇 번"만 정하고, 시간은 코드가 단가표로만 계산.**
 
-## 구조 — 부품 2개 + 용도별 API 2개
+## 입구 2개 (API)
+
+| 질문 | 입구 | LLM 호출 |
+|---|---|---|
+| "이 아바타 업무, AI 시키면 얼마 이득?" (사전) | `counterfactual-api/compat.py` — `estimate_task(카드)` | **1회** — 한 호출이 human/agent/감독 세 경로를 같은 완료상태 기준으로 분해(integ-spec §3, paths.py) × rates 단가. 분포(P50/P80) 필요 시 `human_method="workunit"`(3회) |
+| "실행된 이 세션, 실제 효율은?" (사후) | `session-api/session_api.py` — `measure_session(jsonl)` | 2회 — 분모는 기록 실측(0회), 분자는 할일 복원→견적(2회). 초소형(검토·입력<100단어 & 산출물<50단어)은 자동 제외 |
+
+## 부품
 
 ```
-efficiency/
-├─ human-effort/        [부품·분자] human w/o AI — 방식 3개, 폴더로 분리:
-│   ├─ requirement-based/    요구사항·산출물 방식 (기준 자) — 할일 추출 →
-│   │                        산출물 단위(명사) × 카탈로그 분포 → Monte Carlo
-│   ├─ requirement-actions/  요구사항·행동 방식 (신방식) — 할일 추출 →
-│   │                        사람 행동(동사) × 요율, 숫자는 닻으로 코드 확정
-│   ├─ record-actions/       세션기록·행동 방식 (교차확인) — 기록에서 바로
-│   │                        사람 행동 시뮬 × 요율 (+하이브리드 옵션)
-│   └─ shared/               공용: 할일 추출기(§23)·정규화·LLM 시뮬
-├─ agent-effort/        [부품·분모] agent_min
-│                       agent_effort.py = 사전 추산 (LLM이 예상 경로 count 분해 × 요율)
-│                       transcript_actual.py = 사후 실측 (기록된 동작 집계, LLM 미사용)
-├─ counterfactual-api/  [API·아바타 측정 = 사전] 아바타 카드 입력 →
-│                       LLM 1회가 human/agent/hitl 세 경로를 함께 분해(paths.py,
-│                       integ-spec §3) × rates 요율 → 구 계약 반환. 분자·분모
-│                       동일 체계. workunit 옵션 = 분자만 카탈로그×Monte Carlo
-└─ session-api/         [API·세션 측정 = 사후] 트랜스크립트 입력 →
-                        §23 복원 분자 + transcript_actual 실측 분모 → speedup 리포트
+human-effort/    분자 — 방식 3종 (폴더별, README 참조)
+agent-effort/    분모 — 사전 추산(agent_effort.py) · 세션 실측(transcript_actual.py)
+                 rates.json = 행동 단가표 단일 출처 (프롬프트 미노출)
+counterfactual-api/  사전 API + 구 계약(integ-spec) drop-in
+session-api/         사후 API + 초소형 게이트
 ```
 
-규칙: **human-effort/agent-effort는 부품(분자·분모), *-api는 용도별 조합.**
-한 케이스용 1단계 로직을 다른 케이스에 유용하지 않는다.
+## 측정 기조 (요지)
 
-## 용도별 입구
+- 감독(hitl)은 세션 시간 측정이 아니라 **단서 × 단가** — 검토·후작업은 세션
+  밖에서 할 수 있어 시간 재기로는 못 잡는다. 타임스탬프는 단가 보정 재료로만.
+- 병렬 서브에이전트는 실소모 시간에 가산 금지.
+- AI가 읽고 쓴 양은 사람 견적의 **상한이지 목표가 아니다** — 사람은 선별해서
+  읽고, 요구된 분량만 쓴다. 목표는 할일에 적힌 수량·완료조건에서만 나온다.
 
-| 알고 싶은 것 | 입구 |
-|---|---|
-| "이 아바타 업무, AI화하면 얼마 이득?" (실행 전) | `counterfactual-api/compat.py` — `estimate_task(title, context, role, skills, detail)` |
-| "실행된 이 세션, 실제 효율은?" (실행 후) | `session-api/session_api.py` — `measure_session(llm, jsonl)` 또는 CLI |
-| 사람 w/o AI 견적만 | `human-effort/estimator.py` |
-| agent 시간만 | `agent-effort/` (사전: agent_effort, 실측: transcript_actual) |
+## 신뢰도 현황
 
-## 공통 원칙
+- 단가는 대부분 전문가 초기값(confidence C). **실측 보정 완료 1건**:
+  지시 작성 단가(타임스탬프 1,456건 → 0.5분+0.05분/단어, 60단어 상한).
+- 사람 실측 정답지 0건 — 절대값은 참고치, 세션·업무 간 상대 비교 용도.
+- 남은 한계·다음 단계: [CHANGELOG.md](CHANGELOG.md) 미해결 절.
 
-- LLM은 수량(count/quantity)만 출력한다. 시간은 코드가 요율·시간분포로만 계산.
-- 요율(rates.json)·시간분포(catalog.json)는 프롬프트에 절대 미노출.
-- 분자·분모는 서로 다른 산정 자(Work Unit vs primitive) — 실측 보정 전까지
-  speedup 절대값은 상대 비교 용도 (agent-effort/README.md 한계 절).
-- 분자는 두 자 병행: 요구사항 기반(v0.6, 기본)과 구버전 primitive(교차확인).
-  실세션 6개 검증 결과 합산 2% 차 수렴하나 파일 산출물 없는 조사·판단 업무는
-  primitive가 과소 — 두 값의 괴리가 큰 케이스는 사람 검토 트리거
-  (human-effort/README.md 실측 검증 절).
-
-LLM 백엔드: cursor-proxy(127.0.0.1:18741), 계약 `complete_json(prompt, max_tokens) -> dict`
-(`human-effort/onprem_llm_sim.py`).
+개선 이력 전체: [CHANGELOG.md](CHANGELOG.md) ·
+프롬프트 설계 근거: [human-effort/doc/PROMPT_DESIGN.md](human-effort/doc/PROMPT_DESIGN.md)
 
 ## 테스트
 
 ```bash
-cd human-effort && python test_estimator.py          # 분자 3방식 통합 (+ --live)
+cd human-effort && python test_estimator.py          # (+ --live 회귀)
 cd agent-effort && python test_agent_effort.py
 cd counterfactual-api && python test_compat.py
 cd session-api && python test_session_api.py
 ```
-
-개선 이력 총정리: [CHANGELOG.md](CHANGELOG.md)

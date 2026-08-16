@@ -1,238 +1,68 @@
-# human-effort — 요구사항 기반 Human-Equivalent Effort 산정기
+# human-effort — 사람 w/o 생성형AI 시간 (분자)
 
 방법론: [doc/requirement_based_human_effort_service_design.md](doc/requirement_based_human_effort_service_design.md) (v0.6)
-· 설계 근거: [doc/DESIGN.md](doc/DESIGN.md) · 프롬프트 설계 근거: [doc/PROMPT_DESIGN.md](doc/PROMPT_DESIGN.md)
-· 구 API 어댑터·통합 런북: [../counterfactual-api/](../counterfactual-api/)
+· 설계 근거: [doc/DESIGN.md](doc/DESIGN.md)
+· 프롬프트 설계 근거: [doc/PROMPT_DESIGN.md](doc/PROMPT_DESIGN.md)
+· 개선 이력·실측 결과: [../CHANGELOG.md](../CHANGELOG.md)
 
-**입력**: 아바타 디스크립션 — `할일+역할+업무상세+스킬` 업무 정의 텍스트 (**업무 실행 전**)
-**출력**: 숙련자가 생성형 AI 없이 동일 결과를 만들 때의 Human-Equivalent Effort
-— 최종 총공수분포에서 한 번 산출한 **P50/P80 (분 단위)**
+## 방식 3종
 
-## 분자 산정 방식 3종
+| 방식 | 흐름 | 폴더 | 쓰임 |
+|---|---|---|---|
+| **요구사항·산출물** | 할일 추출 → 산출물 단위(명사) × 카탈로그 시간분포 → Monte Carlo **P50/P80** | `requirement-based/` | 분포·보수치가 필요한 정식 산정. 카탈로그에 사람의 선별적 읽기가 단위 정의로 내장 |
+| **요구사항·행동** | 할일 추출 → 사람 행동(동사) 분해 → × 사람 단가. **숫자는 코드가 닻으로 확정** | `requirement-actions/` | 분모와 같은 단가 체계 — 세션 측정의 분자 후보. 단일호출 모드(`estimate_actions_single`) 있음 |
+| **세션기록·행동** | 기록 신호에서 바로 사람 행동 시뮬 × 단가 (할일 안 거침) | `record-actions/` | 교차확인용 — 흔적 없는 노동(조사·판단)을 못 보는 한계 |
 
-| 공식 이름 | 흐름 | 폴더 |
+공용: `shared/` — 할일 추출기(트랜스크립트 §23 복원 / 아바타는 requirement-based의 A-avatar), 정규화, LLM 시뮬.
+
+## 핵심 설계 3가지
+
+1. **시간은 LLM이 못 정한다** — LLM은 "무엇을 몇 번"만. 시간은 카탈로그(catalog.json)
+   또는 단가표(rates.json)를 코드가 곱한다. LLM 출력에 시간 필드가 있으면 자동 제거.
+2. **숫자 닻** — 규모 숫자의 결정권을 코드가 가진다:
+   - 목표: 할일에 적힌 수량("2,000단어"), 완료조건 개수(=검증 건수),
+     할일 건수 × 선별 정독량(사람은 필요한 부분만 읽음)
+   - 상한: AI가 실제 읽고 쓴 실측량 — **AI의 과대 탐색·장황함은 천장이지 목표가 아님**
+   - 효과: 반복 실행 편차 ±0.1~4%
+3. **입력 신호 규칙** — "어떻게 했나"(도구 호출 경로)는 빼고, "뭐가 요구·검토·
+   생산됐나"(할일 수량, 검토 자료량, 산출물 순계, 보고 분량, 작업 구조 요약)는 넣는다.
+
+## 할일(요구사항) 단계의 효과 — 14세션 실측 요약
+
+| 업무 유형 | 할일 거침 vs 안 거침 | 판단 |
 |---|---|---|
-| **요구사항·산출물 방식** (기준 자) | 할일 추출 → 산출물 단위(명사) × 카탈로그 시간분포 → Monte Carlo | `requirement-based/` |
-| **요구사항·행동 방식** (신방식) | 할일 추출 → 사람 행동(동사) 목록(LLM은 종류만) → **숫자는 코드가 닻으로 확정** → × 요율 | `requirement-actions/` |
-| **세션기록·행동 방식** (교차확인) | 기록 신호 → 행동 목록 × 요율 (하이브리드: +할일 스코프) | `record-actions/` |
-
-공용 부품(할일 추출기 §23, 정규화, LLM 시뮬)은 `shared/`.
-
-요구사항·행동 방식은 호출 모드 2개:
-- **2단계(기본)**: 할일 추출 1회 + 행동 분해 1회 — 할일 목록이 독립 산출물로
-  남아 단계별 감사·재처리 가능. 정식 산정용.
-- **단일호출**(`estimate_actions_single`): 한 호출 안에서 내부적으로 할일을
-  정리하고 행동까지 분해 — LLM 1회로 절반 비용. 내부 할일 목록을 함께
-  출력시키므로 닻(명시 수량·완료조건)은 동일하게 작동. 대량 배치·저지연용.
-
-### 할일(요구사항) 단계를 거치면 뭐가 달라지나 (실측 3세션 근거)
-
-거치지 않는 방식(세션기록·행동)과 거치는 방식(요구사항·행동)을 같은 세션에서
-대조한 결과:
-
-| 달라지는 것 | 내용 | 실측 근거 |
-|---|---|---|
-| **스코프** | "무엇을 위해 한 일인지"가 잡혀서, 흔적(파일·작성량)이 약한 업무의 노동을 놓치지 않음 | 조사 세션: 안 거치면 48분, 거치면 91~109분 — **2배 차이**, 임시 비교 기준(75분)에 가까운 쪽은 거친 쪽 |
-| **검증 개수의 근거** | 할일의 완료조건 개수가 "몇 번 확인해야 하나"의 근거가 됨. 안 거치면 이 숫자를 맨땅 추정 | 완료조건 11~17개 → 검증 33~51분 — 이 몫이 두 방식 격차의 대부분 |
-| **작성 분량의 근거** | 할일에 적힌 분량("2,000단어")이 기준이 됨. 안 거치면 AI가 실제 쓴 양(장황함 포함)이 유일한 근거 | 문서 세션 과대(2.5배)의 방어선 — 단 분량 명시가 없으면 효과 없음 |
-| **오염 차단** | AI의 시행착오·수다가 정제된 할일 목록 뒤로 걸러짐 | — |
-| **감사 가능성** | "견적이 뭘 근거로 나왔나"를 사람이 대조할 중간 산출물(할일 목록)이 생김 | — |
-| 비용 | LLM 호출 1회 → 2회 | — |
-
-주의: 닻(실측 작성량 등)이 값의 대부분을 정하는 세션(문서형)에서는 두 방식의
-총액이 비슷해 보인다 — 요구사항 단계가 무의미해서가 아니라 **닻이 다 정해버려서
-경로 차이가 숫자에 안 보이는 것**. 닻이 얇은 업무(조사·검토형)일수록 요구사항
-단계의 효과가 크다.
-
-**차이가 나야 하는 유형 하나 더 — 번복·오해가 많은 세션 (원리적 근거):**
-AI를 시켜서 일하는 것에는 사람이 직접 하는 것에 없는 비용이 하나 들어간다 —
-**의도 전달의 어려움**. AI가 지시를 오해해 헛답을 내고, 사람이 재지시하고,
-다시 하는 왕복이 그것이다. 이 비용은 측정마다 다르게 처리되는 것이 맞고,
-실제로 그렇게 동작한다:
-- 분모(AI 쓴 비용): 헛답 생성·재지시 전부 포함 — 실제 든 비용이므로.
-  오해가 많을수록 효율(speedup)이 깎여 나온다 (의도 전달 실패의 대가가 숫자에 반영)
-- 분자·요구사항 거침: 번복된 조각은 할일 추출(누적 종합)에서 걸러짐 —
-  사람이 직접 하면 "자기 지시를 자기가 오해"하는 비용은 없으므로 견적에 안 넣는 게 맞음
-- 분자·안 거침: 헛발질하며 읽은 자료·중간 산출이 신호에 섞여 사람 노동으로
-  과대 계상될 위험 — 이런 세션엔 부적합, 요구사항 거침을 쓸 것
-
-신방식의 닻: 쓸 단어수=요구사항 명시 분량>실측 산출물, 읽을 단어수=실측 검토
-자료량, 검증 건수=완료조건 개수. 프롬프트 문구별 존재 이유는 doc/PROMPT_DESIGN.md.
-
-## 케이스 분리
-
-기본 구조(설계서 원안)는 `클로드코드 트랜스크립트 → [A] 요구사항 추출 → [B] 분해·매핑
-→ [코드] 견적`이다. 본 모듈은 **첫 단계만 아바타 특화로 교체**한 케이스:
-
-- 트랜스크립트 케이스(원안 Prompt A, §23): 수행된 일의 **복원** — 철회·대체 정리,
-  수행상태(delivered/partial) 판정. **`transcript_requirements.py` 별도 1단계 모듈**로
-  제공 — `extract_requirements(llm, transcript)` → `estimate_from_requirements(req)`.
-- **아바타 케이스(본 모듈, Prompt A-avatar)**: 업무 정의의 **변환**. 아바타 입력의
-  확정 의미(스킬=이미 존재하는 도구, 반복 업무 1회분, 명시 산출물만, 역할=기준 인물)를
-  전제로 하므로 "자동화 → 시스템 구축" 같은 복원식 오해석이 끼어들 여지가 없다.
-- 이후 단계(Prompt B → Effort Engine)는 두 케이스 공용 —
-  `HumanEffortEstimator.estimate_from_requirements(requirements_v1_json)`이 공용 진입점.
-
-```python
-# 트랜스크립트 케이스 사용법 (1단계 모듈 → 공용 2단계)
-from transcript_requirements import extract_requirements
-from estimator import HumanEffortEstimator
-req, notes = extract_requirements(llm, transcript_text)      # 1단계: 복원 (§23)
-result = HumanEffortEstimator(llm).estimate_from_requirements(req, transcript_text)
-# status: delivered=전체, partial=완료범위만, not_delivered=제외 (§24)
-```
-
-## 3계층 분리 (설계서 §1)
-
-```
-[LLM]  요구사항 추출 → 인간 WBS 분해 → 엔진 라우팅 → Work Unit 매핑·수량화
-        (시간·배수 출력 금지 — minutes/hours/p50/p80 필드는 검증기가 제거)
-[Catalog]  catalog.json — Work Unit별 인간 시간분포 (프롬프트 미노출)
-[Code]  engine.py — 수량분포 × 시간분포 Monte Carlo(고정 seed) 합성
-        → 전체 분포에서 P50/P80 1회 산출 (단위별 percentile 합산 금지)
-```
-
-기준 노동(설계서 §3) 강제 사항 — "human without **generative** AI":
-- 배제는 생성형 AI뿐. 검색엔진·오피스·스프레드시트·템플릿·자동화 스크립트 등
-  일반 업무 도구는 전부 정상 사용 + 합리적 최단 경로 (프롬프트·카탈로그 명기)
-- 과잉분해 금지: 지침서에 명시된 산출물·완료조건에 필요한 작업만, 소형 업무 ≤5개,
-  요구사항 발명 금지 (Prompt A/B/C 규칙)
-- 경량 단위 6종(document_skim, short_message 등)으로 소형 업무 바닥값 제거
-- 코드 강제: quantity.unit ↔ Work Unit unit 불일치 → 미산정, 카탈로그
-  `conflicts_with` 단위 배타성 위반 → 중복 제거 (프롬프트 순응에만 의존하지 않음)
-
-원 설계서는 사후 트랜스크립트 입력 기준이나, 본 모듈은 **사전 지침서** 입력용 각색판:
-`<TRANSCRIPT>` → `<WORK_ORDER>`, 수행상태 없음 → 전 요구사항 `status="planned"`,
-요청 범위 전체 산정. 나머지 규칙(Catalog ID 강제, 증거 연결, 시간출력 금지)은 설계서 그대로.
-
-## 구성
-
-```
-estimator.py   오케스트레이터: Prompt A-avatar→B(기본, 2회) 또는 C(단일호출) → 검증 → 엔진
-               critic=True 옵션: Pass D Consistency Critic(설계서 §7.1) 추가 —
-               keep/drop/flag만 가능(부풀리기 불가), 기본 OFF
-prompts.py     Prompt A-avatar/B/C/D (Catalog는 시간정보 제거 뷰만 전달)
-transcript_requirements.py  1단계 모듈(트랜스크립트 케이스, 설계서 §23 Prompt A)
-               — extract_requirements() 출력이 estimate_from_requirements()로 연결
-engine.py      결정론적 Effort Engine: 분포 표본·검증·Monte Carlo·percentile
-catalog.json   Work Unit Catalog (expert seed, confidence C — calibration 대상)
-primitive_effort.py  분자 구버전(Phase1) 방식 — LLM 1회가 human 경로를 primitive
-               행동+count로 분해 × rates.json human 카드 요율 단순 곱셈.
-               Monte Carlo·Work Unit 없음. v0.6과 같은 분자를 재는 다른 자(교차확인용)
-onprem_llm_sim.py  OnpremLLM.complete_json(prompt, max_tokens)->dict 시뮬 (cursor-proxy)
-test_estimator.py  단위테스트(mock) + --live 프록시 실호출
-examples/      샘플 작업 지침서
-```
-
-이 폴더는 **분자(사람 w/o 생성형AI)만** 담당한다. 분모(agent_min)는
-[`../agent-effort`](../agent-effort), 구 Counterfactual API drop-in 어댑터는
-[`../counterfactual-api`](../counterfactual-api).
+| 조사·분석·대응 (흔적 얇음) | 거침이 2~4배 ↑ — 놓친 노동 복원 | **거침 필수** (존재 이유) |
+| 번복·오해 많은 세션 | 거침이 번복 조각을 걸러냄 — 의도 전달 비용은 분모에서만 계상 | 거침 필수 |
+| 대형 코딩·문서 (실측 닻 두꺼움) | 무차이 ±20% — 닻이 지배 | 어느 쪽이든 가능 |
+| 초소형·잡담 | 측정 무의미 | session-api 게이트가 자동 제외 |
 
 ## 사용
 
 ```bash
-python estimator.py examples/sample_spec.txt            # two-pass(A→B) 리포트
-python estimator.py examples/sample_spec.txt --json     # JSON 출력
-python estimator.py examples/sample_spec.txt --single   # Prompt C 단일호출(저지연)
-python estimator.py spec.txt --seed=7 --trials=10000    # 시뮬 파라미터
-python test_estimator.py                                # 오프라인 테스트
-python test_estimator.py --live                         # + 프록시 라이브 테스트
+cd requirement-based && python estimator.py ../examples/sample_spec.txt   # 산출물 방식
+cd record-actions && python primitive_effort.py <spec.txt>                # 기록·행동 방식
+python test_estimator.py                                                  # 전체 테스트 (+ --live)
 ```
-
-env: `AE_LLM_BASE`(기본 `http://127.0.0.1:18741/v1`), `AE_LLM_MODEL`(기본 `gpt-5-mini`)
 
 ```python
+# 산출물 방식 (P50/P80)
 from estimator import HumanEffortEstimator
-est = HumanEffortEstimator(llm)          # llm: complete_json(prompt, max_tokens)->dict
-result = est.estimate(work_order_text)
-result["effort"]["p50_minutes"], result["effort"]["p80_minutes"]
+r = HumanEffortEstimator(llm).estimate(avatar_text)
+r["effort"]["p50_minutes"], r["effort"]["p80_minutes"]
 
-# Review Studio 수정 후 재계산 (LLM 미호출, 재현 가능)
-est.estimate_from_effort_input(edited_effort_engine_input)
+# 트랜스크립트 → 할일 복원 → 공용 2단계
+from transcript_requirements import extract_requirements
+req, _ = extract_requirements(llm, transcript_text)
+HumanEffortEstimator(llm).estimate_from_requirements(req)
 
-# 구버전(Phase1) 분자 — 교차확인용 (LLM 1회, primitive×human 요율)
-from primitive_effort import estimate_human_min
-estimate_human_min(llm, spec_text)["human_min"]
+# 요구사항·행동 방식 (닻)
+from requirement_actions import estimate_actions_from_requirements, collect_record_stats
+estimate_actions_from_requirements(llm, req, record_stats=collect_record_stats(jsonl))
 ```
 
-### 쉬운 요약 — 두 추정법이 왜 다르고, 뭘 고쳤고, 뭘 못 고쳤나
+## 한계 (현재)
 
-사람 시간 추정법이 2개다. **요구사항 기반**은 "이 결과물을 사람이 만들려면
-무슨 일을 얼마나 해야 하나"로 계산하고, **세션기록 기반**은 세션 기록에서
-사람의 행동을 추정해 "행동 몇 번 × 행동당 시간"으로 계산한다. 같은 세션인데
-세션기록 기반이 요구사항 기반의 1/3이 나오기도, 3배가 나오기도 했다.
-
-고친 것 2개 (둘 다 세션기록 기반 쪽):
-1. 읽고 판단하는 일(채점)이 너무 작게 나왔다 → "읽어야 할 자료가 몇 단어인지"를
-   안 알려준 게 원인. 알려주게 고침 → 절반쯤 회복.
-2. 같은 파일을 여러 번 고쳐 쓰면 고칠 때마다 분량을 전부 더해서 실제보다
-   크게 셌다 → 마지막 완성본 기준으로 세게 고침 + "쓴 분량을 수정 분량으로
-   또 세지 마라" 규칙 추가.
-
-고친 것 하나 더 (4번): 세션기록 기반이 판단·검증 건수를 단서 없이 맨땅
-추정하던 문제 — 기록에서 [작업 구조 참고](검토 파일 목록, 탐색·실행 수행 여부,
-지시 왕복 수)를 추출해 "단계의 종류" 단서로 제공. 횟수는 AI 경로라 베끼기 금지
-경고 내장. 추가로 **하이브리드 모드** 신설: 1단계가 추출한 요구사항으로 스코프를
-고정하고 기록 신호는 규모 단서로만 쓰는 조합 — estimate_human_min(llm, norm,
-requirements=req).
-
-하이브리드 실측 (3세션, 요구사항 기반 대비): 조사형 0.64→0.88배로 수렴(개선),
-채점형 0.42배(판단 깊이는 행동 단가로 못 담아 불변), 문서형 2.7배(AI 장황함 —
-요구사항에 분량 명세가 없어 규모 신호가 이김, 불변). 운용: 세션기록 기반을 쓸
-때는 하이브리드가 기본(손해 유형 없음), 문서·채점형은 요구사항 기반이 기준.
-
-고친 것 하나 더 (3번, 2026-08-16 정정): 조사하는 일이 1/3로 작게 나왔던
-원인은 "흔적이 없어서"가 아니었다 — 검색한 것, 읽은 자료 분량, 최종 보고 내용
-전부 트랜스크립트에 있는데 **정규화 단계에서 잘라내고 안 보여준 것**이었다.
-[조사 자료 규모](검토된 자료 총 단어수, 시행착오 포함 상한으로 명시)와
-[대화 보고 규모](파일 없으면 보고가 산출물) 신호를 추가 → 조사 세션 27분→56분
-(요구사항 기반 75분 대비 0.37→0.75), 채점 세션 82분→114분(172분 대비 0.66).
-
-못 고친 것 1개 (세션기록 기반의 구조적 한계 — 이 유형은 요구사항 기반만 쓴다):
-- 문서 대량 생성: AI는 말이 많다. AI가 1.5만 단어를 썼다고 사람도 그만큼 쓸
-  필요는 없는데, 세션기록 기반은 "쓰인 단어수 × 단가"라서 AI의 수다를 사람
-  노동으로 계산한다. 얼마나 깎아야 할지 근거가 없어 부합 불가.
-
-결론: 코드·조사·채점은 두 추정법이 0.6~0.75 수준으로 수렴 — 병행 가능.
-문서 대량 생성만 요구사항 기반을 쓴다. 완전히 맞추려면 진짜 사람이 그 일을
-해본 시간 기록이 필요하다.
-
-### primitive 방식 실측 검증·정합화 (2026-08-16, 실세션 6개)
-
-정합화 1차 결과 (②primitive/①요구사항 비율, 수정 전→후):
-- 검토·채점형: 0.32x → 0.48x 개선 — [입력 자료 규모] 신호로 읽기 노동 복원. 잔여 과소.
-- 코드 구현·설정형: 0.63~0.70x — 안정적. ②×~1.4 보정 계수로 정렬 가능한 영역.
-- 문서 대량 생성형: 2.27x → 2.72x — 순계화로도 미해결. 근본 원인은 "AI 산출
-  분량 = 사람 필요 분량" 가정: AI는 사람보다 장황하게 쓰고, ①은 요구 충족
-  산출물만 계상. **이 유형은 ②를 ①에 부합시킬 수 없음 — ①이 기준 자.**
-- 조사·검증형: 0.37x → **0.75x** (정정: 구조적 한계가 아니라 정규화가 조사
-  자료·보고 신호를 누락했던 것 — [조사 자료 규모]·[대화 보고 규모] 추가로 해소)
-
-유형별 신뢰 자 규칙: 코드·설정·조사·검토형은 병행(±40% 내), 문서 대량 생성형은
-요구사항 기반 채택.
-
-- 입력에서 **AI 도구 사용 통계는 제외**(경로 anchoring 오염), **산출물 규모 실측**
-  (Write/Edit 기록된 작성 단어량)은 포함해야 한다. 규모 신호 없이는 측량 불가 —
-  13.8h짜리 구현 세션이 54분으로 붕괴함(합산이 요구사항 기반의 28%).
-  규모 신호 포함 시 합산 기준 요구사항 기반과 2% 차로 수렴 (1,411 vs 1,439분).
-- **잔여 한계**: 파일 산출물이 없는 조사·검토·판단 업무는 primitive가 구조적으로
-  과소(작성량에 노동이 안 잡힘 — 조사 세션 28 vs 75분, 채점 54 vs 172분).
-  이런 유형은 요구사항 기반(v0.6)이 맞는 자다.
-- **운용 원칙**: 두 자 병행, 괴리가 큰 케이스(3배↑/0.3배↓)는 사람 검토 트리거.
-
-## 실환경(mm_app) 연결
-
-`onprem_llm_sim.OnpremLLM`은 실환경 `mm_app/onprem-llm/onprem_llm.py`의
-`OnpremLLM.complete_json(prompt: str, max_tokens: int) -> dict` 계약과 동일.
-`HumanEffortEstimator(OnpremLLM())`에 실물 인스턴스를 주입하면 끝.
-
-구 계약(Counterfactual API) 소비자는 `../counterfactual-api/compat.py` 사용 —
-integ-spec §2/§6 완전 준수 drop-in. 통합 절차는 `../counterfactual-api/INTEGRATION.md`.
-
-## 한계 (Phase A~B 수준)
-
-- `catalog.json` 시간분포는 expert seed(`source_type=expert`, `sample_count=0`) —
-  절대값은 confidence C. 실측 calibration(설계서 §13) 전에는 업무 간 상대 비교 용도.
-- Work Item 간 상관 미반영(독립 표본) — P80이 다소 좁게 나올 수 있음.
-- `UNMAPPED_WORK_UNIT` 항목은 미산정 — 총공수 과소추정 경고로 표기.
-- Review Studio UI, tenant 계층 Catalog는 미구현. Pass D는 critic=True 옵션.
+- 카탈로그·단가 대부분 미보정 시드(confidence C) — 절대값은 상대 비교 용도.
+  사람 실측 정답지 확보가 최우선 (../CHANGELOG.md 미해결 절).
+- AI 장황함: 문서 대량 생성형은 행동 방식이 과대 — 산출물 방식을 쓸 것.
+- 판단 깊이: 건당 고정 시간이라 채점형은 어느 방식이든 과소 경향.
