@@ -17,7 +17,9 @@
 레포 배치 그대로면 ../human-effort, ../agent-effort를 자동 참조한다.
 """
 try:  # 배포형: 한 폴더에 모아 복사된 경우
-    from estimator import HumanEffortEstimator, DEFAULT_CATALOG_PATH
+    from estimator import HumanEffortEstimator, DEFAULT_CATALOG_PATH,         validate_requirements_output
+    from prompts import build_prompt_a_avatar
+    from requirement_actions import estimate_actions_from_requirements
     from agent_effort import estimate_agent_min, load_rates, DEFAULT_RATES_PATH
 except ImportError:  # 레포 배치: 형제 폴더 참조
     import sys as _sys
@@ -25,10 +27,13 @@ except ImportError:  # 레포 배치: 형제 폴더 참조
     _root = _Path(__file__).resolve().parent.parent
     for _p in (_root / "human-effort" / "requirement-based",
                _root / "human-effort" / "shared",
+               _root / "human-effort" / "requirement-actions",
                _root / "agent-effort"):
         if str(_p) not in _sys.path:
             _sys.path.insert(0, str(_p))
-    from estimator import HumanEffortEstimator, DEFAULT_CATALOG_PATH
+    from estimator import HumanEffortEstimator, DEFAULT_CATALOG_PATH,         validate_requirements_output
+    from prompts import build_prompt_a_avatar
+    from requirement_actions import estimate_actions_from_requirements
     from agent_effort import estimate_agent_min, load_rates, DEFAULT_RATES_PATH
 
 _SPEC_TEMPLATE = """업무 제목: {title}
@@ -55,7 +60,11 @@ class CounterfactualEstimator:
     """실환경에서는 llm에 실물 OnpremLLM 인스턴스를 명시 주입할 것. 미지정 시 시뮬레이터."""
 
     def __init__(self, llm=None, rates_path=DEFAULT_RATES_PATH, max_tokens=2000,
-                 catalog_path=DEFAULT_CATALOG_PATH, mode="two_pass"):
+                 catalog_path=DEFAULT_CATALOG_PATH, mode="two_pass",
+                 human_method="actions"):
+        # human_method: "actions"(기본) = 요구사항·행동 방식 — 분자·분모가 같은
+        #   행동×단가 자가 되어 speedup의 체계 불일치 편향이 사라짐. P80 없음(점추정).
+        # "workunit" = 요구사항·산출물 방식(카탈로그×Monte Carlo, P50/P80) — 구 동작.
         if llm is None:
             try:
                 from onprem_llm_sim import OnpremLLM
@@ -68,10 +77,25 @@ class CounterfactualEstimator:
             llm = OnpremLLM()
         self.llm = llm
         self.max_tokens = max_tokens
+        self.human_method = human_method
         self.rates = load_rates(rates_path)
         self._est = HumanEffortEstimator(
             llm, catalog_path=catalog_path,
             max_tokens=max(max_tokens, _HUMAN_MIN_TOKENS), mode=mode)
+
+    def _human_actions(self, spec):
+        """분자(요구사항·행동): 카드→할일(A-avatar) 1회 + 행동 분해 1회.
+        사전 측정이라 실측 닻 없음 — 카드 명시 수량·완료조건 닻만 작동."""
+        raw = self.llm.complete_json(build_prompt_a_avatar(spec),
+                                     max(self.max_tokens, _HUMAN_MIN_TOKENS))
+        req, notes, fatal = validate_requirements_output(raw)
+        if fatal:
+            raise ValueError("할일 변환 실패: " + "; ".join(notes))
+        ra = estimate_actions_from_requirements(self.llm, req,
+                                                max_tokens=self.max_tokens)
+        ra["requirements"] = req.get("requirements", [])
+        ra["extract_notes"] = notes
+        return ra
 
     def estimate_task(self, title, context, role, skill_names, detail):
         try:
@@ -80,26 +104,43 @@ class CounterfactualEstimator:
             spec = _SPEC_TEMPLATE.format(
                 title=title or "", context=context or "", role=role or "",
                 skills=skills, detail=detail or "")
-            r = self._est.estimate(spec)                       # 분자 (human w/o AI)
+            if self.human_method == "actions":
+                ha = self._human_actions(spec)                 # 분자 (행동×단가)
+            else:
+                r = self._est.estimate(spec)                   # 분자 (산출물×카탈로그)
             ap = estimate_agent_min(self.llm, spec,            # 분모 (agent+hitl)
                                     self.rates, self.max_tokens)
         except Exception as e:  # LLM 통신 실패·검증 2회 실패 등 — 구 계약대로 error 필드로
             return dict(_ERROR_RESULT, error=f"{type(e).__name__}: {e}")
 
-        human_min = r["effort"]["p50_minutes"]
+        if self.human_method == "actions":
+            human_min = ha["human_min"]
+            human_bd = {b["primitive"]: b["minutes"] for b in ha["breakdown"]}
+            human_p80 = None  # 행동×단가는 점추정 — 분포 없음
+            reqs_view = ha["requirements"]
+            extra_notes = (ha["notes"] + ha["extract_notes"]
+                           + ([f"닻: {ha['anchors']}"] if ha.get("anchors") else []))
+            est_id = None
+            cat_ver = "rates.json(행동 단가) — 분자·분모 동일 체계"
+        else:
+            human_min = r["effort"]["p50_minutes"]
+            human_bd = {c["work_unit_id"]: c["mean_minutes"]
+                        for c in r["item_contributions"]}
+            human_p80 = r["effort"]["p80_minutes"]
+            reqs_view = r["requirements"]
+            extra_notes = ([f"review_required: {x}" for x in r.get("review_reasons", [])]
+                           + list(r["warnings"]) + list(r["notes"]))
+            est_id = r["estimate_id"]
+            cat_ver = r["catalog_version"]
         agent_min = ap["agent_min"]
-
-        human_bd = {c["work_unit_id"]: c["mean_minutes"]
-                    for c in r["item_contributions"]}
         agent_bd = _flat(ap["machine_breakdown"])
         for name, minutes in _flat(ap["hitl_breakdown"]).items():
             agent_bd[name] = round(agent_bd.get(name, 0.0) + minutes, 2)
         agent_bd["ai_io"] = ap["ai_io"]
 
         rationale = ap["rationale"] or "; ".join(
-            f"{q['requirement_id']} {q['title']}" for q in r["requirements"])
-        notes = ([f"review_required: {reason}" for reason in r.get("review_reasons", [])]
-                 + list(r["warnings"]) + list(r["notes"]) + list(ap["notes"]))
+            str(q.get("title", "")) for q in reqs_view)
+        notes = extra_notes + list(ap["notes"])
 
         return {
             "error": None,
@@ -115,9 +156,9 @@ class CounterfactualEstimator:
             "confidence": "C (cold-start seed rates/catalog, 미보정)",
             "confidence_notes": notes,
             # 구 스키마 외 부가 정보 (무시해도 무방, 저장 권장)
-            "human_p80_min": r["effort"]["p80_minutes"],
-            "estimate_id": r["estimate_id"],
-            "catalog_version": r["catalog_version"],
+            "human_p80_min": human_p80,
+            "estimate_id": est_id,
+            "catalog_version": cat_ver,
         }
 
 

@@ -37,6 +37,11 @@ class MockLLM:
         self.calls.append(prompt)
         if "Avatar Task Requirement Converter" in prompt:
             return copy.deepcopy(REQ_OUT)
+        if "행동 분해 엔진" in prompt:  # requirement-actions 분자
+            return {"human": [{"primitive": "read", "count": 800},
+                              {"primitive": "draft", "count": 200},
+                              {"primitive": "verify", "count": 1}],
+                    "rationale": "h"}
         if "실행 공수 산정" in prompt:  # agent_effort 분모 프롬프트
             return copy.deepcopy(AGENT_OUT)
         return copy.deepcopy(EFFORT_OUT)
@@ -51,7 +56,7 @@ class TestCompat(unittest.TestCase):
             self.assertIn(k, r)
         self.assertIsNone(r["error"])
         self.assertGreater(r["human_min"], 0)
-        self.assertGreaterEqual(r["human_p80_min"], r["human_min"])
+        self.assertIsNone(r["human_p80_min"])  # 행동×단가는 점추정 — 분포 없음
         self.assertAlmostEqual(r["agent_ai_min"], 1.69, places=2)
         self.assertAlmostEqual(r["agent_human_min"], 3.9, places=2)
         self.assertAlmostEqual(
