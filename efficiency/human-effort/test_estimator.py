@@ -550,6 +550,60 @@ class TestPrimitiveEffort(unittest.TestCase):
         self.assertEqual(len(parsed["human"]), 1)
 
 
+class TestRequirementActions(unittest.TestCase):
+    class _Mock:
+        def __init__(self, queue):
+            self.queue = list(queue); self.calls = []
+
+        def complete_json(self, prompt, max_tokens):
+            self.calls.append(prompt); return self.queue.pop(0)
+
+    REQ = {"requirements": [{
+        "title": "경쟁사 비교 보고서 작성",
+        "requested_quantities": [
+            {"name": "보고서", "distribution": "point", "value": 2000,
+             "unit": "단어", "basis": "explicit", "confidence": 0.9}],
+        "acceptance_criteria": ["5개사 포함", "검증 완료", "2000단어 내외"],
+    }]}
+
+    def test_anchor_substitution(self):
+        from requirement_actions import estimate_actions_from_requirements
+        out = {"human": [{"primitive": "read", "count": 9999},
+                         {"primitive": "draft", "count": 100},
+                         {"primitive": "edit", "count": 100},
+                         {"primitive": "verify", "count": 10}],
+               "rationale": "t"}
+        r = estimate_actions_from_requirements(
+            self._Mock([out]), self.REQ,
+            record_stats={"reviewed_words": 3000, "input_words": 0,
+                          "artifact_words": 8888})
+        bd = {b["primitive"]: b for b in r["breakdown"]}
+        # read: 실측 3000으로 대체 (LLM 9999 무시)
+        self.assertEqual(bd["read"]["count"], 3000)
+        # draft+edit: 명시 2000단어가 실측 8888보다 우선, 비율(1:1) 보존
+        self.assertEqual(bd["draft"]["count"] + bd["edit"]["count"], 2000)
+        # verify: 완료조건 3개로 대체 (LLM 10 무시)
+        self.assertEqual(bd["verify"]["count"], 3)
+        self.assertTrue(any("닻 적용" in n for n in r["notes"]))
+        # 총액 수기검산: read 3000×0.005=15 + (draft1000×0.05+edit1000×0.02)=70 + verify 3×3=9
+        self.assertAlmostEqual(r["human_min"], 94.0, places=1)
+
+    def test_verify_added_when_missing(self):
+        from requirement_actions import estimate_actions_from_requirements
+        out = {"human": [{"primitive": "draft", "count": 500}]}
+        r = estimate_actions_from_requirements(self._Mock([out]), self.REQ)
+        bd = {b["primitive"]: b for b in r["breakdown"]}
+        self.assertEqual(bd["verify"]["count"], 3)  # LLM 누락 → 완료조건 수로 추가
+        self.assertEqual(bd["draft"]["count"], 2000)  # 명시 분량으로 대체
+
+    def test_no_rate_leak(self):
+        from requirement_actions import build_prompt
+        from agent_effort import load_rates
+        prompt = build_prompt(self.REQ, load_rates())
+        self.assertNotIn("min_per_unit", prompt)
+        self.assertNotIn("0.005", prompt)
+
+
 
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):

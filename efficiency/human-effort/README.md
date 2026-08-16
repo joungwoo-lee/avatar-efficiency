@@ -1,12 +1,23 @@
 # human-effort — 요구사항 기반 Human-Equivalent Effort 산정기
 
 방법론: [doc/requirement_based_human_effort_service_design.md](doc/requirement_based_human_effort_service_design.md) (v0.6)
-· 설계 근거: [doc/DESIGN.md](doc/DESIGN.md)
+· 설계 근거: [doc/DESIGN.md](doc/DESIGN.md) · 프롬프트 설계 근거: [doc/PROMPT_DESIGN.md](doc/PROMPT_DESIGN.md)
 · 구 API 어댑터·통합 런북: [../counterfactual-api/](../counterfactual-api/)
 
 **입력**: 아바타 디스크립션 — `할일+역할+업무상세+스킬` 업무 정의 텍스트 (**업무 실행 전**)
 **출력**: 숙련자가 생성형 AI 없이 동일 결과를 만들 때의 Human-Equivalent Effort
 — 최종 총공수분포에서 한 번 산출한 **P50/P80 (분 단위)**
+
+## 분자 산정 방식 3종
+
+| 방식 | 흐름 | 위치 |
+|---|---|---|
+| 요구사항→산출물 단위 (기준) | 요구사항 → Work Unit(명사) × 카탈로그 시간분포 → Monte Carlo | estimator.py |
+| **요구사항→행동 (신방식)** | 요구사항 → 사람 행동(동사) 목록(LLM은 종류만) → **숫자는 코드가 닻으로 확정** → × 요율 | requirement_actions.py |
+| 기록→행동 (교차확인) | 기록 신호 → 행동 목록 × 요율 (하이브리드: +요구사항 스코프) | primitive_effort.py |
+
+신방식의 닻: 쓸 단어수=요구사항 명시 분량>실측 산출물, 읽을 단어수=실측 검토
+자료량, 검증 건수=완료조건 개수. 프롬프트 문구별 존재 이유는 doc/PROMPT_DESIGN.md.
 
 ## 케이스 분리
 
