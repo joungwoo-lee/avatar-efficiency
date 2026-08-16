@@ -9,6 +9,26 @@ speedup = human_min ÷ agent_min
 측정 구도: 사람과 AI의 **협업** — 두 주체의 에포트를 같은 단위(분)로 합산.
 숫자 산출 원칙: **LLM은 "무엇을 몇 번"만 정하고, 시간은 코드가 단가표로만 계산.**
 
+## 조합 층 — `api.py` (방법론을 명령한 조합으로)
+
+방식 선택은 전부 여기 인자로만 한다. 다른 모듈은 부품이다.
+
+```python
+from api import estimate_avatar, measure_session
+
+estimate_avatar(llm, 카드)                                  # 기본: 1회 동시 분해
+estimate_avatar(llm, 카드, human="workunit")                # 분자만 카탈로그(P50/P80)
+estimate_avatar(llm, 카드, human="req-actions", agent="agent-llm")
+
+measure_session(llm, 세션.jsonl)                            # 기본: 분자 workunit + 분모 실측
+measure_session(llm, 세션.jsonl, human="req-actions")       # 분자를 닻 방식으로
+measure_session(llm, 세션.jsonl, human="record-actions")    # 할일 안 거치는 교차확인
+```
+
+분자: paths(사전 기본) · workunit · req-actions · record-actions(사후 전용)
+분모: paths(사전 기본) · agent-llm(사전) · record(사후 고정, LLM 0회)
+반환은 공통 스키마: `{human, agent, speedup, notes}` (+excluded).
+
 ## 입구 2개 (API)
 
 | 질문 | 입구 | LLM 호출 |
