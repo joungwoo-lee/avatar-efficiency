@@ -28,6 +28,12 @@ user 턴(사람 발화 아님). sidechain(서브에이전트)은 기계 동작�
 import json
 from pathlib import Path
 
+# user 레코드 안 시스템 주입 텍스트 접두 — 사람 지시 집계에서 제외
+_SYSTEM_TEXT_PREFIXES = (
+    "<system-reminder", "<task-notification", "<command-name",
+    "<command-message", "<local-command", "<system-warning",
+    "<user-prompt-submit-hook")
+
 try:
     from .agent_effort import DEFAULT_RATES_PATH, load_rates
 except ImportError:
@@ -84,7 +90,10 @@ def parse_actions(jsonl_path):
                 counts["first_ts"] = counts["first_ts"] or ts
                 counts["last_ts"] = ts
             rtype = rec.get("type")
-            if rtype not in ("user", "assistant") or rec.get("isMeta"):
+            if (rtype not in ("user", "assistant") or rec.get("isMeta")
+                    or rec.get("isSidechain")          # 병렬 — 시간 가산 금지
+                    or rec.get("isCompactSummary")     # 압축 요약 ≠ 사용자 지시
+                    or rec.get("isVisibleInTranscriptOnly")):
                 continue
             blocks = _content_blocks(rec.get("message"))
 
@@ -98,7 +107,8 @@ def parse_actions(jsonl_path):
                         counts["assistant_words"] += _words(b.get("text", ""))
                 continue
 
-            # user 턴: 사람 발화 vs tool_result 구분
+            # user 턴: 사람 발화 vs tool_result 구분.
+            # 시스템 주입 블록(<system-reminder> 등)은 사람 지시가 아님 — 제외
             human_text = ""
             for b in blocks:
                 if not isinstance(b, dict):
@@ -106,7 +116,9 @@ def parse_actions(jsonl_path):
                 if b.get("type") == "tool_result":
                     counts["tool_result_words"] += _result_words(b)
                 elif b.get("type") == "text":
-                    human_text += b.get("text", "") + " "
+                    t = b.get("text", "")
+                    if not t.lstrip().startswith(_SYSTEM_TEXT_PREFIXES):
+                        human_text += t + " "
             human_text = human_text.strip()
             if human_text:
                 if human_text.startswith("[Request interrupted"):

@@ -37,6 +37,18 @@ _WORD_WRITE = ("draft", "edit")
 _IMG_EXT = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg", ".ico"}
 
 
+# user 레코드 안의 시스템 주입 텍스트 — 사람 타이핑이 아니므로 입력·턴 계산 제외
+# (자동 반복·긴 세션에서 사용자 입력의 90% 이상이 이런 블록으로 오염됨)
+_SYSTEM_TEXT_PREFIXES = (
+    "<system-reminder", "<task-notification", "<command-name",
+    "<command-message", "<local-command", "<system-warning",
+    "<user-prompt-submit-hook", "[Request interrupted")
+
+
+def _is_system_text(t):
+    return t.lstrip().startswith(_SYSTEM_TEXT_PREFIXES)
+
+
 def _is_internal_artifact(fp):
     p = str(fp).replace("\\", "/").lower()
     return ("/temp/claude/" in p          # 세션 임시 영역 (scratchpad·tasks)
@@ -367,7 +379,11 @@ def collect_record_stats(jsonl_path, detail=False):
             except json.JSONDecodeError:
                 continue
             if not isinstance(rec, dict) or rec.get("isMeta") \
-                    or rec.get("isSidechain"):  # 병렬 서브에이전트 기록 제외
+                    or rec.get("isSidechain") \
+                    or rec.get("isCompactSummary") \
+                    or rec.get("isVisibleInTranscriptOnly"):
+                # 제외: 병렬 서브에이전트, 문맥 압축 요약(시스템 생성 수천 단어
+                # — 사용자 입력·턴 경계로 오인 방지), 표시 전용 레코드
                 continue
             rtype = rec.get("type")
             content = (rec.get("message") or {}).get("content")
@@ -375,6 +391,7 @@ def collect_record_stats(jsonl_path, detail=False):
                       else content if isinstance(content, list) else [])
             if rtype == "user":
                 if any(isinstance(b, dict) and b.get("type") == "text"
+                       and not _is_system_text(b.get("text", ""))
                        for b in blocks):
                     _end_turn()  # 실제 사용자 발화 = 새 턴 시작
                 for b in blocks:
@@ -382,7 +399,7 @@ def collect_record_stats(jsonl_path, detail=False):
                         continue
                     if b.get("type") == "text":
                         t = b.get("text", "")
-                        if not t.startswith("[Request interrupted"):
+                        if not _is_system_text(t):
                             input_w += len(t.split())
                     elif b.get("type") == "tool_result":
                         rc = b.get("content")
