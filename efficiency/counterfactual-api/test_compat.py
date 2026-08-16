@@ -107,6 +107,19 @@ class TestCompat(unittest.TestCase):
         self.assertAlmostEqual(r["agent_human_min"], 500*0.006, places=1)
         self.assertTrue(any("닻 적용" in n for n in r["notes"]))
 
+    def test_unanchored_card_flagged(self):
+        # 수량 없는 카드 → 닻 미발동이 결과에 표시돼야 함
+        from paths import estimate_paths
+        class M:
+            def complete_json(self, p, m):
+                return {"human": [{"primitive": "draft", "count": 500}],
+                        "agent": [{"primitive": "draft", "count": 500}],
+                        "hitl": [{"primitive": "review", "count": 500}],
+                        "ai_io": {}, "todos": [], "rationale": "t"}
+        r = estimate_paths(M(), "수량 없는 추상적 카드")
+        self.assertFalse(r["anchored"])
+        self.assertTrue(any("닻 미발동" in n for n in r["notes"]))
+
     def test_none_inputs_tolerated(self):
         r = CounterfactualEstimator(llm=MockLLM()).estimate_task(
             None, None, None, None, None)

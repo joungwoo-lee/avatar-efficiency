@@ -245,6 +245,9 @@ def estimate_actions_from_requirements(llm, requirements, record_stats=None,
             raise ValueError("행동 분해 2회 실패: " + "; ".join(notes))
 
     anchors = derive_anchors(requirements, record_stats, rates=r)
+    if not anchors:
+        notes.append("닻 미발동 — 명시 수량·완료조건·실측 없음. "
+                     "규모 수치는 LLM 추정(변동 가능)")
     items = apply_anchors(items, anchors, notes)
 
     card = r["human"]
@@ -257,6 +260,7 @@ def estimate_actions_from_requirements(llm, requirements, record_stats=None,
         breakdown.append({"primitive": a["primitive"], "count": a["count"],
                           "unit": spec["unit"], "minutes": round(minutes, 2)})
     return {
+        "anchored": bool(anchors),
         "human_min": round(total, 2),
         "breakdown": breakdown,
         "anchors": anchors,

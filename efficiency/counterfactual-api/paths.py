@@ -172,6 +172,9 @@ def estimate_paths(llm, spec_text, rates=None, max_tokens=2000):
          "acceptance_criteria": t.get("acceptance_criteria") or []}
         for t in todos if isinstance(t, dict)]}
     anchors = derive_anchors(req_view, rates=r)
+    if not anchors:
+        notes.append("닻 미발동 — 카드에 명시 수량·완료조건 없음. "
+                     "규모 수치는 LLM 추정이라 변동 가능(신뢰 하향)")
     parsed["human"] = apply_anchors(parsed["human"], anchors, notes)
     if anchors.get("out_words"):
         # 같은 산출물이니 AI 생성량·사람 검토량도 명시 분량이 목표
@@ -188,6 +191,7 @@ def estimate_paths(llm, spec_text, rates=None, max_tokens=2000):
     agent_human_min, hitl_bd = trajectory_minutes(parsed["hitl"], r["hitl"])
 
     return {
+        "anchored": bool(anchors),
         "human_min": human_min,
         "human_breakdown": human_bd,
         "agent_min": round(agent_ai_min + agent_human_min, 2),
