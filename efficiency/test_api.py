@@ -130,12 +130,17 @@ class TestSingleCall(unittest.TestCase):
 
 
 class TestSessionCombos(unittest.TestCase):
-    def test_default_workunit(self):
+    def test_default_req_actions(self):
+        # 기본 = req-actions (workunit 사후 측정은 폐기)
         with tempfile.TemporaryDirectory() as d:
             r = measure_session(MockLLM(), _session_file(d))
-        self.assertEqual(r["human"]["method"], "workunit")
-        self.assertEqual(r["agent"]["method"], "record")
+        self.assertEqual(r["human"]["method"], "req-actions")
         self.assertGreater(r["speedup"], 0)
+
+    def test_workunit_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(ValueError):
+                measure_session(MockLLM(), _session_file(d), human="workunit")
 
     def test_req_actions(self):
         with tempfile.TemporaryDirectory() as d:

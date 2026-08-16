@@ -2,17 +2,24 @@
 """세션 측정 API — 실행된 Claude Code 세션 1개의 AI 효율(speedup) 산정.
 
 speedup = human_min(분자) ÷ agent_min(분모)
-  분자: 트랜스크립트에서 완료된 요구사항 복원(§23) → 사람 w/o 생성형AI 견적
-        (../human-effort — transcript_requirements + estimate_from_requirements)
-  분모: 트랜스크립트에 기록된 동작 단서 × 요율 (LLM 미사용)
+  분자(human) — 방식 선택:
+    "req-actions"    (기본) 요구사항·행동: 기록→할일→사람 행동×요율.
+                     규모 숫자는 코드 닻(항해 구조 읽기량·산출물 상한)이 확정.
+                     calls="single"이면 할일 정리+행동 분해를 LLM 1회로 병합.
+    "record-actions" 세션기록·행동: 할일 안 거치고 기록에서 바로 행동 분해.
+                     같은 닻 적용. 교차확인 기준선 — 쓰기 규모가 AI 산출
+                     전량을 상속(4~5배 과대)하는 한계 (CHANGELOG §20).
+  분모: 트랜스크립트에 기록된 동작 단서 × 요율 (LLM 미사용, 결정론적)
         (../agent-effort/transcript_actual — 병렬 서브에이전트는 시간 미가산)
 
+workunit 방식은 폐기 — workunit_deprecated.py 참고 보관.
 아바타(사전) 측정 API는 ../counterfactual-api. 본 모듈은 사후(세션) 전용.
 
 사용:
     from session_api import measure_session
-    r = measure_session(llm, "session.jsonl")
-    r["speedup"], r["human"]["p50_min"], r["agent"]["total_min"]
+    r = measure_session(llm, "session.jsonl")                    # req-actions
+    r = measure_session(llm, "session.jsonl", human="record-actions")
+    r["speedup"], r["human"]["min"], r["agent"]["total_min"]
 """
 import glob
 import json
@@ -31,10 +38,12 @@ for _p in (_ROOT / "human-effort" / "requirement-based",
 
 from transcript_requirements import (extract_requirements,  # noqa: E402
                                      normalize_claude_code_jsonl)
-from requirement_actions import collect_record_stats  # noqa: E402
+from requirement_actions import (collect_record_stats,  # noqa: E402
+                                 estimate_actions_from_requirements,
+                                 estimate_actions_single)
+from primitive_effort import estimate_human_min  # noqa: E402
 from transcript_actual import parse_actions, actual_effort_minutes  # noqa: E402
 from agent_effort import load_rates, speedup  # noqa: E402
-from estimator import HumanEffortEstimator  # noqa: E402
 
 
 class JsonRetryLLM:
@@ -91,22 +100,26 @@ def measure_agent_actual(jsonl_path, rates=None, include_subagents=False):
     return actual
 
 
-def measure_session(llm, jsonl_path, rates=None, max_chars=12000,
-                    include_subagents=False, estimator=None, force=False):
+def measure_session(llm, jsonl_path, human="req-actions", calls="single",
+                    rates=None, max_chars=8000, include_subagents=False,
+                    force=False):
     """세션 1개 → 분자·분모·speedup.
+
+    human: "req-actions"(기본) | "record-actions"(교차확인 기준선)
+    calls: "single"(할일+행동 병합, LLM 1회) | "staged"(할일→행동 2회,
+           단계별 감사 가능). record-actions는 항상 1회라 calls 무시.
 
     반환: {
       "session": 파일명, "session_id",
-      "human": {p50_min, p80_min, requirements[], n_items, unscored, review_required,
-                review_reasons},
-      "agent": {machine_min, hitl_min, total_min, breakdown, counts, subagent_files},
-      "speedup": human_p50 / agent_total (None if agent 0),
-      "speedup_vs_hitl": human_p50 / hitl_min (사람 감독시간 대비),
-      "first_request": 첫 사용자 지시 요약
+      "human": {min, method, anchors, todos?, breakdown},
+      "agent": {machine_min, hitl_min, total_min, breakdown, counts,
+                subagent_files},
+      "speedup": human_min / agent_total (None if agent 0),
+      "speedup_vs_hitl": human_min / hitl_min (사람 감독시간 대비),
+      "notes"
     }
     """
     rates = rates or load_rates()
-    est = estimator or HumanEffortEstimator(llm)
 
     stats = collect_record_stats(jsonl_path)
     if is_trivial_session(stats) and not force:
@@ -118,25 +131,42 @@ def measure_session(llm, jsonl_path, rates=None, max_chars=12000,
                 "record_stats": stats}
 
     actual = measure_agent_actual(jsonl_path, rates, include_subagents)
+    notes = []
 
-    norm = normalize_claude_code_jsonl(jsonl_path, max_chars=max_chars)
-    req, notes = extract_requirements(llm, norm)
-    r = est.estimate_from_requirements(req, norm)
+    if human == "req-actions":
+        if calls == "single":
+            norm = normalize_claude_code_jsonl(jsonl_path, max_chars=max_chars,
+                                               include_tool_stats=False)
+            ra = estimate_actions_single(llm, norm, record_stats=stats,
+                                         rates=rates)
+        else:
+            norm = normalize_claude_code_jsonl(jsonl_path, max_chars=max_chars)
+            req, n = extract_requirements(llm, norm)
+            notes += n
+            ra = estimate_actions_from_requirements(llm, req,
+                                                    record_stats=stats,
+                                                    rates=rates)
+    elif human == "record-actions":
+        norm = normalize_claude_code_jsonl(jsonl_path, max_chars=max_chars,
+                                           include_tool_stats=False)
+        ra = estimate_human_min(llm, norm, rates=rates, record_stats=stats)
+    else:
+        raise ValueError(
+            f"지원하지 않는 human 방식: {human} "
+            "(workunit은 폐기 — workunit_deprecated.py)")
+    notes += ra["notes"]
 
-    p50 = r["effort"]["p50_minutes"]
+    h_min = ra["human_min"]
     total = actual["total_min"]
     return {
         "session": Path(jsonl_path).name,
         "session_id": actual["counts"].get("session_id"),
         "human": {
-            "p50_min": p50,
-            "p80_min": r["effort"]["p80_minutes"],
-            "requirements": [(q["requirement_id"], q["title"], q["status"])
-                             for q in r["requirements"]],
-            "n_items": len(r["work_items"]),
-            "unscored": len(r["unscored_items"]),
-            "review_required": r["review_required"],
-            "review_reasons": r["review_reasons"],
+            "min": h_min,
+            "method": human,
+            "anchors": ra.get("anchors", {}),
+            "todos": ra.get("todos"),
+            "breakdown": ra["breakdown"],
         },
         "agent": {
             "machine_min": actual["machine_min"],
@@ -147,9 +177,8 @@ def measure_session(llm, jsonl_path, rates=None, max_chars=12000,
                        if k not in ("first_ts", "last_ts")},
             "subagent_files": actual["subagent_files"],
         },
-        "speedup": speedup(p50, total),
-        "speedup_vs_hitl": speedup(p50, actual["hitl_min"]),
-        "first_request": (norm.split("\n")[0][:120] if norm else ""),
+        "speedup": speedup(h_min, total),
+        "speedup_vs_hitl": speedup(h_min, actual["hitl_min"]),
         "notes": notes,
     }
 
@@ -177,17 +206,16 @@ def format_report(rows):
             lines.append(f"{r['session'][:12]}  제외: {r['reason'][:70]}")
             continue
         h, a = r["human"], r["agent"]
-        th += h["p50_min"]
+        th += h["min"]
         ta += a["total_min"]
-        flag = " [review]" if h["review_required"] else ""
         lines.append(
-            f"{r['session'][:12]}  human={h['p50_min']:>7.1f}min  "
+            f"{r['session'][:12]}  human={h['min']:>7.1f}min ({h['method']})  "
             f"agent={a['total_min']:>7.1f}min "
             f"({a['machine_min']:.1f}+{a['hitl_min']:.1f})  "
-            f"speedup={r['speedup'] or 0:>5.2f}x{flag}")
-        for q in h["requirements"][:3]:
-            lines.append(f"              req: {q[1][:64]} [{q[2]}]")
-    ok = [r for r in rows if "error" not in r]
+            f"speedup={r['speedup'] or 0:>5.2f}x")
+        for t in (h.get("todos") or [])[:3]:
+            lines.append(f"              todo: {str(t)[:64]}")
+    ok = [r for r in rows if "error" not in r and not r.get("excluded")]
     if ok and ta > 0:
         lines.append(f"합산: human={th:.0f}min  agent={ta:.1f}min  "
                      f"overall speedup={th / ta:.2f}x  ({len(ok)}/{len(rows)} 세션)")
@@ -199,7 +227,8 @@ def main(argv):
         sys.stdout.reconfigure(encoding="utf-8")
     paths = [a for a in argv if not a.startswith("--")]
     if not paths:
-        print("usage: python session_api.py <session.jsonl> [...] [--json] [--actual-only]",
+        print("usage: python session_api.py <session.jsonl> [...] "
+              "[--json] [--actual-only] [--human=record-actions] [--staged]",
               file=sys.stderr)
         return 2
     if "--actual-only" in argv:  # 분모 실측만 — LLM 불필요
@@ -208,9 +237,14 @@ def main(argv):
             print(f"{Path(p).name}: agent={a['total_min']}min "
                   f"(기계 {a['machine_min']} + hitl {a['hitl_min']})")
         return 0
+    human = "req-actions"
+    for a in argv:
+        if a.startswith("--human="):
+            human = a.split("=", 1)[1]
+    calls = "staged" if "--staged" in argv else "single"
     from onprem_llm_sim import OnpremLLM
     llm = JsonRetryLLM(OnpremLLM())
-    rows = measure_sessions(llm, paths)
+    rows = measure_sessions(llm, paths, human=human, calls=calls)
     if "--json" in argv:
         print(json.dumps(rows, ensure_ascii=False, indent=1))
     else:

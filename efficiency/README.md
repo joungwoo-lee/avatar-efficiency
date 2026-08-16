@@ -20,12 +20,13 @@ estimate_avatar(llm, 카드)                                  # 기본: 1회 동
 estimate_avatar(llm, 카드, human="workunit")                # 분자만 카탈로그(P50/P80)
 estimate_avatar(llm, 카드, human="req-actions", agent="agent-llm")
 
-measure_session(llm, 세션.jsonl)                            # 기본: 분자 workunit + 분모 실측
-measure_session(llm, 세션.jsonl, human="req-actions")       # 분자를 닻 방식으로
+measure_session(llm, 세션.jsonl)                            # 기본: 분자 req-actions(LLM 1회) + 분모 실측
+measure_session(llm, 세션.jsonl, calls="staged")            # 할일→행동 2회 (감사 가능)
 measure_session(llm, 세션.jsonl, human="record-actions")    # 할일 안 거치는 교차확인
 ```
 
-분자(방법론 3종): req-actions(사전 기본) · workunit · record-actions(사후 전용)
+분자(방법론): req-actions(사전·사후 기본) · record-actions(사후 교차확인) ·
+workunit(사전만 — **사후는 폐기**, session-api/workunit_deprecated.py, §20)
 분모: agent-llm(사전 기본) · record(사후 고정, LLM 0회)
 호출 병합: 사전 기본 조합(req-actions+agent-llm)+calls="single"이면 한 프롬프트로 LLM 1회 — 방법론이 아니라 호출 최적화
 호출 수 조절: `calls="single"` — 어느 조합이든 분자를 한 호출로 접음
@@ -38,7 +39,7 @@ measure_session(llm, 세션.jsonl, human="record-actions")    # 할일 안 거�
 | 질문 | 입구 | LLM 호출 |
 |---|---|---|
 | "이 아바타 업무, AI 시키면 얼마 이득?" (사전) | `counterfactual-api/compat.py` — `estimate_task(카드)` | **1회** — 한 호출이 human/agent/감독 세 경로를 같은 완료상태 기준으로 분해(integ-spec §3, paths.py) × rates 단가. 분포(P50/P80) 필요 시 `human_method="workunit"`(3회) |
-| "실행된 이 세션, 실제 효율은?" (사후) | `session-api/session_api.py` — `measure_session(jsonl)` | 2회 — 분모는 기록 실측(0회), 분자는 할일 복원→견적(2회). 초소형(검토·입력<100단어 & 산출물<50단어)은 자동 제외 |
+| "실행된 이 세션, 실제 효율은?" (사후) | `session-api/session_api.py` — `measure_session(jsonl)` | **1회** — 분모는 기록 실측(0회), 분자는 할일 정리+행동 분해 병합 1회(기본). `calls="staged"`면 2회(단계 감사). 초소형(검토·입력<100단어 & 산출물<50단어)은 자동 제외 |
 
 ## 부품
 

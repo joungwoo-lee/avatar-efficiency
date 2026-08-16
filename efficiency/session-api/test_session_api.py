@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 """session-api 오프라인 테스트 (mock LLM + 합성 트랜스크립트)."""
-import copy
 import json
 import os
 import sys
@@ -12,9 +11,20 @@ _ROOT = Path(__file__).resolve().parent.parent
 for _p in (_ROOT / "human-effort", _ROOT / "agent-effort", Path(__file__).parent):
     sys.path.insert(0, str(_p))
 
-from test_estimator import REQ_OUT, EFFORT_OUT  # noqa: E402 (human-effort mock 데이터)
+from test_estimator import REQ_OUT  # noqa: E402 (human-effort mock 데이터)
 from session_api import (measure_session, measure_sessions,  # noqa: E402
                          measure_agent_actual, JsonRetryLLM)
+
+# 행동 분해 응답 (req-actions·record-actions 공용 스키마)
+ACTIONS_OUT = {"human": [{"primitive": "read", "count": 1000},
+                         {"primitive": "draft", "count": 500},
+                         {"primitive": "verify", "count": 1}],
+               "rationale": "mock"}
+# 단일호출 응답: 내부 할일 정리 + 행동 분해
+SINGLE_OUT = dict(ACTIONS_OUT, todos=[
+    {"title": "경쟁사 비교 보고서",
+     "quantities": [{"name": "보고서", "value": 2000, "unit": "단어"}],
+     "acceptance_criteria": ["5개사 포함"]}])
 
 
 class MockLLM:
@@ -24,8 +34,11 @@ class MockLLM:
     def complete_json(self, prompt, max_tokens):
         self.calls.append(prompt)
         if "Delivered Requirement Reconstruction Engine" in prompt:  # §23 추출기
+            import copy
             return copy.deepcopy(REQ_OUT)
-        return copy.deepcopy(EFFORT_OUT)  # Prompt B
+        if "한 번에 내부적으로" in prompt:                # 단일호출(할일+행동)
+            return json.loads(json.dumps(SINGLE_OUT))
+        return json.loads(json.dumps(ACTIONS_OUT))       # 행동 분해만
 
 
 def _make_jsonl(dirpath):
@@ -48,20 +61,52 @@ def _make_jsonl(dirpath):
 
 
 class TestSessionApi(unittest.TestCase):
-    def test_measure_session_end_to_end(self):
+    def test_measure_session_single_default(self):
+        # 기본: req-actions + 단일호출 — 세션당 LLM 1회
         with tempfile.TemporaryDirectory() as d:
             p = _make_jsonl(d)
             llm = MockLLM()
             r = measure_session(llm, p)
-        self.assertEqual(len(llm.calls), 2)  # §23 추출 + Prompt B
-        self.assertGreater(r["human"]["p50_min"], 0)
+        self.assertEqual(len(llm.calls), 1)
+        self.assertEqual(r["human"]["method"], "req-actions")
+        self.assertGreater(r["human"]["min"], 0)
         self.assertGreater(r["agent"]["total_min"], 0)
         self.assertGreater(r["agent"]["hitl_min"], 0)   # 지시 1건 반영
         self.assertIsNotNone(r["speedup"])
         self.assertAlmostEqual(
-            r["speedup"], round(r["human"]["p50_min"] / r["agent"]["total_min"], 2))
+            r["speedup"], round(r["human"]["min"] / r["agent"]["total_min"], 2))
         self.assertEqual(r["session_id"], "s-1")
-        self.assertEqual(r["human"]["requirements"][0][0], "R-001")
+        # 닻: 할일 명시 2000단어 → draft 목표 대체
+        counts = {b["primitive"]: b["count"] for b in r["human"]["breakdown"]}
+        self.assertEqual(counts["draft"], 2000)
+        self.assertEqual(r["human"]["todos"], ["경쟁사 비교 보고서"])
+
+    def test_measure_session_staged(self):
+        # staged: 할일 추출 + 행동 분해 = LLM 2회, 단계별 감사 가능
+        with tempfile.TemporaryDirectory() as d:
+            p = _make_jsonl(d)
+            llm = MockLLM()
+            r = measure_session(llm, p, calls="staged")
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(r["human"]["method"], "req-actions")
+        self.assertGreater(r["human"]["min"], 0)
+
+    def test_measure_session_record_actions(self):
+        # 교차확인 기준선: 할일 안 거침, LLM 1회, 같은 닻 적용
+        with tempfile.TemporaryDirectory() as d:
+            p = _make_jsonl(d)
+            llm = MockLLM()
+            r = measure_session(llm, p, human="record-actions")
+        self.assertEqual(len(llm.calls), 1)
+        self.assertEqual(r["human"]["method"], "record-actions")
+        self.assertGreater(r["human"]["min"], 0)
+        self.assertIn("anchors", r["human"])
+
+    def test_workunit_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = _make_jsonl(d)
+            with self.assertRaises(ValueError):
+                measure_session(MockLLM(), p, human="workunit")
 
     def test_actual_only_deterministic(self):
         with tempfile.TemporaryDirectory() as d:
@@ -79,11 +124,8 @@ class TestSessionApi(unittest.TestCase):
         self.assertNotIn("error", rows[0])
         self.assertIn("error", rows[1])
 
-
-
     def test_trivial_session_excluded(self):
         # 초소형(핑퐁) 세션은 LLM 호출 없이 측정에서 제외
-        import json as _json
         lines = [
             {"type": "user", "message": {"role": "user", "content": "핑"}},
             {"type": "assistant", "message": {"role": "assistant",
@@ -93,7 +135,7 @@ class TestSessionApi(unittest.TestCase):
             p = os.path.join(d, "tiny.jsonl")
             with open(p, "w", encoding="utf-8") as f:
                 for ln in lines:
-                    f.write(_json.dumps(ln, ensure_ascii=False) + "\n")
+                    f.write(json.dumps(ln, ensure_ascii=False) + "\n")
             llm = MockLLM()
             r = measure_session(llm, p)
             self.assertTrue(r.get("excluded"))

@@ -6,14 +6,17 @@
     estimate_avatar(llm, card_text, human=..., agent=...)   # 사전
     measure_session(llm, jsonl_path, human=...)             # 사후
 
-분자(human) 방식 — 방법론은 이 셋뿐이다:
-    "req-actions"    요구사항·행동: 사람 행동 × 단가, 숫자는 닻 (사전 기본)
-    "workunit"       요구사항·산출물: 산출물 단위 × 카탈로그 → P50/P80
+분자(human) 방식:
+    "req-actions"    요구사항·행동: 사람 행동 × 단가, 숫자는 닻 (사전·사후 기본)
     "record-actions" 세션기록·행동: 기록에서 바로 시뮬 (사후 전용, 교차확인)
+    "workunit"       요구사항·산출물 → P50/P80 (사전만 잔존; **사후는 폐기** —
+                     session-api/workunit_deprecated.py, CHANGELOG §20)
 
 분모(agent) 방식:
     "agent-llm"    사전 추산 — AI+감독 행동 × 단가 (사전 기본)
     "record"       기록 실측, LLM 0회 (사후 기본·유일)
+
+사후(세션) 측정 본체는 session-api/session_api.py — 여기선 위임만.
 
 호출 병합(방식이 아님): 사전에서 human="req-actions" + agent="agent-llm" +
 calls="single"이면 두 방법론을 **한 프롬프트로 묶어 LLM 1회**에 처리한다
@@ -40,11 +43,8 @@ from paths import estimate_paths  # noqa: E402
 from estimator import HumanEffortEstimator, validate_requirements_output  # noqa: E402
 from prompts import build_prompt_a_avatar  # noqa: E402
 from requirement_actions import (estimate_actions_from_requirements,  # noqa: E402
-                                 estimate_actions_single, collect_record_stats)
-from primitive_effort import estimate_human_min  # noqa: E402
-from transcript_requirements import (extract_requirements,  # noqa: E402
-                                     normalize_claude_code_jsonl)
-from session_api import measure_agent_actual, is_trivial_session  # noqa: E402
+                                 estimate_actions_single)
+from session_api import measure_session as sa_measure_session  # noqa: E402
 
 
 def _extract_avatar_todos(llm, card_text, max_tokens=6000):
@@ -111,57 +111,19 @@ def estimate_avatar(llm, card_text, human="req-actions", agent="agent-llm",
             "speedup": speedup(h["min"], a["total_min"]), "notes": notes}
 
 
-def measure_session(llm, jsonl_path, human="workunit", force=False,
-                    rates=None, max_chars=8000, calls="staged"):
-    """사후 측정: 세션 기록 → speedup. 분모는 실측 고정(LLM 0회), 분자만 조합.
+def measure_session(llm, jsonl_path, human="req-actions", force=False,
+                    rates=None, max_chars=8000, calls="single"):
+    """사후 측정: 세션 기록 → speedup. 세션 측정 본체는 session-api에 산다
+    (session_api.measure_session) — 여기서는 위임만 한다.
 
-    calls="single" + human="req-actions": 분자를 한 호출(내부 할일 정리 포함)로
-    — 세션당 LLM 1회."""
-    rates = rates or load_rates()
-    stats = collect_record_stats(jsonl_path)
-    if is_trivial_session(stats) and not force:
-        return {"input": "session", "excluded": True,
-                "reason": "초소형 세션(검토·입력·산출물 기준 미달) — force=True로 강제"}
-
-    actual = measure_agent_actual(jsonl_path, rates)
-    a = {"total_min": actual["total_min"], "ai_min": actual["machine_min"],
-         "hitl_min": actual["hitl_min"], "method": "record"}
-
-    notes = []
-    if human == "req-actions" and calls == "single":
-        norm = normalize_claude_code_jsonl(jsonl_path, max_chars=max_chars,
-                                           include_tool_stats=False)
-        ra = estimate_actions_single(llm, norm, record_stats=stats, rates=rates)
-        h = {"min": ra["human_min"], "p80_min": None, "method": "req-actions",
-             "anchors": ra["anchors"], "todos": ra.get("todos")}
-        notes += ra["notes"]
-        return {"input": "session", "human": h, "agent": a,
-                "speedup": speedup(h["min"], a["total_min"]), "notes": notes}
-    if human == "record-actions":
-        norm = normalize_claude_code_jsonl(jsonl_path, max_chars=max_chars,
-                                           include_tool_stats=False)
-        pr = estimate_human_min(llm, norm, rates=rates, record_stats=stats)
-        h = {"min": pr["human_min"], "p80_min": None, "method": "record-actions",
-             "anchors": pr["anchors"]}
-        notes += pr["notes"]
-    else:
-        norm = normalize_claude_code_jsonl(jsonl_path, max_chars=max_chars)
-        req, n = extract_requirements(llm, norm)
-        notes += n
-        if human == "workunit":
-            r = HumanEffortEstimator(llm).estimate_from_requirements(req, norm)
-            h = {"min": r["effort"]["p50_minutes"],
-                 "p80_min": r["effort"]["p80_minutes"], "method": "workunit",
-                 "review_required": r["review_required"]}
-            notes += r["warnings"] + r["notes"]
-        elif human == "req-actions":
-            ra = estimate_actions_from_requirements(llm, req, record_stats=stats,
-                                                    rates=rates)
-            h = {"min": ra["human_min"], "p80_min": None, "method": "req-actions",
-                 "anchors": ra["anchors"]}
-            notes += ra["notes"]
-        else:
-            raise ValueError(f"사후 측정에서 지원하지 않는 human 방식: {human}")
-
-    return {"input": "session", "human": h, "agent": a,
-            "speedup": speedup(h["min"], a["total_min"]), "notes": notes}
+    human: "req-actions"(기본) | "record-actions"(교차확인 기준선).
+    workunit 방식은 폐기 — session-api/workunit_deprecated.py 참고 보관.
+    calls="single"(기본): 분자를 한 호출(내부 할일 정리 포함)로 — 세션당 LLM 1회.
+    """
+    if human == "workunit":
+        raise ValueError("workunit 방식은 폐기됨 — "
+                         "session-api/workunit_deprecated.py 참고 보관")
+    r = sa_measure_session(llm, jsonl_path, human=human, calls=calls,
+                           rates=rates, max_chars=max_chars, force=force)
+    r["input"] = "session"
+    return r

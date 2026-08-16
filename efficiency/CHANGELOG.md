@@ -271,6 +271,20 @@
   차단**에 있다. 미해결 3(AI 장황함)의 방어선이 바로 이 층. record-actions는
   기준선으로 유지하되 측정 기본값은 req-actions 유지.
 
+## 21. 세션 측정 개편 — workunit 사후 폐기, 두 행동 방식이 session-api로
+
+- 근거: §20 대조에서 세션 측정 기본이 req-actions로 확정 — workunit 분자의
+  사후 측정은 폐기.
+- 조치:
+  - `session-api/session_api.py`의 `measure_session`을 두 방식 전용으로 교체:
+    `human="req-actions"`(기본, calls="single"=LLM 1회 / "staged"=2회 감사) |
+    `"record-actions"`(교차확인 기준선, 같은 닻). CLI에 `--human=` `--staged`.
+  - 구 workunit 세션 측정은 `session-api/workunit_deprecated.py`로 개명 이동
+    (참고 보관, 신규 import 금지).
+  - 최상위 `api.py`의 사후 경로는 session_api로 위임만 — 세션 측정 본체는
+    session-api 한 곳. `human="workunit"`은 ValueError로 명시 거절.
+- 분모 실측(`measure_agent_actual`)·초소형 게이트는 session-api에 그대로.
+
 ## 미해결 (알려진 한계·다음 단계)
 
 1. **사람 실측 정답지 0건** — 모든 절대값의 상한. A급 3~5건 확보가 최우선.
