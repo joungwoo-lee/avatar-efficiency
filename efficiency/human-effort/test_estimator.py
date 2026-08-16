@@ -674,10 +674,12 @@ class TestRequirementActions(unittest.TestCase):
                 f.write(_json.dumps(ln, ensure_ascii=False) + "\n")
         try:
             rs = collect_record_stats(p)
-            # a.py=편집됨, b.py=답변에 언급 → 기여 2 / c.py → 훑기 1
+            # a.py=편집됨, b.py=답변에 언급 → 기여 2 / c.py=마지막 기여 읽기
+            # 이후에만 읽힘 → 헛읽기(WASTE)
             self.assertEqual(rs["contributed_docs"], 2)
-            self.assertEqual(rs["scanned_docs"], 1)
-            # 읽기 닻: AI가 5000단어 읽었어도 사람 = 2×300 + 1×60 = 660단어
+            self.assertEqual(rs["scanned_docs"], 0)
+            self.assertEqual(rs["waste_docs"], 1)
+            # 읽기 닻: AI가 5000단어 읽었어도 사람 = 2×300 + 0×60 + 헛읽기 0
             req = {"requirements": [{"title": "수정", "requested_quantities": [],
                                      "acceptance_criteria": []}]}
             out = {"human": [{"primitive": "read", "count": 5000},
@@ -685,8 +687,8 @@ class TestRequirementActions(unittest.TestCase):
             r = estimate_actions_from_requirements(self._Mock([out]), req,
                                                    record_stats=rs)
             bd = {b["primitive"]: b for b in r["breakdown"]}
-            self.assertEqual(bd["read"]["count"], 660)
-            self.assertEqual(r["anchors"]["structured_read_words"], 660)
+            self.assertEqual(bd["read"]["count"], 600)
+            self.assertEqual(r["anchors"]["structured_read_words"], 600)
         finally:
             os.unlink(p)
 
@@ -724,11 +726,12 @@ class TestRequirementActions(unittest.TestCase):
                 f.write(_json.dumps(ln, ensure_ascii=False) + "\n")
         try:
             rs = collect_record_stats(p)
-            # y.md·z.md = 마지막 검색(Grep) 뒤 읽음(신호④) → 기여.
-            # y.md 는 식별자 겹침(신호⑤)으로도 기여. x.md = 검색 전 1회 읽고
-            # 편집·언급·재방문·겹침 없음 → 훑기.
-            self.assertEqual(rs["contributed_docs"], 2)
+            # y.md = 탐색 착지(마지막 검색 직후 첫 읽기, 신호④) + 식별자
+            # 겹침(신호⑤) → 기여. x.md = 착지 전 읽힘 → 훑기(SKIM).
+            # z.md = 마지막 기여 읽기 이후에만 읽힘·무신호 → 헛읽기(WASTE).
+            self.assertEqual(rs["contributed_docs"], 1)
             self.assertEqual(rs["scanned_docs"], 1)
+            self.assertEqual(rs["waste_docs"], 1)
         finally:
             os.unlink(p)
 
@@ -773,10 +776,12 @@ class TestRequirementActions(unittest.TestCase):
                 f.write(_json.dumps(ln, ensure_ascii=False) + "\n")
         try:
             rs = collect_record_stats(p)
-            # A=턴1 탐색 종료 후 읽기(④), D=같은 구간 2회(③) → 기여 2.
-            # B=offset 다른 분할 이어읽기 → 훑기. E=서브에이전트 → 미집계.
+            # A=턴1 탐색 착지(④), D=같은 구간 2회(③) → 기여 2.
+            # B=offset 다른 분할 이어읽기, D 기여 확보 전 → 훑기(SKIM).
+            # E=서브에이전트 → 미집계.
             self.assertEqual(rs["contributed_docs"], 2)
             self.assertEqual(rs["scanned_docs"], 1)
+            self.assertEqual(rs["waste_docs"], 0)
         finally:
             os.unlink(p)
 

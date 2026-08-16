@@ -134,9 +134,10 @@ def derive_anchors(requirements, record_stats=None, rates=None):
     if task_read:
         anchors["task_read_words"] = round(task_read)
     rs = record_stats or {}
-    # 구조 기반 읽기 수요 (기록 실측): 기여 자료는 정독, 훑은 후보는 스캔 소액.
+    # 구조 기반 읽기 수요 (기록 실측): 기여 자료 정독 + 후보 훑기 + 헛읽기 0.
     # AI가 읽은 총량이 아니라 "사람이 밟았을 항해 구조"로 환산 — 결정론적.
-    if rs.get("contributed_docs") or rs.get("scanned_docs"):
+    if (rs.get("contributed_docs") or rs.get("scanned_docs")
+            or rs.get("waste_docs")):
         structured = (rs.get("contributed_docs", 0) * rm.get("words_per_item", 0)
                       + rs.get("scanned_docs", 0) * rm.get("skim_words_per_doc", 0)
                       + rs.get("input_words", 0))
@@ -288,19 +289,24 @@ def collect_record_stats(jsonl_path):
     """트랜스크립트에서 닻용 실측치 수집 (LLM 미사용, 결정론적).
 
     반환: {reviewed_words, artifact_words, input_words,
-           contributed_docs, scanned_docs}
+           contributed_docs, scanned_docs, waste_docs}
 
-    contributed/scanned: AI가 읽은 파일의 구조 분해 —
-      기여 자료 = "찾았다"의 흔적이 있는 파일. 5신호 중 하나라도:
+    AI가 읽은 파일의 3등급 구조 분해 (전부 코드, LLM 0회) —
+    1) 기여 자료(DEEP, 정독): "찾았다"의 흔적이 있는 파일. 5신호 중 하나라도:
         ① 이후 편집됨  ② 어느 발언에든 이름 언급
         ③ 재방문 — 같은 파일의 **같은 구간**을 2회 이상 읽음 (offset이 다른
           분할 이어읽기는 전수 읽기이지 재방문이 아님)
-        ④ 탐색 종료 후 읽음 — **사용자 턴 단위**로, 그 턴의 마지막 검색 도구
-          호출 뒤의 읽기 (검색이 멈췄다 = 목적지 도달; 그 턴에 검색이 없으면
-          미적용 — 긴 멀티턴에서 초반 검색 한 번이 전체를 오염시키지 않게)
+        ④ 탐색 착지 — **사용자 턴 단위**로, 그 턴의 마지막 검색 도구 호출
+          직후 **첫** 읽기 (검색이 멈추고 처음 연 파일 = 목적지; 그 턴에
+          검색이 없으면 미적용)
         ⑤ 내용 겹침 — 파일 내용의 6단어 연속 조각·식별자가 **각 턴의 마무리
           답변**에 등장 (마지막 답변만 보면 앞 턴의 기여를 놓침)
-      훑은 후보 = 위 신호가 전부 없는 읽힌 파일 (사람은 훑고 지나감)
+       신호는 세션 전체(미래 턴 포함)를 보고 판정 — 뒤 턴에서 쓰이면 승격.
+    2) 훑은 후보(SKIM, 소액): 비기여 파일 중 항해 중(그 턴의 마지막 기여 읽기
+       이전)에 읽힌 것 — 사람도 찾는 동안 훑었을 후보.
+    3) 헛읽기(WASTE, 0): 비기여 파일이 그 턴의 마지막 기여 읽기 **이후**에만
+       읽힌 것 — 기여 확보 후의 시행착오. 사람은 열지도 않았을 파일이라 0.
+       어느 턴에서든 항해 중에 읽혔으면 SKIM으로 남는다.
     병렬 서브에이전트 기록(isSidechain)은 전부 제외 — 측정 기조.
     AI의 전수 탐색(brute-force) 읽기량을 사람의 전략적 항해 구조로 변환하는 근거.
     """
@@ -315,7 +321,8 @@ def collect_record_stats(jsonl_path):
     tool_i = 0               # 도구 호출 순번
     turn_search_i = None     # 이 턴의 마지막 검색 시점 (신호④ — 턴 단위)
     turn_reads = []          # 이 턴의 (fp, 읽기 시점)
-    signal4 = set()          # 탐색 종료 후 읽힌 파일
+    all_turns = []           # 턴별 읽기 목록 (WASTE 위상 재생용)
+    signal4 = set()          # 탐색 착지 파일 (마지막 검색 직후 첫 읽기)
     answers = []             # 턴별 마무리 답변 (신호⑤ 대조 대상)
     pending_read = {}        # tool_use id → fp (읽기 결과 내용 회수용)
     read_content = {}        # fp → 읽은 내용 (신호⑤ 내용 겹침, 상한 있음)
@@ -324,7 +331,11 @@ def collect_record_stats(jsonl_path):
         # 사용자 턴 경계: 신호④를 이 턴 안에서만 판정, 턴 마무리 답변 보관
         nonlocal turn_search_i, turn_reads, final_answer
         if turn_search_i is not None:
-            signal4.update(fp for fp, i in turn_reads if i > turn_search_i)
+            post = [fp for fp, i in turn_reads if i > turn_search_i]
+            if post:
+                signal4.add(post[0])  # 착지 = 검색 멈춘 뒤 처음 연 파일만
+        if turn_reads:
+            all_turns.append(turn_reads)
         turn_search_i = None
         turn_reads = []
         if final_answer:
@@ -431,13 +442,26 @@ def collect_record_stats(jsonl_path):
         if f in edited_files                                   # ① 편집
         or Path(f).name in spoken                              # ② 이름 언급
         or f in revisited                                      # ③ 같은 구간 재방문
-        or f in signal4                                        # ④ 탐색 종료 후 읽기(턴 단위)
+        or f in signal4                                        # ④ 탐색 착지(턴 단위)
         or _overlaps(f)                                        # ⑤ 내용 겹침(턴별 답변)
     }
+
+    # 위상 재생: 턴 안에서 마지막 기여 읽기 이후에만 읽힌 비기여 파일 = WASTE
+    skim, waste = set(), set()
+    for treads in all_turns:
+        last_c = max((k for k, (fp, _i) in enumerate(treads)
+                      if fp in contributed), default=None)
+        for k, (fp, _i) in enumerate(treads):
+            if fp in contributed:
+                continue
+            (waste if last_c is not None and k > last_c else skim).add(fp)
+    waste -= skim  # 어느 턴에서든 항해 중 읽혔으면 SKIM 유지
+
     return {"reviewed_words": reviewed, "input_words": input_w,
             "artifact_words": sum(artifact.values()),
             "contributed_docs": len(contributed),
-            "scanned_docs": len(read_files - contributed)}
+            "scanned_docs": len(skim),
+            "waste_docs": len(waste)}
 
 
 # ---------------------------------------------------------------- 단일호출 모드
