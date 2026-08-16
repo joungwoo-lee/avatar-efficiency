@@ -34,6 +34,21 @@ _SYSTEM_TEXT_PREFIXES = (
     "<command-message", "<local-command", "<system-warning",
     "<user-prompt-submit-hook")
 
+# 산출물 유형 — 검토 방식이 다르다: 코드는 동작 확인, 문서는 내용 정독
+_CODE_EXT = {".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".c", ".cpp", ".h",
+             ".cs", ".go", ".rs", ".rb", ".php", ".sh", ".ps1", ".bat", ".sql"}
+_DOC_EXT = {".md", ".txt", ".rst", ".html", ".htm", ".tex",
+            ".docx", ".pptx", ".xlsx", ".csv"}
+
+
+def _artifact_class(fp):
+    ext = Path(str(fp)).suffix.lower()
+    if ext in _CODE_EXT:
+        return "code"
+    if ext in _DOC_EXT:
+        return "doc"
+    return "other"  # 설정·데이터 등 — 표본 확인
+
 try:
     from .agent_effort import DEFAULT_RATES_PATH, load_rates
 except ImportError:
@@ -72,7 +87,11 @@ def parse_actions(jsonl_path):
     counts = {"tool_calls": 0, "tool_result_words": 0, "assistant_words": 0,
               "user_instructions": 0, "user_words": 0, "interrupts": 0,
               "instruction_word_list": [],
+              # 유형별 검토용: 산출물 파일 {유형: {경로: 단어수}}, 결론 단어수
+              "artifact_files": {"code": {}, "doc": {}, "other": {}},
+              "conclusion_words": 0,
               "session_id": None, "first_ts": None, "last_ts": None}
+    last_answer_w = 0  # 직전 assistant 발언 단어수 (턴 마무리 = 결론 후보)
     with open(jsonl_path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -98,13 +117,29 @@ def parse_actions(jsonl_path):
             blocks = _content_blocks(rec.get("message"))
 
             if rtype == "assistant":
+                ans_w = 0
                 for b in blocks:
                     if not isinstance(b, dict):
                         continue
                     if b.get("type") == "tool_use":
                         counts["tool_calls"] += 1
+                        inp = b.get("input") or {}
+                        fp = inp.get("file_path")
+                        name = b.get("name")
+                        if fp and name in ("Write", "Edit", "NotebookEdit"):
+                            body = (inp.get("content")
+                                    or inp.get("new_string")
+                                    or inp.get("new_source") or "")
+                            cls = counts["artifact_files"][_artifact_class(fp)]
+                            if name == "Write":  # 전체 재작성 — 마지막 판만
+                                cls[fp] = _words(body)
+                            else:                # 부분 수정 — 누적
+                                cls[fp] = cls.get(fp, 0) + _words(body)
                     elif b.get("type") == "text":
-                        counts["assistant_words"] += _words(b.get("text", ""))
+                        ans_w += _words(b.get("text", ""))
+                counts["assistant_words"] += ans_w
+                if ans_w:
+                    last_answer_w = ans_w
                 continue
 
             # user 턴: 사람 발화 vs tool_result 구분.
@@ -128,6 +163,10 @@ def parse_actions(jsonl_path):
                     w = _words(human_text)
                     counts["user_words"] += w
                     counts["instruction_word_list"].append(w)
+                    # 새 사용자 발화 = 직전 답변이 그 턴의 결론(정독 대상)
+                    counts["conclusion_words"] += last_answer_w
+                    last_answer_w = 0
+    counts["conclusion_words"] += last_answer_w  # 마지막 턴 결론
     return counts
 
 
@@ -150,9 +189,26 @@ def actual_effort_minutes(counts, rates=None):
                            for w in wl)
     else:  # 폴백: 건당 평균 요율
         instruct_min = counts["user_instructions"] * h["instruct"]["min_per_unit"]
+    rm = r.get("hitl_review_model")
+    if rm:  # 유형별 검토: 코드=동작 확인, 문서=정독, 보고=결론 정독+진행 훑기
+        af = counts.get("artifact_files") or {}
+        code_files = af.get("code") or {}
+        doc_files = af.get("doc") or {}
+        other_files = af.get("other") or {}
+        concl = min(counts.get("conclusion_words", 0), counts["assistant_words"])
+        progress = counts["assistant_words"] - concl
+        review_min = (
+            len(code_files) * rm["code_run_min_per_file"]
+            + sum(code_files.values()) * rm["code_skim_min_per_word"]
+            + sum(doc_files.values()) * rm["doc_read_min_per_word"]
+            + len(other_files) * rm["other_check_min_per_file"]
+            + concl * rm["report_deep_min_per_word"]
+            + progress * rm["report_skim_min_per_word"])
+    else:  # 폴백: 보고 전량 × 단일 요율 (구식)
+        review_min = counts["assistant_words"] * h["review"]["min_per_unit"]
     hitl = {
         "instruct": instruct_min,
-        "review": counts["assistant_words"] * h["review"]["min_per_unit"],
+        "review": review_min,
         "correct": counts["interrupts"] * h["correct"]["min_per_unit"],
     }
     machine_min = round(sum(machine.values()), 2)

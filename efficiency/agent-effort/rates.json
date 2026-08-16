@@ -135,6 +135,16 @@
     "sample_count": 1456,
     "source_type": "internal_measured"
   },
+  "hitl_review_model": {
+    "_comment": "산출물 유형별 검토 (seed, 미보정): 검토 방식은 산출물이 정한다 — 코드는 동작을 돌려 확인(파일당 고정 + diff 훑기), 문서는 내용 정독(단어당), 설정·데이터는 표본 확인(파일당), 채팅 보고는 결론(턴 마무리 답변)만 정독하고 진행 보고는 훑기. 없으면 구식 폴백: assistant 전량 × hitl.review.",
+    "code_run_min_per_file": 2.0,
+    "code_skim_min_per_word": 0.002,
+    "doc_read_min_per_word": 0.008,
+    "other_check_min_per_file": 0.5,
+    "report_deep_min_per_word": 0.008,
+    "report_skim_min_per_word": 0.002,
+    "source_type": "expert_seed"
+  },
   "human_reading_model": {
     "_comment": "사람의 선별적 읽기 모델. 근거: 사람은 전수 탐색이 아니라 전략적 항해(후보는 훑고, 결과에 기여하는 자료만 정독) — 'Strategic Navigation or Stochastic Search?' 계열 연구의 agent/human 읽기 행태 차이. words_per_item=기여 자료 1건당 정독 등가 단어(300), skim_words_per_doc=훑고 버린 후보 1건당 등가 단어(60≈0.3분), words_per_page=페이지 명시 요구용. 전부 seed — 실측 보정 대상.",
     "words_per_item": 300,

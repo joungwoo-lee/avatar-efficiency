@@ -69,6 +69,37 @@ class TestAgentEffort(unittest.TestCase):
 
 
 class TestTranscriptActual(unittest.TestCase):
+    def test_type_based_review(self):
+        # 검토 방식은 산출물이 정한다: 코드=동작 확인, 문서=정독, 보고=결론만 정독
+        import json, tempfile, os
+        from transcript_actual import parse_actions, actual_effort_minutes
+        lines = [
+            {"type": "user", "message": {"role": "user", "content": "작업해줘"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "진행 보고 " * 50},   # 진행 100단어 = 훑기
+                {"type": "tool_use", "name": "Write",
+                 "input": {"file_path": "app.py", "content": "코드 " * 500}},
+                {"type": "tool_use", "name": "Write",
+                 "input": {"file_path": "report.md", "content": "내용 " * 250}},
+                {"type": "tool_use", "name": "Write",
+                 "input": {"file_path": "conf.json", "content": "{}"}}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "결론 " * 100}]}},    # 결론 100단어 = 정독
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            m = actual_effort_minutes(parse_actions(p))
+            # 검토 = 코드 1파일×2.0(실행 확인) + 코드 500단어×0.002(diff 훑기)
+            #      + 문서 250단어×0.008(정독) + 기타 1파일×0.5(표본 확인)
+            #      + 결론 100×0.008 + 진행 100×0.002 = 2+1+2+0.5+0.8+0.2 = 6.5
+            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 6.5,
+                                   places=2)
+        finally:
+            os.unlink(p)
+
     def test_deterministic_hand_check(self):
         # 실측 분모: 트랜스크립트 → 기계/HITL 동작 × 요율 (LLM 미사용)
         import json, tempfile, os
@@ -94,9 +125,10 @@ class TestTranscriptActual(unittest.TestCase):
             self.assertEqual(c["interrupts"], 1)
             m = actual_effort_minutes(c)
             # machine = 1×0.3 + 100×0.0005 + 20×0.002 = 0.39
-            # hitl(보정 모델) = 2건×(0.5+0.05×2단어) + 20×0.006 + 1×4.0 = 5.32
+            # hitl = 지시 2건×(0.5+0.05×2단어) + 검토(결론 20단어×정독 0.008,
+            #        문서 산출물 0단어) + 교정 1×4.0 = 1.2 + 0.16 + 4.0 = 5.36
             self.assertAlmostEqual(m["machine_min"], 0.39, places=2)
-            self.assertAlmostEqual(m["hitl_min"], 5.32, places=2)
+            self.assertAlmostEqual(m["hitl_min"], 5.36, places=2)
             self.assertEqual(m["total_min"],
                              actual_effort_minutes(parse_actions(p))["total_min"])
         finally:
