@@ -604,11 +604,28 @@ class TestRequirementActions(unittest.TestCase):
         self.assertEqual(bd["draft"]["count"], 2000)  # 명시 분량으로 대체
 
     def test_no_rate_leak(self):
-        from requirement_actions import build_prompt
+        from requirement_actions import build_prompt, build_prompt_single
         from agent_effort import load_rates
         prompt = build_prompt(self.REQ, load_rates())
         self.assertNotIn("min_per_unit", prompt)
         self.assertNotIn("0.005", prompt)
+        single = build_prompt_single("세션 요약", load_rates())
+        self.assertNotIn("min_per_unit", single)
+
+    def test_single_call_mode(self):
+        from requirement_actions import estimate_actions_single
+        out = {"todos": [{"title": "보고서",
+                          "quantities": [{"name": "분량", "value": 2000, "unit": "단어"}],
+                          "acceptance_criteria": ["a", "b", "c"]}],
+               "human": [{"primitive": "draft", "count": 500},
+                         {"primitive": "verify", "count": 9}],
+               "rationale": "t"}
+        r = estimate_actions_single(self._Mock([out]), "세션 요약")
+        bd = {b["primitive"]: b for b in r["breakdown"]}
+        self.assertEqual(bd["draft"]["count"], 2000)   # 내부 할일 명시 분량 닻
+        self.assertEqual(bd["verify"]["count"], 3)     # 완료조건 3개 닻
+        self.assertEqual(r["todos"], ["보고서"])
+
 
 
 
