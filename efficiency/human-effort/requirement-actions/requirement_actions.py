@@ -203,6 +203,11 @@ def derive_anchors(requirements, record_stats=None, rates=None):
     elif rs.get("artifact_words"):
         anchors["out_words"] = rs["artifact_words"]  # 실측(AI가 쓴 양) → 상한만
         anchors["out_words_kind"] = "measured"
+    # 쓰기 분할 실측 (§28): Write=신규 작성 / Edit=수정 — 도구 기록이 분류의
+    # 진실. draft:edit 배분을 LLM 재량에서 회수해 두 방식(req/rec)을 통일.
+    od, oe = rs.get("out_draft_words", 0), rs.get("out_edit_words", 0)
+    if od or oe:
+        anchors["out_split"] = (od, oe)
     if rs.get("reviewed_words") or rs.get("input_words"):
         # 실측(AI가 읽은 양) → 상한만. AI는 시행착오로 과대하게 읽으므로
         # 사람 견적의 천장이지 바닥이 아니다.
@@ -251,10 +256,41 @@ def apply_anchors(items, anchors, notes):
         rescale(_WORD_READ, target, "읽기 단어수(할일 기반: 건수×선별 정독량)")
     else:
         rescale(_WORD_READ, measured_read, "읽기 단어수(실측 상한)", cap_only=True)
-    rescale(_WORD_WRITE, anchors.get("out_words"),
-            "작성 단어수(명시)" if anchors.get("out_words_kind") == "explicit"
-            else "작성 단어수(실측)",
-            cap_only=(anchors.get("out_words_kind") == "measured"))
+    split = anchors.get("out_split")
+    out_words = anchors.get("out_words")
+    if split and sum(split) > 0 and out_words:
+        # §28 분류 통일: 총량은 기존 원칙(명시=목표, 실측=상한)대로 정하고,
+        # draft:edit 배분은 도구 실측 비율(Write:Edit)로 재배분 — LLM이 정한
+        # 분류를 덮어쓴다 (draft 0.05 vs edit 0.02 요율 차이가 분류 재량에
+        # 따라 2.5배 흔들리는 것 차단).
+        llm_total = sum(it["count"] for it in items
+                        if it["primitive"] in _WORD_WRITE)
+        if anchors.get("out_words_kind") == "explicit":
+            target_total = out_words
+        else:
+            target_total = (min(llm_total, out_words) if llm_total > 0
+                            else out_words)
+        ratio_d = split[0] / sum(split)
+        targets = {"draft": round(target_total * ratio_d, 1),
+                   "edit": round(target_total * (1 - ratio_d), 1)}
+        for prim, tgt in targets.items():
+            cur = sum(it["count"] for it in items if it["primitive"] == prim)
+            if cur > 0:
+                f = (tgt / cur) if cur else 0.0
+                for it in items:
+                    if it["primitive"] == prim:
+                        it["count"] = round(it["count"] * f, 1)
+            elif tgt > 0:
+                items.append({"primitive": prim, "count": tgt})
+        items[:] = [it for it in items if it["count"] > 0]
+        notes.append(f"닻 적용: 쓰기 분할(도구 실측 Write:Edit) draft "
+                     f"{targets['draft']:.0f} / edit {targets['edit']:.0f} "
+                     f"(총량 {llm_total:.0f}→{target_total:.0f})")
+    else:
+        rescale(_WORD_WRITE, out_words,
+                "작성 단어수(명시)" if anchors.get("out_words_kind") == "explicit"
+                else "작성 단어수(실측)",
+                cap_only=(anchors.get("out_words_kind") == "measured"))
     if anchors.get("verify_n"):
         v_total = sum(it["count"] for it in items if it["primitive"] == "verify")
         target = anchors["verify_n"]
@@ -390,6 +426,8 @@ def collect_record_stats(jsonl_path, detail=False):
     edit_texts = {}          # fp → 편집 원문+수정문 누적 (정독 핵심 위치 증거)
     pending_query = {}       # tool_use id → (도구명, 인자, 호출 순번) — 조회형 후보
     query_tokens = {}        # 조회 신원 → 인자 속 id성 토큰들 (신호② 언급 대조)
+    out_draft = {}           # fp → Write 최종본 단어수 (신규 작성 실측, §28)
+    out_edit = {}            # fp → Edit new_string 누적 단어수 (수정 실측, §28)
 
     def _end_turn():
         # 사용자 턴 경계: 신호④를 이 턴 안에서만 판정, 턴 마무리 답변 보관
@@ -518,6 +556,8 @@ def collect_record_stats(jsonl_path, detail=False):
                     elif name == "Write":
                         edited_files.add(fp)
                         artifact[fp] = len((inp.get("content") or "").split())
+                        # 쓰기 분할 실측(§28): Write = 신규 작성(draft)
+                        out_draft[fp] = len((inp.get("content") or "").split())
                         # Write 전체 본문은 편집 증거로 안 쓴다 — 파일을 통째로
                         # 다시 쓰면 모든 블록이 정독으로 물들어 구간 분해가 무효화됨.
                         # 핵심 위치 증거는 Edit의 원문(old_string)만 (§26)
@@ -527,6 +567,8 @@ def collect_record_stats(jsonl_path, detail=False):
                         old_s = inp.get("old_string") or ""
                         if isinstance(new, str) and new:
                             artifact[fp] = artifact.get(fp, 0) + len(new.split())
+                            # 쓰기 분할 실측(§28): Edit = 수정(edit) 누적
+                            out_edit[fp] = out_edit.get(fp, 0) + len(new.split())
                         # 편집 원문 위치가 사람이 정독해야 했던 핵심 구간
                         edit_texts[fp] = (edit_texts.get(fp, "") + " "
                                           + (old_s if isinstance(old_s, str) else "")
@@ -636,6 +678,8 @@ def collect_record_stats(jsonl_path, detail=False):
 
     out = {"reviewed_words": reviewed, "input_words": input_w,
            "artifact_words": sum(artifact.values()),
+           "out_draft_words": sum(out_draft.values()),
+           "out_edit_words": sum(out_edit.values()),
            "contributed_docs": len(contributed),
            "scanned_docs": len(skim),
            "waste_docs": len(waste),

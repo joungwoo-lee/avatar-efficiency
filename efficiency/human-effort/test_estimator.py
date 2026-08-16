@@ -615,6 +615,27 @@ class TestRequirementActions(unittest.TestCase):
         # 총액 수기검산: read 3000×0.005=15 + (draft1000×0.05+edit1000×0.02)=70 + verify 3×3=9
         self.assertAlmostEqual(r["human_min"], 94.0, places=1)
 
+    def test_write_split_anchor(self):
+        # §28: draft/edit 분류를 도구 실측(Write:Edit)으로 통일.
+        # 실측 분할 200:300 → LLM이 전부 draft(900)로 찍어도 총량 상한(500)을
+        # 실측 비율로 재배분: draft 200 / edit 300.
+        from requirement_actions import estimate_actions_from_requirements
+        out = {"human": [{"primitive": "draft", "count": 900}]}
+        req = {"requirements": [{"title": "수정 작업",
+                                 "requested_quantities": [],
+                                 "acceptance_criteria": []}]}
+        r = estimate_actions_from_requirements(
+            self._Mock([out]), req,
+            record_stats={"reviewed_words": 0, "input_words": 0,
+                          "artifact_words": 500,
+                          "out_draft_words": 200, "out_edit_words": 300})
+        bd = {b["primitive"]: b for b in r["breakdown"]}
+        self.assertEqual(bd["draft"]["count"], 200)
+        self.assertEqual(bd["edit"]["count"], 300)   # LLM 누락 → 실측으로 추가
+        # 200×0.05 + 300×0.02 = 16.0
+        self.assertAlmostEqual(r["human_min"], 16.0, places=1)
+        self.assertTrue(any("쓰기 분할" in n for n in r["notes"]))
+
     def test_verify_added_when_missing(self):
         from requirement_actions import estimate_actions_from_requirements
         out = {"human": [{"primitive": "draft", "count": 500}]}
