@@ -670,8 +670,59 @@ class TestRequirementActions(unittest.TestCase):
         bd2 = {b["primitive"]: b for b in r2["breakdown"]}
         self.assertEqual(bd2["read"]["count"], 1000)
 
+    def test_measured_grade_reading(self):
+        # 실측 등급 읽기: 기여 파일 실측 단어 그대로 정독 + 훑기 실측×탐색요율
+        # + 헛읽기 0 + 같은 구간 재읽기 중복 제거
+        import tempfile, os, json as _json
+        from requirement_actions import (collect_record_stats,
+                                         estimate_actions_from_requirements)
+        lines = [
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t2", "name": "Read",
+                 "input": {"file_path": "b.py"}},
+                {"type": "tool_use", "id": "t1", "name": "Read",
+                 "input": {"file_path": "a.py"}},
+                {"type": "tool_use", "id": "t3", "name": "Read",
+                 "input": {"file_path": "c.py"}},
+                {"type": "tool_use", "id": "t4", "name": "Read",
+                 "input": {"file_path": "a.py"}}]}},   # 같은 구간 재읽기
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t2", "content": "훑기 " * 400},
+                {"type": "tool_result", "tool_use_id": "t1", "content": "본문 " * 1200},
+                {"type": "tool_result", "tool_use_id": "t3", "content": "헛것 " * 900},
+                {"type": "tool_result", "tool_use_id": "t4", "content": "본문 " * 1200}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Edit",
+                 "input": {"file_path": "a.py", "new_string": "수정 " * 50}},
+                {"type": "text", "text": "고쳤다"}]}},
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(_json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            rs = collect_record_stats(p)
+            # a.py=편집됨+재방문 → 기여 / b.py=기여 확보 전 → 훑기
+            # c.py=마지막 기여 읽기(t4) 이전이지만... t4가 마지막 기여 → b,c 모두 훑기?
+            # 순서: b(1) a(2) c(3) a(4) — 마지막 기여 읽기 = a(4) → b,c 모두 항해 중 = SKIM
+            self.assertEqual(rs["contributed_docs"], 1)
+            self.assertEqual(rs["deep_words"], 1200)   # 재읽기 중복 제거 (2400 아님)
+            self.assertEqual(rs["skim_words"], 1300)   # b 400 + c 900
+            # 닻: 1200×정독 + 1300×(탐색 0.0005/정독 0.005) = 1200+130 = 1330
+            out = {"human": [{"primitive": "read", "count": 9999}]}
+            req = {"requirements": [{"title": "수정", "requested_quantities": [],
+                                     "acceptance_criteria": []}]}
+            r = estimate_actions_from_requirements(self._Mock([out]), req,
+                                                   record_stats=rs)
+            bd = {b["primitive"]: b for b in r["breakdown"]}
+            self.assertEqual(r["anchors"]["structured_read_words"], 1330)
+            self.assertEqual(bd["read"]["count"], 1330)
+        finally:
+            os.unlink(p)
+
     def test_navigation_structure_decomposition(self):
-        # AI 전수 탐색 읽기량 → 사람 항해 구조(기여 정독 + 후보 훑기) 변환
+        # AI 전수 탐색 읽기량 → 사람 항해 구조 변환 — 읽기 본문이 기록에 없는
+        # 세션의 **폴백 경로** (건수 × 등가 요율)
         import tempfile, os, json as _json
         from requirement_actions import (collect_record_stats,
                                          estimate_actions_from_requirements)
