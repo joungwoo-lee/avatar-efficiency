@@ -603,6 +603,28 @@ class TestRequirementActions(unittest.TestCase):
         self.assertEqual(bd["verify"]["count"], 3)  # LLM 누락 → 완료조건 수로 추가
         self.assertEqual(bd["draft"]["count"], 2000)  # 명시 분량으로 대체
 
+    def test_measured_anchor_is_cap_only(self):
+        # 실측치 닻은 상한 — LLM이 더 작게 추정하면 끌어올리지 않는다
+        from requirement_actions import estimate_actions_from_requirements
+        req = {"requirements": [{"title": "검토 보고", "requested_quantities": [],
+                                 "acceptance_criteria": ["a"]}]}
+        out = {"human": [{"primitive": "read", "count": 500},
+                         {"primitive": "draft", "count": 100}]}
+        r = estimate_actions_from_requirements(
+            self._Mock([out]), req,
+            record_stats={"reviewed_words": 9000, "input_words": 0,
+                          "artifact_words": 8000})
+        bd = {b["primitive"]: b for b in r["breakdown"]}
+        self.assertEqual(bd["read"]["count"], 500)    # 상한 이내 → 유지 (AI 과대 미상속)
+        self.assertEqual(bd["draft"]["count"], 100)   # 실측 산출물도 상한만
+        out2 = {"human": [{"primitive": "read", "count": 20000}]}
+        r2 = estimate_actions_from_requirements(
+            self._Mock([out2]), req,
+            record_stats={"reviewed_words": 9000, "input_words": 0,
+                          "artifact_words": 0})
+        bd2 = {b["primitive"]: b for b in r2["breakdown"]}
+        self.assertEqual(bd2["read"]["count"], 9000)  # 상한 초과 → 절단
+
     def test_no_rate_leak(self):
         from requirement_actions import build_prompt, build_prompt_single
         from agent_effort import load_rates

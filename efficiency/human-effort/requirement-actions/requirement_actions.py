@@ -118,10 +118,14 @@ def derive_anchors(requirements, record_stats=None):
         verify_n += len(q.get("acceptance_criteria") or [])
     rs = record_stats or {}
     if out_words:
-        anchors["out_words"] = out_words          # 요구사항 명시 분량 (1순위)
+        anchors["out_words"] = out_words          # 요구사항 명시 분량 → 목표
+        anchors["out_words_kind"] = "explicit"
     elif rs.get("artifact_words"):
-        anchors["out_words"] = rs["artifact_words"]  # 실측 산출물 순계 (2순위)
+        anchors["out_words"] = rs["artifact_words"]  # 실측(AI가 쓴 양) → 상한만
+        anchors["out_words_kind"] = "measured"
     if rs.get("reviewed_words") or rs.get("input_words"):
+        # 실측(AI가 읽은 양) → 상한만. AI는 시행착오로 과대하게 읽으므로
+        # 사람 견적의 천장이지 바닥이 아니다.
         anchors["read_words"] = (rs.get("reviewed_words", 0)
                                  + rs.get("input_words", 0))
     if verify_n:
@@ -130,21 +134,35 @@ def derive_anchors(requirements, record_stats=None):
 
 
 def apply_anchors(items, anchors, notes):
-    """LLM 행동 목록의 규모 숫자를 닻으로 확정. 비율은 보존, 총량만 교체."""
-    def rescale(group, target, label):
+    """LLM 행동 목록의 규모 숫자를 닻으로 조정. 비율은 보존, 총량만 조정.
+
+    닻의 종류에 따라 다르게 적용한다:
+    - 명시 수량(요구사항에 적힌 분량): 목표 — 양방향으로 맞춘다
+    - 실측치(AI가 실제 읽고 쓴 양): **상한만** — LLM 추정이 이보다 크면
+      잘라내고, 작으면 그대로 둔다. AI의 과대 탐색·장황함을 사람 견적에
+      그대로 상속시키지 않기 위함.
+    """
+    def rescale(group, target, label, cap_only=False):
         total = sum(it["count"] for it in items if it["primitive"] in group)
         if not target or total <= 0:
             return
+        if cap_only and total <= target:
+            return  # 상한 이내 — LLM의 선별 판단 존중
         if abs(total - target) / target < 0.05:
             return  # 이미 닻과 일치
         factor = target / total
         for it in items:
             if it["primitive"] in group:
                 it["count"] = round(it["count"] * factor, 1)
-        notes.append(f"닻 적용: {label} 총량 {total:.0f}→{target:.0f} (LLM값 대체)")
+        mode = "상한 절단" if cap_only else "목표 대체"
+        notes.append(f"닻 적용: {label} 총량 {total:.0f}→{target:.0f} ({mode})")
 
-    rescale(_WORD_READ, anchors.get("read_words"), "읽기 단어수(실측)")
-    rescale(_WORD_WRITE, anchors.get("out_words"), "작성 단어수(명시/실측)")
+    rescale(_WORD_READ, anchors.get("read_words"), "읽기 단어수(실측)",
+            cap_only=True)
+    rescale(_WORD_WRITE, anchors.get("out_words"),
+            "작성 단어수(명시)" if anchors.get("out_words_kind") == "explicit"
+            else "작성 단어수(실측)",
+            cap_only=(anchors.get("out_words_kind") == "measured"))
     if anchors.get("verify_n"):
         v_total = sum(it["count"] for it in items if it["primitive"] == "verify")
         target = anchors["verify_n"]
