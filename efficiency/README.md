@@ -27,9 +27,9 @@ efficiency/
 │                       agent_effort.py = 사전 추산 (LLM이 예상 경로 count 분해 × 요율)
 │                       transcript_actual.py = 사후 실측 (기록된 동작 집계, LLM 미사용)
 ├─ counterfactual-api/  [API·아바타 측정 = 사전] 아바타 카드 입력 →
-│                       분자: 할일 변환→행동×human 단가(기본, 분모와 동일 체계;
-│                       workunit 옵션=카탈로그×Monte Carlo) + 분모: agent_effort
-│                       → 구 계약(integ-spec) 반환
+│                       LLM 1회가 human/agent/hitl 세 경로를 함께 분해(paths.py,
+│                       integ-spec §3) × rates 요율 → 구 계약 반환. 분자·분모
+│                       동일 체계. workunit 옵션 = 분자만 카탈로그×Monte Carlo
 └─ session-api/         [API·세션 측정 = 사후] 트랜스크립트 입력 →
                         §23 복원 분자 + transcript_actual 실측 분모 → speedup 리포트
 ```

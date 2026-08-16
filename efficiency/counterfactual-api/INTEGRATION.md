@@ -6,12 +6,14 @@
 [../human-effort/doc/requirement_based_human_effort_service_design.md](../human-effort/doc/requirement_based_human_effort_service_design.md) (v0.6),
 설계 근거는 [../human-effort/doc/DESIGN.md](../human-effort/doc/DESIGN.md), 모듈 개요는 [../human-effort/README.md](../human-effort/README.md).
 
-> **산정 구성**: `human_min`은 기본적으로 **요구사항·행동 방식**
-> (카드→할일 변환→사람 행동 × human 단가, human-effort/requirement-actions)이,
-> `agent_min` 계열(machine+hitl)은 integ-spec §3의 primitive×rates.json 방식
-> (agent_effort.py)이 산정한다 — **분자·분모가 같은 행동×단가 체계**라
-> speedup 배율이 해석 가능하다. 분포(P50/P80)가 필요하면
-> `human_method="workunit"`으로 구 방식(카탈로그×Monte Carlo) 선택.
+> **산정 구성 (기본)**: integ-spec §3 그대로 — **LLM 1회** 호출이 같은
+> 완료상태 기준으로 human/agent/hitl 세 경로를 함께 분해(paths.py)하고,
+> 코드가 rates.json 요율을 곱한다. 아바타 카드는 이미 정리된 업무 정의라
+> 별도 할일 변환 호출이 없다. **분자·분모가 같은 행동×단가 체계** —
+> speedup 배율이 해석 가능. 그간의 안전규칙(기준 인물·오독 방지·수량 근거·
+> 이중 계상 금지)은 프롬프트 규칙으로 흡수됨.
+> 분포(P50/P80)가 필요하면 `human_method="workunit"` — 분자만 카탈로그×
+> Monte Carlo로 교체 (LLM 3회).
 > `estimate_task` 시그니처·출력 키·수치 타입은 integ-spec §2/§6에 100% 맞춰져 있어
 > `analysis_cf.py`/`server.py`/`app.js` 무수정 drop-in 교체 가능.
 > human 경로에는 기준노동("생성형 AI만 배제, 일반 도구 전부 사용, 최단 경로")
@@ -33,11 +35,12 @@ git clone https://github.com/joungwoo-lee/avatar-efficiency.git   # 또는 기�
 이름의 **한 폴더로 모아** 복사한다 (compat.py는 동일 폴더 import를 우선 시도):
 
 ```
+counterfactual-api/:                 compat.py paths.py     # 어댑터 + §3 단일호출 분해
+agent-effort/:                       agent_effort.py rates.json   # 요율·공용 함수
+human-effort/shared/:                onprem_llm_sim.py            # LLM 백엔드(테스트용)
+(workunit 모드 사용 시에만 추가)
 human-effort/requirement-based/:     estimator.py engine.py prompts.py catalog.json
-human-effort/requirement-actions/:   requirement_actions.py   # 분자 기본(행동×단가)
-human-effort/shared/:                transcript_requirements.py onprem_llm_sim.py
-agent-effort/:                       agent_effort.py rates.json  # 분모 (integ-spec §3)
-counterfactual-api/:                 compat.py                   # drop-in 어댑터
+human-effort/shared/:                transcript_requirements.py
 ```
 
 - 폴더명이 `effort_estimator`(언더스코어)여야 Python import가 된다. 하이픈이면 실패.
@@ -172,7 +175,7 @@ python test_estimator.py --live  # 메일 스펙 P50 5~90분·≤5 items 자동 
 | `saved_min`/`speedup` | 동일 방법론 쌍의 차/비 | human 쪽만 방법론 상향 → 계통적으로 커짐. 시계열 비교 시 단절점 표기 필요 |
 | `human_breakdown` 키 | primitive 이름 | work_unit_id (예: `research.synthesis`) |
 | `confidence` | 문자열 "C (...)" | 동일 형식 유지 |
-| LLM 호출 | 1회(+재시도) | 3회: A-avatar+B+agent_effort (single 모드는 2회; critic=True 시 +1) |
+| LLM 호출 | 1회(+재시도) | **1회**(+재시도) — §3 단일호출 복원. workunit 모드만 3회 |
 | 검토 표시 | 없음 | `confidence_notes`의 `review_required:` 항목 — 있으면 확정값 사용 전 사람 검토 |
 
 ## 오류 모드

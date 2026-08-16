@@ -35,15 +35,14 @@ class MockLLM:
 
     def complete_json(self, prompt, max_tokens):
         self.calls.append(prompt)
+        if "두 실행경로" in prompt:  # paths — integ-spec §3 단일호출
+            out = copy.deepcopy(AGENT_OUT)
+            out["human"] = [{"primitive": "read", "count": 800},
+                            {"primitive": "draft", "count": 200},
+                            {"primitive": "verify", "count": 1}]
+            return out
         if "Avatar Task Requirement Converter" in prompt:
             return copy.deepcopy(REQ_OUT)
-        if "행동 분해 엔진" in prompt:  # requirement-actions 분자
-            return {"human": [{"primitive": "read", "count": 800},
-                              {"primitive": "draft", "count": 200},
-                              {"primitive": "verify", "count": 1}],
-                    "rationale": "h"}
-        if "실행 공수 산정" in prompt:  # agent_effort 분모 프롬프트
-            return copy.deepcopy(AGENT_OUT)
         return copy.deepcopy(EFFORT_OUT)
 
 
@@ -55,7 +54,8 @@ class TestCompat(unittest.TestCase):
         for k in SPEC_KEYS:
             self.assertIn(k, r)
         self.assertIsNone(r["error"])
-        self.assertGreater(r["human_min"], 0)
+        # 수기검산: human = 800×0.005 + 200×0.05 + 1×3 = 17분 (integ-spec §3 예시)
+        self.assertAlmostEqual(r["human_min"], 17.0, places=2)
         self.assertIsNone(r["human_p80_min"])  # 행동×단가는 점추정 — 분포 없음
         self.assertAlmostEqual(r["agent_ai_min"], 1.69, places=2)
         self.assertAlmostEqual(r["agent_human_min"], 3.9, places=2)
@@ -70,7 +70,7 @@ class TestCompat(unittest.TestCase):
     def test_call_count_and_no_rate_leak(self):
         llm = MockLLM()
         CounterfactualEstimator(llm=llm).estimate_task("t", "c", "r", [], "d")
-        self.assertEqual(len(llm.calls), 3)  # A-avatar + B + agent_effort
+        self.assertEqual(len(llm.calls), 1)  # integ-spec §3 — 단일호출
         for prompt in llm.calls:
             self.assertNotIn("min_per_unit", prompt)
             self.assertNotIn("time_model", prompt)
