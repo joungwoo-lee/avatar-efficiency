@@ -6,9 +6,12 @@
 [../human-effort/doc/requirement_based_human_effort_service_design.md](../human-effort/doc/requirement_based_human_effort_service_design.md) (v0.6),
 설계 근거는 [../human-effort/doc/DESIGN.md](../human-effort/doc/DESIGN.md), 모듈 개요는 [../human-effort/README.md](../human-effort/README.md).
 
-> **산정 구성 (하이브리드)**: `human_min`은 v0.6 Work Unit 엔진
-> (catalog.json × Monte Carlo P50)이, `agent_min` 계열(machine+hitl)은
-> integ-spec §3의 primitive×rates.json 방식(agent_effort.py)이 산정한다.
+> **산정 구성**: `human_min`은 기본적으로 **요구사항·행동 방식**
+> (카드→할일 변환→사람 행동 × human 단가, human-effort/requirement-actions)이,
+> `agent_min` 계열(machine+hitl)은 integ-spec §3의 primitive×rates.json 방식
+> (agent_effort.py)이 산정한다 — **분자·분모가 같은 행동×단가 체계**라
+> speedup 배율이 해석 가능하다. 분포(P50/P80)가 필요하면
+> `human_method="workunit"`으로 구 방식(카탈로그×Monte Carlo) 선택.
 > `estimate_task` 시그니처·출력 키·수치 타입은 integ-spec §2/§6에 100% 맞춰져 있어
 > `analysis_cf.py`/`server.py`/`app.js` 무수정 drop-in 교체 가능.
 > human 경로에는 기준노동("생성형 AI만 배제, 일반 도구 전부 사용, 최단 경로")
@@ -30,10 +33,11 @@ git clone https://github.com/joungwoo-lee/avatar-efficiency.git   # 또는 기�
 이름의 **한 폴더로 모아** 복사한다 (compat.py는 동일 폴더 import를 우선 시도):
 
 ```
-human-effort/requirement-based/:  estimator.py engine.py prompts.py catalog.json
-human-effort/shared/:             transcript_requirements.py onprem_llm_sim.py
-agent-effort/:                    agent_effort.py rates.json          # 분모 (integ-spec §3)
-counterfactual-api/:              compat.py                           # drop-in 어댑터
+human-effort/requirement-based/:     estimator.py engine.py prompts.py catalog.json
+human-effort/requirement-actions/:   requirement_actions.py   # 분자 기본(행동×단가)
+human-effort/shared/:                transcript_requirements.py onprem_llm_sim.py
+agent-effort/:                       agent_effort.py rates.json  # 분모 (integ-spec §3)
+counterfactual-api/:                 compat.py                   # drop-in 어댑터
 ```
 
 - 폴더명이 `effort_estimator`(언더스코어)여야 Python import가 된다. 하이픈이면 실패.
@@ -140,21 +144,20 @@ python test_estimator.py --live  # 메일 스펙 P50 5~90분·≤5 items 자동 
 ```jsonc
 {
   "error": null,                    // 실패 시 문자열. 예외를 raise하지 않음
-  "human_min": 16.1,                // v0.6 엔진 P50 (분) — 숙련자, 생성형 AI만 미사용
+  "human_min": 27.5,                // 사람 w/o 생성형AI (분) — 행동×human 단가
   "agent_min": 6.89,                // = agent_human_min + agent_ai_min
   "agent_human_min": 5.2,           // hitl: 감독(지시·검토·승인) + 잔여 직접작업
   "agent_ai_min": 1.69,             // 기계 시간 (ai_io 포함, revision factor 곱)
   "saved_min": 9.21,                // human_min - agent_min
   "speedup": 2.34,                  // human_min / agent_min (agent_min<=0이면 null)
-  "human_breakdown": {"research.document_skim": 4.7,            // work_unit_id→평균 분
-                      "writing.short_message": 11.7},
+  "human_breakdown": {"read": 4.0, "draft": 10.0, "verify": 3.0},  // 행동→분
   "agent_breakdown": {"draft": 0.4, "instruct": 3.0,            // primitive→분 (기계·사람 합산)
     "ai_io": {"input_words": 900.0, "output_words": 250.0, "minutes": 0.39}},
   "rationale": "한 줄 근거 문자열",
   "confidence": "C (cold-start seed rates/catalog, 미보정)",
   "confidence_notes": [],           // 비어있지 않으면 저신뢰 처리 권장
   // 부가 키 (구 소비측은 무시 가능, 저장 권장)
-  "human_p80_min": 20.0,            // P80 (분) — 계획·예산용 보수값
+  "human_p80_min": null,            // 행동×단가는 점추정 — workunit 모드에서만 값 존재
   "estimate_id": "E-xxxxxxxxxx",    // 동일 입력+동일 catalog면 동일 (재현성 추적)
   "catalog_version": "core-0.6.0-seed"
 }
@@ -164,7 +167,7 @@ python test_estimator.py --live  # 메일 스펙 P50 5~90분·≤5 items 자동 
 
 | 항목 | 구 | 신규 |
 |---|---|---|
-| `human_min` | human primitive count × rates 점추정 | v0.6 Work Unit WBS 분해 × catalog.json 분포 → Monte Carlo **P50** (+`human_p80_min`). 소형 업무는 경량 단위·분해 상한으로 상식 범위, 정식 산출물 업무는 구보다 큰 경향 |
+| `human_min` | human primitive count × rates 점추정 | **할일 변환을 거친** 행동 count × rates (닻: 카드 명시 수량·완료조건) — 구와 같은 단가 체계에 스코프 정제·오독 차단이 추가된 것. `human_method="workunit"`이면 카탈로그×Monte Carlo P50/P80 |
 | `agent_*` | primitive×rates | **동일 방식 유지** (agent_effort.py + rates.json) |
 | `saved_min`/`speedup` | 동일 방법론 쌍의 차/비 | human 쪽만 방법론 상향 → 계통적으로 커짐. 시계열 비교 시 단절점 표기 필요 |
 | `human_breakdown` 키 | primitive 이름 | work_unit_id (예: `research.synthesis`) |
