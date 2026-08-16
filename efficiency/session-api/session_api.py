@@ -31,6 +31,7 @@ for _p in (_ROOT / "human-effort" / "requirement-based",
 
 from transcript_requirements import (extract_requirements,  # noqa: E402
                                      normalize_claude_code_jsonl)
+from requirement_actions import collect_record_stats  # noqa: E402
 from transcript_actual import parse_actions, actual_effort_minutes  # noqa: E402
 from agent_effort import load_rates, speedup  # noqa: E402
 from estimator import HumanEffortEstimator  # noqa: E402
@@ -51,6 +52,20 @@ class JsonRetryLLM:
             except Exception as e:
                 last = e
         raise last
+
+
+# 초소형 세션 판정 기준: 검토·입력 자료와 산출물이 이 밑이면 측정 가치 없는
+# 핑퐁·잡담 세션 — 측정 시 완료조건 고정비로 5~7배 역부풀림이 실측 확인됨.
+TRIVIAL_READ_WORDS = 100
+TRIVIAL_ARTIFACT_WORDS = 50
+
+
+def is_trivial_session(record_stats):
+    """초소형(잡담·핑퐁) 세션 여부 — LLM 미사용 실측 판정."""
+    read_total = (record_stats.get("reviewed_words", 0)
+                  + record_stats.get("input_words", 0))
+    return (read_total < TRIVIAL_READ_WORDS
+            and record_stats.get("artifact_words", 0) < TRIVIAL_ARTIFACT_WORDS)
 
 
 def measure_agent_actual(jsonl_path, rates=None, include_subagents=False):
@@ -77,7 +92,7 @@ def measure_agent_actual(jsonl_path, rates=None, include_subagents=False):
 
 
 def measure_session(llm, jsonl_path, rates=None, max_chars=12000,
-                    include_subagents=False, estimator=None):
+                    include_subagents=False, estimator=None, force=False):
     """세션 1개 → 분자·분모·speedup.
 
     반환: {
@@ -92,6 +107,15 @@ def measure_session(llm, jsonl_path, rates=None, max_chars=12000,
     """
     rates = rates or load_rates()
     est = estimator or HumanEffortEstimator(llm)
+
+    stats = collect_record_stats(jsonl_path)
+    if is_trivial_session(stats) and not force:
+        return {"session": Path(jsonl_path).name,
+                "excluded": True,
+                "reason": (f"초소형 세션 — 검토·입력 {stats['reviewed_words'] + stats['input_words']}단어, "
+                           f"산출물 {stats['artifact_words']}단어 (기준 미달). "
+                           "측정 시 역부풀림 확인돼 제외. force=True로 강제 측정 가능"),
+                "record_stats": stats}
 
     actual = measure_agent_actual(jsonl_path, rates, include_subagents)
 
@@ -148,6 +172,9 @@ def format_report(rows):
     for r in rows:
         if "error" in r:
             lines.append(f"{r['session'][:12]}  FAIL: {r['error'][:70]}")
+            continue
+        if r.get("excluded"):
+            lines.append(f"{r['session'][:12]}  제외: {r['reason'][:70]}")
             continue
         h, a = r["human"], r["agent"]
         th += h["p50_min"]

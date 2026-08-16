@@ -79,6 +79,28 @@ class TestSessionApi(unittest.TestCase):
         self.assertNotIn("error", rows[0])
         self.assertIn("error", rows[1])
 
+
+
+    def test_trivial_session_excluded(self):
+        # 초소형(핑퐁) 세션은 LLM 호출 없이 측정에서 제외
+        import json as _json
+        lines = [
+            {"type": "user", "message": {"role": "user", "content": "핑"}},
+            {"type": "assistant", "message": {"role": "assistant",
+                                              "content": [{"type": "text", "text": "퐁"}]}},
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "tiny.jsonl")
+            with open(p, "w", encoding="utf-8") as f:
+                for ln in lines:
+                    f.write(_json.dumps(ln, ensure_ascii=False) + "\n")
+            llm = MockLLM()
+            r = measure_session(llm, p)
+            self.assertTrue(r.get("excluded"))
+            self.assertEqual(len(llm.calls), 0)      # LLM 비용 0
+            r2 = measure_session(llm, p, force=True) # 강제 측정은 가능
+            self.assertNotIn("excluded", r2)
+
     def test_json_retry_wrapper(self):
         class Flaky:
             def __init__(self):
