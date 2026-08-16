@@ -25,8 +25,8 @@ measure_session(llm, 세션.jsonl, human="req-actions")       # 분자를 닻 �
 measure_session(llm, 세션.jsonl, human="record-actions")    # 할일 안 거치는 교차확인
 ```
 
-분자: paths(사전 기본) · workunit · req-actions · record-actions(사후 전용)
-분모: paths(사전 기본) · agent-llm(사전) · record(사후 고정, LLM 0회)
+분자: combined(사전 기본 — 분모와 한 호출 공유) · workunit · req-actions · record-actions(사후 전용)
+분모: combined(사전 기본) · agent-llm(사전) · record(사후 고정, LLM 0회)
 호출 수 조절: `calls="single"` — 어느 조합이든 분자를 한 호출로 접음
 (workunit→Prompt C, req-actions→내부 할일 포함 단일호출; 사후 req-actions는
 세션당 LLM 1회까지 내려감). 감사·재처리가 필요한 정식 산정은 staged.

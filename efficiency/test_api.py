@@ -92,7 +92,7 @@ class TestAvatarCombos(unittest.TestCase):
         r = estimate_avatar(llm, CARD, human="workunit")
         self.assertEqual(r["human"]["method"], "workunit")
         self.assertIsNotNone(r["human"]["p80_min"])
-        self.assertEqual(r["agent"]["method"], "paths")
+        self.assertEqual(r["agent"]["method"], "combined")
 
     def test_req_actions_with_agent_llm(self):
         llm = MockLLM()
