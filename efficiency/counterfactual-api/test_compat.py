@@ -87,6 +87,27 @@ class TestCompat(unittest.TestCase):
                   "saved_min", "speedup"):
             self.assertIsNone(r[k])
 
+    def test_paths_anchors_enforced(self):
+        # 동시분해 내부 닻: 카드 명시 수량이 LLM이 찍은 규모를 덮어쓴다
+        from paths import estimate_paths
+        class M:
+            def complete_json(self, p, m):
+                return {"human": [{"primitive": "draft", "count": 9999},
+                                  {"primitive": "verify", "count": 7}],
+                        "agent": [{"primitive": "draft", "count": 9999}],
+                        "hitl": [{"primitive": "review", "count": 9999}],
+                        "ai_io": {},
+                        "todos": [{"title": "보고서",
+                                   "quantities": [{"name": "분량", "value": 500,
+                                                   "unit": "단어"}],
+                                   "acceptance_criteria": ["a", "b"]}],
+                        "rationale": "t"}
+        r = estimate_paths(M(), "spec")
+        # human draft 9999→500(명시), verify 7→2(완료조건), agent·검토도 500으로
+        self.assertAlmostEqual(r["human_min"], 500*0.05 + 2*3, places=1)
+        self.assertAlmostEqual(r["agent_human_min"], 500*0.006, places=1)
+        self.assertTrue(any("닻 적용" in n for n in r["notes"]))
+
     def test_none_inputs_tolerated(self):
         r = CounterfactualEstimator(llm=MockLLM()).estimate_task(
             None, None, None, None, None)
