@@ -36,6 +36,10 @@ _WORD_WRITE = ("draft", "edit")
 # 92%가 여기 몰림: 사람이 읽을 "문서"가 아니라 AI의 자기 작업 관리 기록)
 _IMG_EXT = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg", ".ico"}
 
+# 구간 분해 블록 크기(단어) — 기여 파일 안에서 정독/훑기를 가르는 눈금 (§26).
+# 시간 지식이 아니라 구조 눈금이라 요율표가 아닌 코드 상수로 둔다.
+_DEEP_BLOCK_WORDS = 200
+
 
 # user 레코드 안의 시스템 주입 텍스트 — 사람 타이핑이 아니므로 입력·턴 계산 제외
 # (자동 반복·긴 세션에서 사용자 입력의 90% 이상이 이런 블록으로 오염됨)
@@ -171,7 +175,7 @@ def derive_anchors(requirements, record_stats=None, rates=None):
     if deep_w or skim_w:
         read_rate = ((rates or {}).get("human", {}).get("read", {})
                      .get("min_per_unit", 0.005))
-        skim_rate = rm.get("skim_min_per_word", 0.0005)
+        skim_rate = rm.get("skim_min_per_word", 0.00025)
         factor = (skim_rate / read_rate) if read_rate else 0.0
         structured = deep_w + skim_w * factor + rs.get("input_words", 0)
         if structured:
@@ -362,19 +366,23 @@ def collect_record_stats(jsonl_path, detail=False):
     turn_reads = []          # 이 턴의 (fp, 읽기 시점)
     all_turns = []           # 턴별 읽기 목록 (WASTE 위상 재생용)
     signal4 = set()          # 탐색 착지 파일 (마지막 검색 직후 첫 읽기)
+    landing_regions = set()  # 착지 읽기의 구간 — 구간 분해에서 정독 취급
     answers = []             # 턴별 마무리 답변 (신호⑤ 대조 대상)
     pending_read = {}        # tool_use id → (fp, region) (읽기 결과 회수용)
     read_content = {}        # fp → 읽은 내용 (신호⑤ 내용 겹침, 상한 있음)
     file_read_words = {}     # fp → 실측 읽은 단어수 (같은 구간 재읽기는 1회)
     counted_regions = set()  # 단어수 집계된 (fp, offset) — 재읽기 중복 제거
+    region_texts = {}        # (fp, offset) → 그 구간의 읽은 본문 (구간 분해용)
+    edit_texts = {}          # fp → 편집 원문+수정문 누적 (정독 핵심 위치 증거)
 
     def _end_turn():
         # 사용자 턴 경계: 신호④를 이 턴 안에서만 판정, 턴 마무리 답변 보관
         nonlocal turn_search_i, turn_reads, final_answer
         if turn_search_i is not None:
-            post = [fp for fp, i in turn_reads if i > turn_search_i]
+            post = [(fp, rg) for fp, i, rg in turn_reads if i > turn_search_i]
             if post:
-                signal4.add(post[0])  # 착지 = 검색 멈춘 뒤 처음 연 파일만
+                signal4.add(post[0][0])  # 착지 = 검색 멈춘 뒤 처음 연 파일만
+                landing_regions.add(post[0][1])
         if turn_reads:
             all_turns.append(turn_reads)
         turn_search_i = None
@@ -430,6 +438,7 @@ def collect_record_stats(jsonl_path, detail=False):
                                 counted_regions.add(region)
                                 file_read_words[fp] = (file_read_words.get(fp, 0)
                                                        + len(text.split()))
+                                region_texts[region] = text  # 구간 분해용
                             # 읽기 내용 보관 (신호⑤, 파일당 2만 단어 상한)
                             old = read_content.get(fp, "")
                             if len(old.split()) < 20000:
@@ -458,17 +467,25 @@ def collect_record_stats(jsonl_path, detail=False):
                         read_files.add(fp)
                         region = (fp, inp.get("offset"))
                         read_regions[region] = read_regions.get(region, 0) + 1
-                        turn_reads.append((fp, tool_i))
+                        turn_reads.append((fp, tool_i, region))
                         if b.get("id"):
                             pending_read[b["id"]] = (fp, region)
                     elif name == "Write":
                         edited_files.add(fp)
                         artifact[fp] = len((inp.get("content") or "").split())
+                        # Write 전체 본문은 편집 증거로 안 쓴다 — 파일을 통째로
+                        # 다시 쓰면 모든 블록이 정독으로 물들어 구간 분해가 무효화됨.
+                        # 핵심 위치 증거는 Edit의 원문(old_string)만 (§26)
                     else:
                         edited_files.add(fp)
                         new = inp.get("new_string") or inp.get("new_source") or ""
+                        old_s = inp.get("old_string") or ""
                         if isinstance(new, str) and new:
                             artifact[fp] = artifact.get(fp, 0) + len(new.split())
+                        # 편집 원문 위치가 사람이 정독해야 했던 핵심 구간
+                        edit_texts[fp] = (edit_texts.get(fp, "") + " "
+                                          + (old_s if isinstance(old_s, str) else "")
+                                          + " " + (new if isinstance(new, str) else ""))
                 if texts:
                     final_answer = " ".join(texts)
     _end_turn()  # 마지막 턴 마감
@@ -516,18 +533,53 @@ def collect_record_stats(jsonl_path, detail=False):
     # 위상 재생: 턴 안에서 마지막 기여 읽기 이후에만 읽힌 비기여 파일 = WASTE
     skim, waste = set(), set()
     for treads in all_turns:
-        last_c = max((k for k, (fp, _i) in enumerate(treads)
+        last_c = max((k for k, (fp, _i, _r) in enumerate(treads)
                       if fp in contributed), default=None)
-        for k, (fp, _i) in enumerate(treads):
+        for k, (fp, _i, _r) in enumerate(treads):
             if fp in contributed:
                 continue
             (waste if last_c is not None and k > last_c else skim).add(fp)
     waste -= skim  # 어느 턴에서든 항해 중 읽혔으면 SKIM 유지
 
-    # 등급별 실측 읽기 단어수 (구간 중복 제거 후): 기여=정독 대상 그대로,
-    # 훑기=탐색요율 대상, 헛읽기=0 처리 대상(감사용으로만 보고)
-    deep_w = sum(file_read_words.get(f, 0) for f in contributed)
-    skim_w = sum(file_read_words.get(f, 0) for f in skim)
+    # ---- 구간·블록 분해 (§26): 사람은 전략적 탐색 후 **핵심만** 정독한다.
+    # 기여 파일이라도 전량 정독이 아니다 — 파일 안을 구간(읽기 offset 단위),
+    # 구간 안을 블록(_DEEP_BLOCK_WORDS 단어)으로 갈라 증거가 닿은 블록만 정독,
+    # 나머지는 훑기. 증거(전부 결정론):
+    #   구간 전체 정독: 재방문 구간(같은 구간 2회+ 읽음) · 탐색 착지 구간
+    #   블록 정독: 블록 안에 변별력 있는 식별자 1개+, 또는 블록의 6단어 조각이
+    #             마무리 답변·그 파일의 편집 원문/수정문과 겹침
+    deep_w = skim_w = 0
+    file_split = {}
+    for f in contributed:
+        ev_words = (edit_texts.get(f, "") + " " + ans_text).lower().split()
+        ev_shingles = ({" ".join(ev_words[i:i + 6])
+                        for i in range(len(ev_words) - 5)}
+                       if len(ev_words) >= 6 else set())
+        f_deep = f_skim = 0
+        for region, rtext in region_texts.items():
+            if region[0] != f:
+                continue
+            words = rtext.split()
+            # 착지·재방문은 파일 승격 신호일 뿐 — 그 구간 안에서도 사람은
+            # 핵심 블록만 정독한다. 통째 정독 경로 없음 (§26 재실측 근거)
+            for i in range(0, len(words), _DEEP_BLOCK_WORDS):
+                blk = words[i:i + _DEEP_BLOCK_WORDS]
+                btext = " ".join(blk)
+                bl = btext.lower().split()
+                # 정독 블록 조건: 변별 식별자 2개+(1개짜리 함수명이 파일 전
+                # 블록을 물들이는 것 방지) 또는 6단어 조각 직접 겹침
+                hit = (sum(1 for t in ans_idents if t in btext) >= 2
+                       or any(" ".join(bl[j:j + 6]) in ev_shingles
+                              for j in range(len(bl) - 5)))
+                if hit:
+                    f_deep += len(blk)
+                else:
+                    f_skim += len(blk)
+        f_deep = min(f_deep, file_read_words.get(f, 0))
+        file_split[f] = (f_deep, max(file_read_words.get(f, 0) - f_deep, 0))
+        deep_w += file_split[f][0]
+        skim_w += file_split[f][1]
+    skim_w += sum(file_read_words.get(f, 0) for f in skim)
     waste_w = sum(file_read_words.get(f, 0) for f in waste)
 
     out = {"reviewed_words": reviewed, "input_words": input_w,
@@ -539,10 +591,12 @@ def collect_record_stats(jsonl_path, detail=False):
            "deep_words": deep_w,
            "skim_words": skim_w,
            "waste_words": waste_w}
-    if detail:  # 감사·검증용: 등급별 파일 목록(+실측 단어수)
+    if detail:  # 감사·검증용: 등급별 파일 목록(+실측 단어수·기여 파일 분해)
         out["files"] = {"deep": sorted(contributed), "skim": sorted(skim),
                         "waste": sorted(waste), "internal": sorted(internal),
-                        "read_words": dict(sorted(file_read_words.items()))}
+                        "read_words": dict(sorted(file_read_words.items())),
+                        "deep_split": {f: list(v)
+                                       for f, v in sorted(file_split.items())}}
     return out
 
 
