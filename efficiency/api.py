@@ -38,7 +38,7 @@ from paths import estimate_paths  # noqa: E402
 from estimator import HumanEffortEstimator, validate_requirements_output  # noqa: E402
 from prompts import build_prompt_a_avatar  # noqa: E402
 from requirement_actions import (estimate_actions_from_requirements,  # noqa: E402
-                                 collect_record_stats)
+                                 estimate_actions_single, collect_record_stats)
 from primitive_effort import estimate_human_min  # noqa: E402
 from transcript_requirements import (extract_requirements,  # noqa: E402
                                      normalize_claude_code_jsonl)
@@ -53,8 +53,13 @@ def _extract_avatar_todos(llm, card_text, max_tokens=6000):
     return req, notes
 
 
-def estimate_avatar(llm, card_text, human="paths", agent="paths", rates=None):
-    """사전 측정: 아바타 카드 → speedup. 조합은 인자로만 지정."""
+def estimate_avatar(llm, card_text, human="paths", agent="paths", rates=None,
+                    calls="staged"):
+    """사전 측정: 아바타 카드 → speedup. 조합은 인자로만 지정.
+
+    calls="single": 분자를 단일호출판으로 — workunit은 Prompt C(할일+분해
+    한 호출), req-actions는 내부 할일 정리 포함 한 호출. paths는 원래 1회.
+    단일호출은 저렴하지만 할일 목록의 단계별 감사·재처리는 포기."""
     rates = rates or load_rates()
     notes = []
     pp = None
@@ -78,16 +83,21 @@ def estimate_avatar(llm, card_text, human="paths", agent="paths", rates=None):
     if human == "paths":
         h = {"min": pp["human_min"], "p80_min": None, "method": "paths"}
     elif human == "workunit":
-        r = HumanEffortEstimator(llm).estimate(card_text)
+        mode = "single" if calls == "single" else "two_pass"
+        r = HumanEffortEstimator(llm, mode=mode).estimate(card_text)
         h = {"min": r["effort"]["p50_minutes"], "p80_min": r["effort"]["p80_minutes"],
              "method": "workunit", "review_required": r["review_required"]}
         notes += r["warnings"] + r["notes"]
     elif human == "req-actions":
-        req, n = _extract_avatar_todos(llm, card_text)
-        ra = estimate_actions_from_requirements(llm, req, rates=rates)
+        if calls == "single":
+            ra = estimate_actions_single(llm, card_text, rates=rates)
+        else:
+            req, n = _extract_avatar_todos(llm, card_text)
+            notes += n
+            ra = estimate_actions_from_requirements(llm, req, rates=rates)
         h = {"min": ra["human_min"], "p80_min": None, "method": "req-actions",
              "anchors": ra["anchors"]}
-        notes += n + ra["notes"]
+        notes += ra["notes"]
     else:
         raise ValueError(f"사전 측정에서 지원하지 않는 human 방식: {human}")
 
@@ -96,8 +106,11 @@ def estimate_avatar(llm, card_text, human="paths", agent="paths", rates=None):
 
 
 def measure_session(llm, jsonl_path, human="workunit", force=False,
-                    rates=None, max_chars=8000):
-    """사후 측정: 세션 기록 → speedup. 분모는 실측 고정, 분자만 조합 지정."""
+                    rates=None, max_chars=8000, calls="staged"):
+    """사후 측정: 세션 기록 → speedup. 분모는 실측 고정(LLM 0회), 분자만 조합.
+
+    calls="single" + human="req-actions": 분자를 한 호출(내부 할일 정리 포함)로
+    — 세션당 LLM 1회."""
     rates = rates or load_rates()
     stats = collect_record_stats(jsonl_path)
     if is_trivial_session(stats) and not force:
@@ -109,6 +122,15 @@ def measure_session(llm, jsonl_path, human="workunit", force=False,
          "hitl_min": actual["hitl_min"], "method": "record"}
 
     notes = []
+    if human == "req-actions" and calls == "single":
+        norm = normalize_claude_code_jsonl(jsonl_path, max_chars=max_chars,
+                                           include_tool_stats=False)
+        ra = estimate_actions_single(llm, norm, record_stats=stats, rates=rates)
+        h = {"min": ra["human_min"], "p80_min": None, "method": "req-actions",
+             "anchors": ra["anchors"], "todos": ra.get("todos")}
+        notes += ra["notes"]
+        return {"input": "session", "human": h, "agent": a,
+                "speedup": speedup(h["min"], a["total_min"]), "notes": notes}
     if human == "record-actions":
         norm = normalize_claude_code_jsonl(jsonl_path, max_chars=max_chars,
                                            include_tool_stats=False)

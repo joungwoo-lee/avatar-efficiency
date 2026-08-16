@@ -31,6 +31,13 @@ class MockLLM:
                              {"primitive": "review", "count": 200}],
                     "ai_io": {"input_words": 900, "output_words": 250},
                     "rationale": "r"}
+        if "한 번에 내부적으로" in prompt:  # req-actions 단일호출
+            return {"todos": [{"title": "보고서",
+                               "quantities": [{"name": "분량", "value": 2000,
+                                               "unit": "단어"}],
+                               "acceptance_criteria": ["a"]}],
+                    "human": [{"primitive": "draft", "count": 100}],
+                    "rationale": "s"}
         if "행동 분해 엔진" in prompt:  # req-actions
             return {"human": [{"primitive": "draft", "count": 500},
                               {"primitive": "verify", "count": 2}],
@@ -97,6 +104,25 @@ class TestAvatarCombos(unittest.TestCase):
     def test_invalid_combo_rejected(self):
         with self.assertRaises(ValueError):
             estimate_avatar(MockLLM(), CARD, agent="record")
+
+
+class TestSingleCall(unittest.TestCase):
+    def test_avatar_req_actions_single(self):
+        llm = MockLLM()
+        r = estimate_avatar(llm, CARD, human="req-actions", agent="agent-llm",
+                            calls="single")
+        # 분자 1회(내부 할일 포함) + 분모 1회 = 2회
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(r["human"]["method"], "req-actions")
+
+    def test_session_req_actions_single(self):
+        with tempfile.TemporaryDirectory() as d:
+            llm = MockLLM()
+            r = measure_session(llm, _session_file(d), human="req-actions",
+                                calls="single")
+        self.assertEqual(len(llm.calls), 1)  # 세션당 LLM 1회
+        self.assertEqual(r["human"]["method"], "req-actions")
+        self.assertGreater(r["speedup"], 0)
 
 
 class TestSessionCombos(unittest.TestCase):
