@@ -40,6 +40,20 @@ _IMG_EXT = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg", ".ico"}
 # 시간 지식이 아니라 구조 눈금이라 요율표가 아닌 코드 상수로 둔다.
 _DEEP_BLOCK_WORDS = 200
 
+# 조회형 읽기 일반화 (§27): 파일이 아닌 자료(지라 티켓·위키 페이지 등)를
+# MCP·스킬 도구로 읽어도 같은 등급 분해를 적용한다.
+# 실행형 도구는 읽기가 아님 — 출력이 커도 제외 (테스트 로그 등은 분모
+# hitl_review_model이 다룬다).
+_EXEC_TOOLS = {"Bash", "PowerShell", "Write", "Edit", "MultiEdit",
+               "NotebookEdit", "TodoWrite", "Task", "Agent", "Workflow",
+               "TaskOutput", "TaskStop", "KillShell", "SendMessage",
+               "AskUserQuestion", "ExitPlanMode", "EnterPlanMode", "Skill"}
+# 이름이 검색형(search/list/query/find)인 도구 = 검색 신호(④)로 취급, 읽기 아님
+_QUERY_SEARCH_RE = re.compile(r"(?:^|_|-)(search|list|query|find)(?:$|_|-)",
+                              re.IGNORECASE)
+# 결과 본문이 이 단어수 이상일 때만 "읽기"로 인정 — 상태 응답·ack 제외
+_QUERY_READ_MIN_WORDS = 50
+
 
 # user 레코드 안의 시스템 주입 텍스트 — 사람 타이핑이 아니므로 입력·턴 계산 제외
 # (자동 반복·긴 세션에서 사용자 입력의 90% 이상이 이런 블록으로 오염됨)
@@ -374,6 +388,8 @@ def collect_record_stats(jsonl_path, detail=False):
     counted_regions = set()  # 단어수 집계된 (fp, offset) — 재읽기 중복 제거
     region_texts = {}        # (fp, offset) → 그 구간의 읽은 본문 (구간 분해용)
     edit_texts = {}          # fp → 편집 원문+수정문 누적 (정독 핵심 위치 증거)
+    pending_query = {}       # tool_use id → (도구명, 인자, 호출 순번) — 조회형 후보
+    query_tokens = {}        # 조회 신원 → 인자 속 id성 토큰들 (신호② 언급 대조)
 
     def _end_turn():
         # 사용자 턴 경계: 신호④를 이 턴 안에서만 판정, 턴 마무리 답변 보관
@@ -431,6 +447,26 @@ def collect_record_stats(jsonl_path, detail=False):
                         text = " ".join(parts)
                         reviewed += len(text.split())
                         pr = pending_read.pop(b.get("tool_use_id"), None)
+                        pq = (None if pr else
+                              pending_query.pop(b.get("tool_use_id"), None))
+                        if pq and len(text.split()) >= _QUERY_READ_MIN_WORDS:
+                            # 조회형 읽기 확정: 신원 = 도구명 + 정규화 인자.
+                            # 같은 인자 재호출 = 재방문(③)·중복 제거, 이후
+                            # 등급·블록 분해는 파일과 동일 경로.
+                            qname, qinp, qi = pq
+                            canon = json.dumps(qinp, sort_keys=True,
+                                               ensure_ascii=False)[:120]
+                            qfp = f"{qname}:{canon}"
+                            pr = (qfp, (qfp, None))
+                            read_files.add(qfp)
+                            read_regions[(qfp, None)] = (
+                                read_regions.get((qfp, None), 0) + 1)
+                            turn_reads.append((qfp, qi, (qfp, None)))
+                            # 인자 속 id성 토큰(티켓 키·문서명) — 신호② 대조용
+                            query_tokens[qfp] = {
+                                str(v) for v in qinp.values()
+                                if isinstance(v, (str, int))
+                                and 4 <= len(str(v)) <= 60}
                         if pr:
                             fp, region = pr
                             # 파일별 실측 단어수 — 같은 구간 재읽기는 1회만
@@ -459,6 +495,15 @@ def collect_record_stats(jsonl_path, detail=False):
                     inp = b.get("input") or {}
                     fp = inp.get("file_path")
                     if not fp:
+                        # 조회형 도구 읽기 일반화 (§27): 지라 티켓·위키 등
+                        if (name in _EXEC_TOOLS or name in _SEARCH_TOOLS
+                                or not isinstance(inp, dict)):
+                            continue
+                        if _QUERY_SEARCH_RE.search(name or ""):
+                            turn_search_i = tool_i  # 검색형 조회 = 탐색 신호
+                            continue
+                        if b.get("id"):  # 읽기 여부는 결과 본문 크기로 확정
+                            pending_query[b["id"]] = (name, inp, tool_i)
                         continue
                     if name in ("Read", "NotebookRead"):
                         if _is_internal_artifact(fp):
@@ -520,11 +565,18 @@ def collect_record_stats(jsonl_path, detail=False):
         return any(" ".join(cw[i:i + 6]) in ans_shingles
                    for i in range(len(cw) - 5))
 
+    def _mentioned(f):
+        # ② 이름 언급 (마무리 답변만 — 진행 나레이션 제외).
+        # 파일 = 파일명, 조회형 = 인자 속 id성 토큰(티켓 키·문서명·URL)
+        if f in query_tokens:
+            return any(t in ans_text for t in query_tokens[f])
+        return Path(f).name in ans_text
+
     revisited = {fp for (fp, _off), n in read_regions.items() if n >= 2}
     contributed = {
         f for f in read_files
         if f in edited_files                                   # ① 편집
-        or Path(f).name in ans_text                            # ② 이름 언급(마무리 답변만 — 진행 나레이션 제외)
+        or _mentioned(f)                                       # ② 이름 언급
         or f in revisited                                      # ③ 같은 구간 재방문
         or f in signal4                                        # ④ 탐색 착지(턴 단위)
         or _overlaps(f)                                        # ⑤ 내용 겹침(턴별 답변)

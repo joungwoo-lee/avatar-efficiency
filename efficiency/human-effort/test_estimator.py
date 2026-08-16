@@ -724,6 +724,52 @@ class TestRequirementActions(unittest.TestCase):
         finally:
             os.unlink(p)
 
+    def test_query_read_generalization(self):
+        # §27: 파일이 아닌 조회형 읽기(지라 티켓 등 MCP 도구)도 같은 등급 분해.
+        # 검색형 도구 = 탐색 신호, 착지 티켓 = 기여, 이후 티켓 = 헛읽기,
+        # 실행형(Bash) 대량 출력 = 읽기 아님, 짧은 ack 결과 = 읽기 아님.
+        import tempfile, os, json as _json
+        from requirement_actions import collect_record_stats
+        lines = [
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "s1", "name": "mcp__jira__search_issues",
+                 "input": {"jql": "project=PROJ"}},
+                {"type": "tool_use", "id": "t1", "name": "mcp__jira__get_issue",
+                 "input": {"issue": "PROJ-123"}},
+                {"type": "tool_use", "id": "t2", "name": "mcp__jira__get_issue",
+                 "input": {"issue": "PROJ-999"}},
+                {"type": "tool_use", "id": "b1", "name": "Bash",
+                 "input": {"command": "pytest"}},
+                {"type": "tool_use", "id": "t3", "name": "mcp__jira__get_status",
+                 "input": {"issue": "PROJ-777"}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "s1", "content": "목록 " * 60},
+                {"type": "tool_result", "tool_use_id": "t1", "content": "본문 " * 300},
+                {"type": "tool_result", "tool_use_id": "t2", "content": "딴것 " * 100},
+                {"type": "tool_result", "tool_use_id": "b1", "content": "로그 " * 500},
+                {"type": "tool_result", "tool_use_id": "t3", "content": "ok"}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "PROJ-123 티켓 내용 정리했다"}]}},
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(_json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            rs = collect_record_stats(p, detail=True)
+            # PROJ-123 = 착지(검색 직후 첫 조회) + 답변에 키 언급 → 기여
+            # PROJ-999 = 기여 확보 후에만 읽힘 → 헛읽기
+            # Bash 500단어 로그 = 실행형 제외 / get_status "ok" = 50단어 미만 제외
+            self.assertEqual(rs["contributed_docs"], 1)
+            self.assertEqual(rs["waste_docs"], 1)
+            self.assertEqual(rs["waste_words"], 100)
+            # 기여 티켓도 인용 증거 없는 블록은 훑기 (본문 300 전부)
+            self.assertEqual(rs["deep_words"], 0)
+            self.assertEqual(rs["skim_words"], 300)
+            self.assertTrue(any("PROJ-123" in f for f in rs["files"]["deep"]))
+        finally:
+            os.unlink(p)
+
     def test_navigation_structure_decomposition(self):
         # 등급 분류는 되지만 읽기 결과 본문이 기록에 없는 세션(실측 단어 0):
         # 건당 고정치 폴백은 폐지(§24) — 구조 닻 없이 실측 총량 상한만 적용
