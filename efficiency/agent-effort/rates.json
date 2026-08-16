@@ -134,5 +134,33 @@
     "word_cap": 60,
     "sample_count": 1456,
     "source_type": "internal_measured"
+  },
+  "human_reading_model": {
+    "_comment": "사람의 선별적 읽기 모델(할일 기반 읽기 수요 도출용 seed). 사람은 자료 1건에서 필요한 부분만 찾아 읽는다(정보 탐색 행태 연구) — AI처럼 전체를 읽지 않음. words_per_item = 자료 1건당 사람이 실제 정독하는 분량(탐색·훑기 포함 등가), words_per_page = 페이지 단위 요구 시. expert seed, 실측 보정 대상.",
+    "words_per_item": 300,
+    "words_per_page": 250,
+    "item_units": [
+      "건",
+      "개",
+      "출처",
+      "source",
+      "sources",
+      "문서",
+      "document",
+      "documents",
+      "항목",
+      "item",
+      "items",
+      "파일",
+      "file",
+      "케이스",
+      "case"
+    ],
+    "page_units": [
+      "페이지",
+      "page",
+      "pages",
+      "장"
+    ]
   }
 }

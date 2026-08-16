@@ -97,7 +97,7 @@ human용 primitive 카탈로그 (이름(수량단위)):
 --- 끝 ---"""
 
 
-def derive_anchors(requirements, record_stats=None):
+def derive_anchors(requirements, record_stats=None, rates=None):
     """닻 숫자 도출 (전부 결정론적).
 
     반환: {out_words?, read_words?, verify_n?} — 존재하는 닻만.
@@ -107,15 +107,31 @@ def derive_anchors(requirements, record_stats=None):
     anchors = {}
     out_words = 0
     verify_n = 0
+    task_items = 0.0
+    task_pages = 0.0
+    rm = (rates or {}).get("human_reading_model") or {}
+    item_units = set(rm.get("item_units", []))
+    page_units = set(rm.get("page_units", []))
     for q in requirements.get("requirements", []):
         for x in q.get("requested_quantities") or []:
             if not isinstance(x, dict):
                 continue
             unit = str(x.get("unit", "")).strip().lower()
             val = x.get("value")
-            if isinstance(val, (int, float)) and unit in ("단어", "word", "words"):
+            if not isinstance(val, (int, float)):
+                continue
+            if unit in ("단어", "word", "words"):
                 out_words += val
+            elif unit in item_units:
+                task_items += val
+            elif unit in page_units:
+                task_pages += val
         verify_n += len(q.get("acceptance_criteria") or [])
+    # 할일 기반 읽기 수요: 사람은 자료 1건당 필요한 부분만 읽는다 (선별적 읽기)
+    task_read = (task_items * rm.get("words_per_item", 0)
+                 + task_pages * rm.get("words_per_page", 0))
+    if task_read:
+        anchors["task_read_words"] = round(task_read)
     rs = record_stats or {}
     if out_words:
         anchors["out_words"] = out_words          # 요구사항 명시 분량 → 목표
@@ -157,8 +173,14 @@ def apply_anchors(items, anchors, notes):
         mode = "상한 절단" if cap_only else "목표 대체"
         notes.append(f"닻 적용: {label} 총량 {total:.0f}→{target:.0f} ({mode})")
 
-    rescale(_WORD_READ, anchors.get("read_words"), "읽기 단어수(실측)",
-            cap_only=True)
+    task_read = anchors.get("task_read_words")
+    measured_read = anchors.get("read_words")
+    if task_read:
+        # 할일 수량 × 사람 건당 정독량 = 목표. 단 실측(존재하는 자료량)을 넘지 않음
+        target = min(task_read, measured_read) if measured_read else task_read
+        rescale(_WORD_READ, target, "읽기 단어수(할일 기반: 건수×선별 정독량)")
+    else:
+        rescale(_WORD_READ, measured_read, "읽기 단어수(실측)", cap_only=True)
     rescale(_WORD_WRITE, anchors.get("out_words"),
             "작성 단어수(명시)" if anchors.get("out_words_kind") == "explicit"
             else "작성 단어수(실측)",
@@ -222,7 +244,7 @@ def estimate_actions_from_requirements(llm, requirements, record_stats=None,
         if not items:
             raise ValueError("행동 분해 2회 실패: " + "; ".join(notes))
 
-    anchors = derive_anchors(requirements, record_stats)
+    anchors = derive_anchors(requirements, record_stats, rates=r)
     items = apply_anchors(items, anchors, notes)
 
     card = r["human"]
@@ -379,7 +401,7 @@ def estimate_actions_single(llm, session_text, record_stats=None,
              if isinstance(q, dict)],
          "acceptance_criteria": t.get("acceptance_criteria") or []}
         for t in todos if isinstance(t, dict)]}
-    anchors = derive_anchors(req_view, record_stats)
+    anchors = derive_anchors(req_view, record_stats, rates=r)
     items = apply_anchors(items, anchors, notes)
 
     card = r["human"]

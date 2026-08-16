@@ -625,6 +625,32 @@ class TestRequirementActions(unittest.TestCase):
         bd2 = {b["primitive"]: b for b in r2["breakdown"]}
         self.assertEqual(bd2["read"]["count"], 9000)  # 상한 초과 → 절단
 
+    def test_task_derived_reading(self):
+        # 할일 수량("출처 10건") × 건당 선별 정독량(300단어) = 사람 읽기 목표
+        from requirement_actions import estimate_actions_from_requirements
+        req = {"requirements": [{
+            "title": "가격 변동 검증",
+            "requested_quantities": [
+                {"name": "출처", "value": 10, "unit": "출처"}],
+            "acceptance_criteria": ["검증 완료"]}]}
+        out = {"human": [{"primitive": "read", "count": 80000},
+                         {"primitive": "verify", "count": 1}]}
+        r = estimate_actions_from_requirements(
+            self._Mock([out]), req,
+            record_stats={"reviewed_words": 50000, "input_words": 0,
+                          "artifact_words": 0})
+        bd = {b["primitive"]: b for b in r["breakdown"]}
+        # AI는 5만 단어를 읽었지만 사람 목표 = 10건×300 = 3,000단어
+        self.assertEqual(bd["read"]["count"], 3000)
+        self.assertEqual(r["anchors"]["task_read_words"], 3000)
+        # 실측이 task보다 작으면 실측이 상한 (존재하는 자료보다 많이 읽을 수 없음)
+        r2 = estimate_actions_from_requirements(
+            self._Mock([{"human": [{"primitive": "read", "count": 500}]}]), req,
+            record_stats={"reviewed_words": 1000, "input_words": 0,
+                          "artifact_words": 0})
+        bd2 = {b["primitive"]: b for b in r2["breakdown"]}
+        self.assertEqual(bd2["read"]["count"], 1000)
+
     def test_no_rate_leak(self):
         from requirement_actions import build_prompt, build_prompt_single
         from agent_effort import load_rates
