@@ -10,7 +10,9 @@ speedup = human_min(분자) ÷ agent_min(분모)
       → 사람 w/o 생성형AI 견적  (../human-effort, LLM 2회)
 분모: 트랜스크립트에 기록된 동작 단서 × 요율  (../agent-effort/transcript_actual,
       LLM 미사용 — tool 호출·생성/읽기 단어(기계) + 지시·검토·중단(hitl))
-      병렬 서브에이전트는 실제 소모 시간이 아니므로 미가산 (자원량 참고 옵션만)
+      병렬 서브에이전트는 실제 소모 시간이 아니므로 미가산 (자원량 참고 옵션만).
+      긴 세션의 압축 요약·시스템 주입 텍스트도 사람 지시가 아니므로 제외
+      (CHANGELOG §17)
 ```
 
 사전(아바타 정의 시점) 측정은 [`../counterfactual-api`](../counterfactual-api) —
