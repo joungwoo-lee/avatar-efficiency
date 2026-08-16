@@ -159,7 +159,7 @@ def ai_io_minutes(ai_io, rates):
     return {"input_words": inp, "output_words": out, "minutes": minutes}
 
 
-def estimate_agent_min(llm, spec_text, rates=None, max_tokens=2000):
+def estimate_agent_min(llm, spec_text, rates=None, max_tokens=8000):
     """업무 설명 → 분모(agent_min). LLM 1회 호출(+검증 실패 시 1회 재시도).
 
     반환: {agent_min, agent_ai_min, agent_human_min,

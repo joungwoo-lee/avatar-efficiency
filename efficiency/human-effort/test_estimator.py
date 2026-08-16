@@ -525,26 +525,26 @@ class TestPrimitiveEffort(unittest.TestCase):
             return self.queue.pop(0)
 
     def test_hand_check(self):
-        # read 800×0.005=4 + draft 200×0.05=10 + verify 1×3=17
+        # read 800×0.001=0.8 + draft 200×0.05=10 + verify 1×3=13.8
         from primitive_effort import estimate_human_min
         out = {"human": [{"primitive": "read", "count": 800},
                          {"primitive": "draft", "count": 200},
                          {"primitive": "verify", "count": 1}],
                "rationale": "t"}
         r = estimate_human_min(self._Mock([out]), "spec")
-        self.assertAlmostEqual(r["human_min"], 17.0, places=2)
+        self.assertAlmostEqual(r["human_min"], 13.8, places=2)
 
     def test_no_rate_leak_and_retry(self):
         from primitive_effort import estimate_human_min, build_prompt
         from agent_effort import load_rates
         prompt = build_prompt("spec", load_rates())
         self.assertNotIn("min_per_unit", prompt)
-        self.assertNotIn("0.005", prompt)
+        self.assertNotIn("0.001", prompt)
         llm = self._Mock([{"garbage": 1},
                           {"human": [{"primitive": "read", "count": 100}]}])
         r = estimate_human_min(llm, "spec")
         self.assertEqual(len(llm.calls), 2)
-        self.assertAlmostEqual(r["human_min"], 0.5, places=2)
+        self.assertAlmostEqual(r["human_min"], 0.1, places=2)
 
     def test_bad_items_dropped(self):
         from primitive_effort import validate_llm_output
@@ -558,22 +558,23 @@ class TestPrimitiveEffort(unittest.TestCase):
 
     def test_record_stats_anchor(self):
         # 구방식도 record_stats를 주면 신방식과 같은 닻이 적용된다:
-        # 구조적 읽기 = 기여 2×300 + 훑기 1×60 + 입력 40 = 700 (LLM 9999 대체)
-        # 작성 = 실측 500 상한 (LLM 800 절단)
+        # 구조적 읽기 = 기여 실측 600 + 훑기 실측 400×0.1 + 입력 40 = 680
+        # (LLM 9999 대체) / 작성 = 실측 500 상한 (LLM 800 절단)
         from primitive_effort import estimate_human_min
         out = {"human": [{"primitive": "read", "count": 9999},
                          {"primitive": "draft", "count": 800}],
                "rationale": "t"}
         stats = {"contributed_docs": 2, "scanned_docs": 1, "waste_docs": 3,
+                 "deep_words": 600, "skim_words": 400, "waste_words": 900,
                  "input_words": 40, "reviewed_words": 20000,
                  "artifact_words": 500}
         r = estimate_human_min(self._Mock([out]), "spec", record_stats=stats)
         counts = {b["primitive"]: b["count"] for b in r["breakdown"]}
-        self.assertEqual(counts["read"], 700)
+        self.assertEqual(counts["read"], 680)
         self.assertEqual(counts["draft"], 500)
-        self.assertEqual(r["anchors"]["structured_read_words"], 700)
-        # read 700×0.005=3.5 + draft 500×0.05=25 = 28.5
-        self.assertAlmostEqual(r["human_min"], 28.5, places=2)
+        self.assertEqual(r["anchors"]["structured_read_words"], 680)
+        # read 680×0.001=0.68 + draft 500×0.05=25 = 25.68
+        self.assertAlmostEqual(r["human_min"], 25.68, places=2)
 
 
 class TestRequirementActions(unittest.TestCase):
@@ -611,8 +612,8 @@ class TestRequirementActions(unittest.TestCase):
         # verify: 완료조건 3개로 대체 (LLM 10 무시)
         self.assertEqual(bd["verify"]["count"], 3)
         self.assertTrue(any("닻 적용" in n for n in r["notes"]))
-        # 총액 수기검산: read 3000×0.005=15 + (draft1000×0.05+edit1000×0.02)=70 + verify 3×3=9
-        self.assertAlmostEqual(r["human_min"], 94.0, places=1)
+        # 총액 수기검산: read 3000×0.001=3 + (draft1000×0.05+edit1000×0.02)=70 + verify 3×3=9
+        self.assertAlmostEqual(r["human_min"], 82.0, places=1)
 
     def test_verify_added_when_missing(self):
         from requirement_actions import estimate_actions_from_requirements
@@ -721,8 +722,8 @@ class TestRequirementActions(unittest.TestCase):
             os.unlink(p)
 
     def test_navigation_structure_decomposition(self):
-        # AI 전수 탐색 읽기량 → 사람 항해 구조 변환 — 읽기 본문이 기록에 없는
-        # 세션의 **폴백 경로** (건수 × 등가 요율)
+        # 등급 분류는 되지만 읽기 결과 본문이 기록에 없는 세션(실측 단어 0):
+        # 건당 고정치 폴백은 폐지(§24) — 구조 닻 없이 실측 총량 상한만 적용
         import tempfile, os, json as _json
         from requirement_actions import (collect_record_stats,
                                          estimate_actions_from_requirements)
@@ -749,16 +750,17 @@ class TestRequirementActions(unittest.TestCase):
             self.assertEqual(rs["contributed_docs"], 2)
             self.assertEqual(rs["scanned_docs"], 0)
             self.assertEqual(rs["waste_docs"], 1)
-            # 읽기 닻: AI가 5000단어 읽었어도 사람 = 2×300 + 0×60 + 헛읽기 0
+            self.assertEqual(rs["deep_words"], 0)   # 결과 본문 미기록 → 실측 0
             req = {"requirements": [{"title": "수정", "requested_quantities": [],
                                      "acceptance_criteria": []}]}
-            out = {"human": [{"primitive": "read", "count": 5000},
+            out = {"human": [{"primitive": "read", "count": 9999},
                              {"primitive": "edit", "count": 50}]}
             r = estimate_actions_from_requirements(self._Mock([out]), req,
                                                    record_stats=rs)
             bd = {b["primitive"]: b for b in r["breakdown"]}
-            self.assertEqual(bd["read"]["count"], 600)
-            self.assertEqual(r["anchors"]["structured_read_words"], 600)
+            # 구조 닻 없음(지어내지 않음) — 실측 총량(5000)이 상한으로만 작동
+            self.assertNotIn("structured_read_words", r["anchors"])
+            self.assertEqual(bd["read"]["count"], 5000)
         finally:
             os.unlink(p)
 

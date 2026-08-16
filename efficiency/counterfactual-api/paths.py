@@ -140,7 +140,7 @@ def _rescale(items, group, target, notes, label):
     notes.append(f"닻 적용: {label} {total:.0f}→{target:.0f} (명시 수량)")
 
 
-def estimate_paths(llm, spec_text, rates=None, max_tokens=2000):
+def estimate_paths(llm, spec_text, rates=None, max_tokens=8000):
     """아바타 카드 → LLM 1회 → 분자·분모 동시 산출 (integ-spec §3).
 
     반환: {human_min, human_breakdown,

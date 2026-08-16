@@ -170,21 +170,15 @@ def derive_anchors(requirements, record_stats=None, rates=None):
     skim_w = rs.get("skim_words", 0)
     if deep_w or skim_w:
         read_rate = ((rates or {}).get("human", {}).get("read", {})
-                     .get("min_per_unit", 0.005))
-        skim_rate = rm.get("skim_min_per_word", 0.0005)
+                     .get("min_per_unit", 0.001))
+        skim_rate = rm.get("skim_min_per_word", 0.0001)
         factor = (skim_rate / read_rate) if read_rate else 0.0
         structured = deep_w + skim_w * factor + rs.get("input_words", 0)
         if structured:
             anchors["structured_read_words"] = round(structured)
-    elif (rs.get("contributed_docs") or rs.get("scanned_docs")):
-        # 폴백: 읽기 결과 본문이 기록에 없어 실측 단어수가 0인 경우만 —
-        # 건수 × 등가 요율(words_per_item)로 근사 (구방식 잔존 경로)
-        structured = (rs.get("contributed_docs", 0) * rm.get("words_per_item", 0)
-                      + rs.get("scanned_docs", 0)
-                      * rm.get("skim_words_per_doc", 60)
-                      + rs.get("input_words", 0))
-        if structured:
-            anchors["structured_read_words"] = round(structured)
+    # 실측 단어가 없으면(읽기 결과 본문 미기록) 구조 닻은 만들지 않는다 —
+    # 잴 수 없는 입력에 건당 고정치를 곱해 숫자를 지어내지 않음. 할일 명시
+    # 건수 닻(task_read) 또는 실측 총량 상한으로 떨어진다.
     if out_words:
         anchors["out_words"] = out_words          # 요구사항 명시 분량 → 목표
         anchors["out_words_kind"] = "explicit"
@@ -283,7 +277,7 @@ def _validate(items, card, notes):
 
 
 def estimate_actions_from_requirements(llm, requirements, record_stats=None,
-                                       rates=None, max_tokens=2000):
+                                       rates=None, max_tokens=8000):
     """요구사항 → 사람 행동 목록(LLM 1회) → 닻 적용 → × human 요율.
 
     반환: {human_min, breakdown, anchors, rationale, notes}
@@ -596,7 +590,7 @@ human용 primitive 카탈로그 (이름(수량단위)):
 
 
 def estimate_actions_single(llm, session_text, record_stats=None,
-                            rates=None, max_tokens=3000):
+                            rates=None, max_tokens=8000):
     """단일호출 모드: 기록 요약 → (내부 할일 정리 + 행동 분해) 1회 → 닻 → × 요율.
 
     반환: 2단계 방식과 동일 구조 + "todos" (내부 정리된 할일 목록).

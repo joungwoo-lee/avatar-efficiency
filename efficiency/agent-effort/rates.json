@@ -7,7 +7,8 @@
     },
     "read": {
       "unit": "word_count",
-      "min_per_unit": 0.005
+      "min_per_unit": 0.001,
+      "_comment": "2026-08-17 0.005→0.001 (1/5) — 실무 통독은 정밀 정독이 아니라는 사용자 보정"
     },
     "classify": {
       "unit": "item_count",
@@ -149,8 +150,8 @@
     "source_type": "expert_seed"
   },
   "human_reading_model": {
-    "_comment": "사람의 선별적 읽기 모델. 근거: 사람은 전수 탐색이 아니라 전략적 항해(후보는 훑고, 결과에 기여하는 자료만 정독) — 'Strategic Navigation or Stochastic Search?' 계열 연구의 agent/human 읽기 행태 차이. 읽기 닻은 기록 **실측 단어수의 등급별 환산**: 기여 파일 실측 단어 × 정독요율(human.read) + 훑은 후보 실측 단어 × skim_min_per_word(탐색, 정독의 1/10) + 헛읽기 × 0. 같은 구간 재읽기는 1회로 중복 제거. words_per_item(300)·skim_words_per_doc(60)은 실측 단어가 없을 때(읽기 본문 미기록·할일 명시 건수)의 건당 등가 폴백. words_per_page=페이지 명시 요구용. 전부 seed — 실측 보정 대상.",
-    "skim_min_per_word": 0.0005,
+    "_comment": "사람의 선별적 읽기 모델. 근거: 사람은 전수 탐색이 아니라 전략적 항해(후보는 훑고, 결과에 기여하는 자료만 정독) — 'Strategic Navigation or Stochastic Search?' 계열 연구의 agent/human 읽기 행태 차이. 읽기 닻은 기록 **실측 단어수의 등급별 환산**: 기여 파일 실측 단어 × 정독요율(human.read 0.001) + 훑은 후보 실측 단어 × skim_min_per_word(탐색, 정독의 1/10) + 헛읽기 × 0. 같은 구간 재읽기는 1회로 중복 제거. 실측 단어가 없으면 구조 닻 없음(건당 고정치 폴백 폐지, §24). words_per_item(300)은 할일 명시 건수 닻('출처 10건')용, words_per_page는 페이지 명시 요구용. 전부 seed — 실측 보정 대상.",
+    "skim_min_per_word": 0.0001,
     "words_per_item": 300,
     "words_per_page": 250,
     "item_units": [
@@ -175,7 +176,6 @@
       "page",
       "pages",
       "장"
-    ],
-    "skim_words_per_doc": 60
+    ]
   }
 }

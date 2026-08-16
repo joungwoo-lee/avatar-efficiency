@@ -54,8 +54,8 @@ class TestCompat(unittest.TestCase):
         for k in SPEC_KEYS:
             self.assertIn(k, r)
         self.assertIsNone(r["error"])
-        # 수기검산: human = 800×0.005 + 200×0.05 + 1×3 = 17분 (integ-spec §3 예시)
-        self.assertAlmostEqual(r["human_min"], 17.0, places=2)
+        # 수기검산: human = 800×0.001 + 200×0.05 + 1×3 = 13.8분
+        self.assertAlmostEqual(r["human_min"], 13.8, places=2)
         self.assertAlmostEqual(r["agent_ai_min"], 1.69, places=2)
         self.assertAlmostEqual(r["agent_human_min"], 3.9, places=2)
         self.assertAlmostEqual(

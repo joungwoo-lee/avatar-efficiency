@@ -135,7 +135,7 @@ def validate_llm_output(raw, rates):
     return {"human": human, "rationale": raw.get("rationale", "")}, notes, False
 
 
-def estimate_human_min(llm, spec_text, rates=None, max_tokens=2000,
+def estimate_human_min(llm, spec_text, rates=None, max_tokens=8000,
                        requirements=None, record_stats=None):
     """업무 설명 → 구버전 human_min. LLM 1회 호출(+검증 실패 시 1회 재시도).
 

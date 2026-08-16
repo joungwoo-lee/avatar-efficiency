@@ -14,7 +14,7 @@ class OnpremLLM:  # 또는 동등 인터페이스
 
 ```python
 class CounterfactualEstimator:
-    def __init__(self, llm=None, rates_path=DEFAULT_RATES_PATH, max_tokens=2000): ...
+    def __init__(self, llm=None, rates_path=DEFAULT_RATES_PATH, max_tokens=8000): ...
 
     def estimate_task(self, title: str, context: str, role: str,
                       skill_names: list[str], detail: str) -> dict:

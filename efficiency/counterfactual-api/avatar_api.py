@@ -38,7 +38,7 @@ from requirement_actions import (estimate_actions_from_requirements,  # noqa: E4
                                  estimate_actions_single)
 
 
-def _extract_avatar_todos(llm, card_text, max_tokens=6000):
+def _extract_avatar_todos(llm, card_text, max_tokens=8000):
     raw = llm.complete_json(build_prompt_a_avatar(card_text), max_tokens)
     req, notes, fatal = validate_requirements_output(raw)
     if fatal:

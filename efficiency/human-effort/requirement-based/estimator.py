@@ -242,7 +242,7 @@ def _resolve_unit_conflicts(items, work_units, notes):
 class HumanEffortEstimator:
     """llm: complete_json(prompt, max_tokens) -> dict 를 가진 객체 (OnpremLLM 계약)."""
 
-    def __init__(self, llm, catalog_path=DEFAULT_CATALOG_PATH, max_tokens=6000,
+    def __init__(self, llm, catalog_path=DEFAULT_CATALOG_PATH, max_tokens=8000,
                  trials=_engine.DEFAULT_TRIALS, seed=_engine.DEFAULT_SEED,
                  mode="two_pass", reference_worker=None, scope=None, critic=None):
         if mode not in ("two_pass", "single"):

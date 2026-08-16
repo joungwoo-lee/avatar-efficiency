@@ -2,7 +2,7 @@
 """구 시스템(mm_app counterfactual.py) drop-in 어댑터 — integ-spec.md 계약 전용.
 
 계약 (integ-spec.md §2, §3, §6):
-    CounterfactualEstimator(llm=None, rates_path=DEFAULT_RATES_PATH, max_tokens=2000)
+    CounterfactualEstimator(llm=None, rates_path=DEFAULT_RATES_PATH, max_tokens=8000)
     .estimate_task(title, context, role, skill_names, detail) -> dict
     - 예외 raise 금지 — 실패 시 error 필드에 문자열, 수치는 전부 None
     - 출력 키 전부 존재, agent_min 계열 반드시 수치 (§6.4)
@@ -46,7 +46,7 @@ _ERROR_RESULT = {
 class CounterfactualEstimator:
     """실환경에서는 llm에 실물 OnpremLLM 인스턴스를 명시 주입할 것. 미지정 시 시뮬레이터."""
 
-    def __init__(self, llm=None, rates_path=DEFAULT_RATES_PATH, max_tokens=2000):
+    def __init__(self, llm=None, rates_path=DEFAULT_RATES_PATH, max_tokens=8000):
         if llm is None:
             try:
                 from onprem_llm_sim import OnpremLLM

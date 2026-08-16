@@ -60,7 +60,8 @@ class TestAvatarCombos(unittest.TestCase):
         self.assertEqual(r["human"]["method"], "req-actions")   # 방법론은 기존 것
         self.assertEqual(r["agent"]["method"], "agent-llm")
         self.assertTrue(r["human"]["merged_call"])
-        self.assertAlmostEqual(r["human"]["min"], 17.0, places=1)
+        # read 800×0.001 + draft 200×0.05 + verify 3 = 13.8
+        self.assertAlmostEqual(r["human"]["min"], 13.8, places=1)
         self.assertIsNotNone(r["speedup"])
 
     def test_workunit_combo(self):
