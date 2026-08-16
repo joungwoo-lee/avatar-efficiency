@@ -15,11 +15,14 @@ AI 몫(실제 소모 시간)을 따로 세서 더한다. 어느 한쪽만 세면
 
 ```
 efficiency/
-├─ human-effort/        [부품·분자] human w/o AI — 방식 2개:
-│                       ① 요구사항 기반(기본): Work Unit Catalog × Monte Carlo → P50/P80,
-│                         입력 1단계 케이스별(아바타 정의 A-avatar / 트랜스크립트 복원 §23)
-│                       ② 구버전 Phase1(primitive_effort.py): LLM 1회 human 행동
-│                         count 분해 × human 요율 점값 곱셈 — 교차확인용
+├─ human-effort/        [부품·분자] human w/o AI — 방식 3개, 폴더로 분리:
+│   ├─ requirement-based/    요구사항·산출물 방식 (기준 자) — 할일 추출 →
+│   │                        산출물 단위(명사) × 카탈로그 분포 → Monte Carlo
+│   ├─ requirement-actions/  요구사항·행동 방식 (신방식) — 할일 추출 →
+│   │                        사람 행동(동사) × 요율, 숫자는 닻으로 코드 확정
+│   ├─ record-actions/       세션기록·행동 방식 (교차확인) — 기록에서 바로
+│   │                        사람 행동 시뮬 × 요율 (+하이브리드 옵션)
+│   └─ shared/               공용: 할일 추출기(§23)·정규화·LLM 시뮬
 ├─ agent-effort/        [부품·분모] agent_min
 │                       agent_effort.py = 사전 추산 (LLM이 예상 경로 count 분해 × 요율)
 │                       transcript_actual.py = 사후 실측 (기록된 동작 집계, LLM 미사용)
@@ -58,8 +61,10 @@ LLM 백엔드: cursor-proxy(127.0.0.1:18741), 계약 `complete_json(prompt, max_
 ## 테스트
 
 ```bash
-cd human-effort && python test_estimator.py          # 33종 (+ --live)
-cd agent-effort && python test_agent_effort.py       # 6종
-cd counterfactual-api && python test_compat.py       # 4종
-cd session-api && python test_session_api.py         # 4종
+cd human-effort && python test_estimator.py          # 분자 3방식 통합 (+ --live)
+cd agent-effort && python test_agent_effort.py
+cd counterfactual-api && python test_compat.py
+cd session-api && python test_session_api.py
 ```
+
+개선 이력 총정리: [CHANGELOG.md](CHANGELOG.md)

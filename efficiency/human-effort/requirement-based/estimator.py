@@ -542,6 +542,7 @@ def main(argv):
     mode = "single" if "--single" in flags else "two_pass"
     work_order = Path(args[0]).read_text(encoding="utf-8")
 
+    sys.path.insert(0, str(_HERE.parent / "shared"))
     from onprem_llm_sim import OnpremLLM
     est = HumanEffortEstimator(OnpremLLM(), mode=mode, seed=seed, trials=trials)
     result = est.estimate(work_order)

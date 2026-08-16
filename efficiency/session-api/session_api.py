@@ -21,7 +21,11 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 _ROOT = _HERE.parent
-for _p in (_ROOT / "human-effort", _ROOT / "agent-effort"):
+for _p in (_ROOT / "human-effort" / "requirement-based",
+           _ROOT / "human-effort" / "shared",
+           _ROOT / "human-effort" / "record-actions",
+           _ROOT / "human-effort" / "requirement-actions",
+           _ROOT / "agent-effort"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 

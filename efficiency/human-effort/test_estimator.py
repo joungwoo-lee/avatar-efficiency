@@ -10,8 +10,15 @@ import sys
 import unittest
 from pathlib import Path
 
-import engine
-from estimator import (HumanEffortEstimator, DEFAULT_CATALOG_PATH,
+_HERE = Path(__file__).resolve().parent
+for _d in ("requirement-based", "shared", "record-actions",
+           "requirement-actions"):
+    _p = str(_HERE / _d)
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+import engine  # noqa: E402
+from estimator import (HumanEffortEstimator, DEFAULT_CATALOG_PATH,  # noqa: E402
                        validate_effort_input, validate_requirements_output)
 
 with open(DEFAULT_CATALOG_PATH, encoding="utf-8") as f:

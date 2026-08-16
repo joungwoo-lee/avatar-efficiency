@@ -23,7 +23,9 @@ except ImportError:  # 레포 배치: 형제 폴더 참조
     import sys as _sys
     from pathlib import Path as _Path
     _root = _Path(__file__).resolve().parent.parent
-    for _p in (_root / "human-effort", _root / "agent-effort"):
+    for _p in (_root / "human-effort" / "requirement-based",
+               _root / "human-effort" / "shared",
+               _root / "agent-effort"):
         if str(_p) not in _sys.path:
             _sys.path.insert(0, str(_p))
     from estimator import HumanEffortEstimator, DEFAULT_CATALOG_PATH
@@ -60,7 +62,8 @@ class CounterfactualEstimator:
             except ImportError:
                 import sys as _s
                 from pathlib import Path as _P
-                _s.path.insert(0, str(_P(__file__).resolve().parent.parent / "human-effort"))
+                _s.path.insert(0, str(_P(__file__).resolve().parent.parent
+                                      / "human-effort" / "shared"))
                 from onprem_llm_sim import OnpremLLM
             llm = OnpremLLM()
         self.llm = llm

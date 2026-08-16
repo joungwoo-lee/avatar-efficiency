@@ -230,7 +230,7 @@ def main(argv):
         print("usage: python agent_effort.py <spec.txt> [--json]", file=sys.stderr)
         return 2
     spec_text = Path(args[0]).read_text(encoding="utf-8")
-    sys.path.insert(0, str(_HERE.parent / "human-effort"))
+    sys.path.insert(0, str(_HERE.parent / "human-effort" / "shared"))
     from onprem_llm_sim import OnpremLLM
     r = estimate_agent_min(OnpremLLM(), spec_text)
     if "--json" in argv:

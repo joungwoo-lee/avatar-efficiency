@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
-_AGENT_DIR = _HERE.parent / "agent-effort"
+_AGENT_DIR = _HERE.parent.parent / "agent-effort"
 if str(_AGENT_DIR) not in sys.path:
     sys.path.insert(0, str(_AGENT_DIR))
 
@@ -185,6 +185,7 @@ if __name__ == "__main__":
     if not args:
         print("usage: python primitive_effort.py <spec.txt> [--json]", file=sys.stderr)
         sys.exit(2)
+    sys.path.insert(0, str(_HERE.parent / "shared"))
     from onprem_llm_sim import OnpremLLM
     result = estimate_human_min(OnpremLLM(), Path(args[0]).read_text(encoding="utf-8"))
     if "--json" in sys.argv:

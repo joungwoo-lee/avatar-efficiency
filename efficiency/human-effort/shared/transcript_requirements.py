@@ -16,12 +16,13 @@
     req = extract_requirements(llm, transcript_text, artifact_context=None)
     result = HumanEffortEstimator(llm).estimate_from_requirements(req, transcript_text)
 """
-try:
-    from .estimator import validate_requirements_output
-    from .prompts import number_lines
-except ImportError:
-    from estimator import validate_requirements_output
-    from prompts import number_lines
+import sys as _sys
+from pathlib import Path as _Path
+_RB = _Path(__file__).resolve().parent.parent / "requirement-based"
+if str(_RB) not in _sys.path:
+    _sys.path.insert(0, str(_RB))
+from estimator import validate_requirements_output  # noqa: E402
+from prompts import number_lines  # noqa: E402
 
 TRANSCRIPT_PROMPT_VERSION = "requirement_extractor.v1"
 

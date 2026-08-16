@@ -8,6 +8,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 for _p in (_ROOT / "human-effort", _ROOT / "agent-effort", Path(__file__).parent):
     sys.path.insert(0, str(_p))
+# test_estimator가 자체 부트스트랩으로 하위 폴더 경로를 추가한다
 
 from test_estimator import REQ_OUT, EFFORT_OUT, SPEC  # noqa: E402 (human-effort)
 from compat import CounterfactualEstimator  # noqa: E402

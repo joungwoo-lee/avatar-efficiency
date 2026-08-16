@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
-_AGENT_DIR = _HERE.parent / "agent-effort"
+_AGENT_DIR = _HERE.parent.parent / "agent-effort"
 if str(_AGENT_DIR) not in sys.path:
     sys.path.insert(0, str(_AGENT_DIR))
 
