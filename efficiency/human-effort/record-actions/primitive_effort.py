@@ -27,6 +27,12 @@ if str(_AGENT_DIR) not in sys.path:
 
 from agent_effort import load_rates, DEFAULT_RATES_PATH  # noqa: E402 (요율표 공용)
 
+_REQ_DIR = _HERE.parent / "requirement-actions"
+if str(_REQ_DIR) not in sys.path:
+    sys.path.insert(0, str(_REQ_DIR))
+
+from requirement_actions import derive_anchors, apply_anchors  # noqa: E402 (닻 공용)
+
 _FEW_SHOT = """예시 입력:
   업무 제목: 메일 회신 초안 작성
   업무 상세: 첨부 보고서(약 800단어) 검토 후 부서장 승인 요청 회신(200단어 내외) 작성
@@ -129,14 +135,21 @@ def validate_llm_output(raw, rates):
 
 
 def estimate_human_min(llm, spec_text, rates=None, max_tokens=2000,
-                       requirements=None):
+                       requirements=None, record_stats=None):
     """업무 설명 → 구버전 human_min. LLM 1회 호출(+검증 실패 시 1회 재시도).
 
     requirements: 1단계 모듈이 추출한 requirements.v1 dict(선택). 주어지면
     '달성해야 할 요구사항'으로 스코프를 고정하고, 기록 신호(산출물·조사 자료·
     작업 구조)는 규모 단서로만 쓰는 하이브리드 모드가 된다.
 
-    반환: {human_min, breakdown[{primitive, count, unit, minutes}], rationale, notes}
+    record_stats: collect_record_stats 실측(선택). 주어지면 신방식과 동일한
+    닻(derive_anchors/apply_anchors)을 적용한다 — 구조적 읽기량(기여 정독 +
+    후보 훑기 + 헛읽기 0)이 LLM read 숫자를 대체, 산출물 실측이 draft/edit
+    상한. 할일 중간층 유무만 남기고 숫자 결정권을 코드로 통일해, 두 방식의
+    차이가 '중간층 가치'만 반영하도록 만든다.
+
+    반환: {human_min, breakdown[{primitive, count, unit, minutes}], rationale,
+           anchors, notes}
     """
     r = rates or load_rates()
     if requirements:
@@ -161,6 +174,12 @@ def estimate_human_min(llm, spec_text, rates=None, max_tokens=2000,
         if fatal:
             raise ValueError("human_min LLM 출력 검증 2회 실패: " + "; ".join(notes))
 
+    anchors = {}
+    if record_stats:
+        anchors = derive_anchors(requirements or {"requirements": []},
+                                 record_stats, r)
+        parsed["human"] = apply_anchors(parsed["human"], anchors, notes)
+
     card = r["human"]
     total = 0.0
     breakdown = []
@@ -174,6 +193,7 @@ def estimate_human_min(llm, spec_text, rates=None, max_tokens=2000,
         "human_min": round(total, 2),
         "breakdown": breakdown,
         "rationale": parsed["rationale"],
+        "anchors": anchors,
         "notes": notes,
     }
 

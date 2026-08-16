@@ -140,8 +140,9 @@ def measure_session(llm, jsonl_path, human="workunit", force=False,
     if human == "record-actions":
         norm = normalize_claude_code_jsonl(jsonl_path, max_chars=max_chars,
                                            include_tool_stats=False)
-        pr = estimate_human_min(llm, norm, rates=rates)
-        h = {"min": pr["human_min"], "p80_min": None, "method": "record-actions"}
+        pr = estimate_human_min(llm, norm, rates=rates, record_stats=stats)
+        h = {"min": pr["human_min"], "p80_min": None, "method": "record-actions",
+             "anchors": pr["anchors"]}
         notes += pr["notes"]
     else:
         norm = normalize_claude_code_jsonl(jsonl_path, max_chars=max_chars)

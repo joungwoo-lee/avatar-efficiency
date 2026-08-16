@@ -556,6 +556,25 @@ class TestPrimitiveEffort(unittest.TestCase):
         self.assertFalse(fatal)
         self.assertEqual(len(parsed["human"]), 1)
 
+    def test_record_stats_anchor(self):
+        # 구방식도 record_stats를 주면 신방식과 같은 닻이 적용된다:
+        # 구조적 읽기 = 기여 2×300 + 훑기 1×60 + 입력 40 = 700 (LLM 9999 대체)
+        # 작성 = 실측 500 상한 (LLM 800 절단)
+        from primitive_effort import estimate_human_min
+        out = {"human": [{"primitive": "read", "count": 9999},
+                         {"primitive": "draft", "count": 800}],
+               "rationale": "t"}
+        stats = {"contributed_docs": 2, "scanned_docs": 1, "waste_docs": 3,
+                 "input_words": 40, "reviewed_words": 20000,
+                 "artifact_words": 500}
+        r = estimate_human_min(self._Mock([out]), "spec", record_stats=stats)
+        counts = {b["primitive"]: b["count"] for b in r["breakdown"]}
+        self.assertEqual(counts["read"], 700)
+        self.assertEqual(counts["draft"], 500)
+        self.assertEqual(r["anchors"]["structured_read_words"], 700)
+        # read 700×0.005=3.5 + draft 500×0.05=25 = 28.5
+        self.assertAlmostEqual(r["human_min"], 28.5, places=2)
+
 
 class TestRequirementActions(unittest.TestCase):
     class _Mock:
