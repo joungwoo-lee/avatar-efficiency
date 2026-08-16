@@ -284,6 +284,9 @@
   - 최상위 `api.py`의 사후 경로는 session_api로 위임만 — 세션 측정 본체는
     session-api 한 곳. `human="workunit"`은 ValueError로 명시 거절.
 - 분모 실측(`measure_agent_actual`)·초소형 게이트는 session-api에 그대로.
+- 방식별 전용 API 분리: `req_actions_api.py`(기본)·`record_actions_api.py`
+  (교차확인 기준선) — 각각 `measure`/`measure_batch` + CLI. 공용 코어는
+  session_api.py 유지. 폴더 README에 두 API 사용법·반환 스키마 명시.
 
 ## 미해결 (알려진 한계·다음 단계)
 

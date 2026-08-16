@@ -1,0 +1,68 @@
+# -*- coding: utf-8 -*-
+"""record-actions 세션 측정 API — 할일 안 거치는 교차확인 기준선.
+
+방법론:
+    트랜스크립트 → (할일 정리 없이) 바로 사람 행동 목록 → 행동 × 요율
+    분모는 기록 실측(LLM 0회) — 공용 코어 session_api.measure_agent_actual.
+    닻은 신방식과 동일하게 적용 (항해 구조 읽기량·산출물 상한) — 두 방식의
+    차이가 "할일 중간층 유무"만 반영되도록 숫자 결정권은 코드로 통일.
+
+용도·한계 (CHANGELOG §20 대조 실험):
+    교차확인 기준선 전용. 읽기량은 닻으로 신방식과 수렴하지만,
+    쓰기 규모가 AI 산출 전량을 상속(대형 세션 4~5배 과대)하고
+    대화 왕복 형태를 사람 노동으로 오인한다. **단독 판정에 쓰지 말 것.**
+    기본 측정은 req_actions_api.py.
+
+사용:
+    from record_actions_api import measure
+    r = measure(llm, "session.jsonl")              # LLM 1회
+    r["speedup"], r["human"]["min"], r["human"]["anchors"]
+
+CLI:
+    python record_actions_api.py <session.jsonl> [...] [--json]
+"""
+import json
+import sys
+from pathlib import Path
+
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+
+from session_api import (measure_session, measure_sessions,  # noqa: E402
+                         format_report, JsonRetryLLM)
+
+
+def measure(llm, jsonl_path, **kw):
+    """세션 1개 → record-actions 분자 + 실측 분모 → speedup.
+
+    LLM 1회 (행동 분해만 — 할일 중간층 없음).
+    반환 구조는 session_api.measure_session과 동일.
+    """
+    return measure_session(llm, jsonl_path, human="record-actions", **kw)
+
+
+def measure_batch(llm, jsonl_paths, **kw):
+    """배치 측정. 실패 세션은 {"session", "error"}로 기록하고 계속."""
+    return measure_sessions(llm, jsonl_paths, human="record-actions", **kw)
+
+
+def main(argv):
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    paths = [a for a in argv if not a.startswith("--")]
+    if not paths:
+        print("usage: python record_actions_api.py <session.jsonl> [...] [--json]",
+              file=sys.stderr)
+        return 2
+    from onprem_llm_sim import OnpremLLM
+    rows = measure_batch(JsonRetryLLM(OnpremLLM()), paths)
+    if "--json" in argv:
+        print(json.dumps(rows, ensure_ascii=False, indent=1))
+    else:
+        print(format_report(rows))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

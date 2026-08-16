@@ -143,6 +143,26 @@ class TestSessionApi(unittest.TestCase):
             r2 = measure_session(llm, p, force=True) # 강제 측정은 가능
             self.assertNotIn("excluded", r2)
 
+    def test_req_actions_api_wrapper(self):
+        # 방식별 전용 API ①: req_actions_api.measure = req-actions 고정
+        from req_actions_api import measure
+        with tempfile.TemporaryDirectory() as d:
+            p = _make_jsonl(d)
+            llm = MockLLM()
+            r = measure(llm, p)
+        self.assertEqual(len(llm.calls), 1)
+        self.assertEqual(r["human"]["method"], "req-actions")
+
+    def test_record_actions_api_wrapper(self):
+        # 방식별 전용 API ②: record_actions_api.measure = record-actions 고정
+        from record_actions_api import measure
+        with tempfile.TemporaryDirectory() as d:
+            p = _make_jsonl(d)
+            llm = MockLLM()
+            r = measure(llm, p)
+        self.assertEqual(len(llm.calls), 1)
+        self.assertEqual(r["human"]["method"], "record-actions")
+
     def test_json_retry_wrapper(self):
         class Flaky:
             def __init__(self):

@@ -26,26 +26,68 @@ workunit 방식(요구사항→산출물 단위→Monte Carlo)의 사후 측정�
 사전(아바타 정의 시점) 측정은 [`../counterfactual-api`](../counterfactual-api) —
 같은 speedup 정의, 입력만 다름.
 
-## 사용
+## 파일 구성
+
+| 파일 | 역할 |
+|---|---|
+| `req_actions_api.py` | **기본 API** — 할일 거치는 방식 (requirement-actions) |
+| `record_actions_api.py` | **교차확인 API** — 할일 안 거치는 방식 (record-actions) |
+| `session_api.py` | 공용 코어 — 분모 실측·초소형 게이트·`measure_session(human=...)` |
+| `workunit_deprecated.py` | 폐기된 workunit 세션 측정 (참고 보관) |
+
+## 사용 — API ① req-actions (기본)
+
+할일 정리 → 사람 행동 → 요율. 규모 숫자는 코드 닻이 확정.
 
 ```bash
-python session_api.py session.jsonl [s2.jsonl ...]   # 세션별 + 합산 리포트
-python session_api.py session.jsonl --json
+python req_actions_api.py session.jsonl [s2.jsonl ...]   # 세션별 + 합산 리포트
+python req_actions_api.py session.jsonl --json
+python req_actions_api.py session.jsonl --staged   # 할일→행동 2회 (단계 감사)
+```
+
+```python
+from req_actions_api import measure, measure_batch
+r = measure(llm, "session.jsonl")        # LLM 1회 (할일+행동 병합)
+r = measure(llm, "session.jsonl", calls="staged")   # LLM 2회, 단계별 감사
+r["speedup"]                             # human_min / agent_total
+r["speedup_vs_hitl"]                     # 사람 감독시간만 분모로
+r["human"]["min"], r["human"]["breakdown"]
+r["human"]["todos"]                      # 내부 정리된 할일 목록
+r["human"]["anchors"]                    # 코드가 확정한 규모 닻 (감사용)
+```
+
+## 사용 — API ② record-actions (교차확인 기준선)
+
+할일 안 거치고 기록에서 바로 행동 분해. 같은 닻 적용.
+**단독 판정 금지** — 쓰기 규모가 AI 산출 전량을 상속(4~5배 과대)하는
+한계가 실측 확인됨 (CHANGELOG §20). req-actions 결과의 교차확인용.
+
+```bash
+python record_actions_api.py session.jsonl [s2.jsonl ...]
+python record_actions_api.py session.jsonl --json
+```
+
+```python
+from record_actions_api import measure, measure_batch
+r = measure(llm, "session.jsonl")        # LLM 1회
+r["human"]["min"], r["human"]["anchors"]
+```
+
+## 공용 (두 API 동일)
+
+```bash
 python session_api.py session.jsonl --actual-only    # 분모 실측만 (LLM 불필요)
-python session_api.py session.jsonl --human=record-actions   # 교차확인 기준선
-python session_api.py session.jsonl --staged         # 할일→행동 2회 (감사 가능)
 python test_session_api.py                           # 오프라인 테스트 (mock)
 ```
 
 ```python
-from session_api import measure_session, JsonRetryLLM
+from session_api import JsonRetryLLM
 llm = JsonRetryLLM(OnpremLLM())          # 프록시 불량 JSON 자동 재시도
-r = measure_session(llm, "session.jsonl")            # req-actions, LLM 1회
-r["speedup"]                             # human_min / agent_total
-r["speedup_vs_hitl"]                     # 사람 감독시간만 분모로
-r["human"]["anchors"]                    # 코드가 확정한 규모 닻 (감사용)
-r["human"]["todos"]                      # 내부 정리된 할일 목록
 ```
+
+반환 스키마는 두 API 동일: `{session, session_id, human: {min, method,
+anchors, todos, breakdown}, agent: {machine_min, hitl_min, total_min, ...},
+speedup, speedup_vs_hitl, notes}` (+초소형이면 `{excluded, reason}`).
 
 ## 초소형 세션 자동 제외
 
