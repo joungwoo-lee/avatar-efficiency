@@ -690,6 +690,48 @@ class TestRequirementActions(unittest.TestCase):
         finally:
             os.unlink(p)
 
+    def test_navigation_signals_search_stop_and_overlap(self):
+        # 신호④ 탐색 종료 후 읽기, 신호⑤ 내용 겹침 — 편집·이름 언급 없이도 기여
+        import tempfile, os, json as _json
+        from requirement_actions import collect_record_stats
+        lines = [
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Read",
+                 "input": {"file_path": "x.md"}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1",
+                 "content": "무관한 내용 " * 100}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t2", "name": "Grep",
+                 "input": {"pattern": "retry"}}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t3", "name": "Read",
+                 "input": {"file_path": "y.md"}},
+                {"type": "tool_use", "id": "t4", "name": "Read",
+                 "input": {"file_path": "z.md"}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t3",
+                 "content": "설정값 PAYMENT_RETRY_LIMIT 는 7 이다"},
+                {"type": "tool_result", "tool_use_id": "t4",
+                 "content": "다른 내용 " * 50}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text",
+                 "text": "결론: 재시도 한도는 PAYMENT_RETRY_LIMIT 값 7."}]}},
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(_json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            rs = collect_record_stats(p)
+            # y.md·z.md = 마지막 검색(Grep) 뒤 읽음(신호④) → 기여.
+            # y.md 는 식별자 겹침(신호⑤)으로도 기여. x.md = 검색 전 1회 읽고
+            # 편집·언급·재방문·겹침 없음 → 훑기.
+            self.assertEqual(rs["contributed_docs"], 2)
+            self.assertEqual(rs["scanned_docs"], 1)
+        finally:
+            os.unlink(p)
+
     def test_no_rate_leak(self):
         from requirement_actions import build_prompt, build_prompt_single
         from agent_effort import load_rates

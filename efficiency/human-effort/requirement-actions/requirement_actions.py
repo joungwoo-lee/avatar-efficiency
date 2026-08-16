@@ -17,6 +17,7 @@
 프롬프트 설계 근거: doc/PROMPT_DESIGN.md
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -290,16 +291,27 @@ def collect_record_stats(jsonl_path):
            contributed_docs, scanned_docs}
 
     contributed/scanned: AI가 읽은 파일의 구조 분해 —
-      기여 자료 = 읽힌 파일 중 이후 편집됐거나 최종 답변에 이름이 언급된 것
-                  (사람도 도달해 관련 부분을 정독할 목적지)
-      훑은 후보 = 읽혔지만 결과에 안 쓰인 것 (사람은 훑고 지나감)
+      기여 자료 = "찾았다"의 흔적이 있는 파일. 5신호 중 하나라도:
+        ① 이후 편집됨  ② 어느 발언에든 이름 언급  ③ 재방문(2회 이상 읽음)
+        ④ 탐색 종료 후 읽음(마지막 검색 도구 호출 뒤의 읽기 — 검색이 멈췄다는
+          건 목적지에 도달했다는 뜻; 검색이 아예 없던 세션엔 미적용)
+        ⑤ 내용 겹침(파일 내용의 6단어 연속 조각 또는 식별자가 최종 답변에 등장)
+      훑은 후보 = 위 신호가 전부 없는 읽힌 파일 (사람은 훑고 지나감)
     AI의 전수 탐색(brute-force) 읽기량을 사람의 전략적 항해 구조로 변환하는 근거.
     """
+    _SEARCH_TOOLS = ("Glob", "Grep", "WebSearch", "WebFetch", "LS")
     reviewed = input_w = 0
     artifact = {}
     read_files = set()
     edited_files = set()
     final_answer = ""
+    all_text = []           # 모든 assistant 발언 (신호② 이름 언급)
+    read_counts = {}        # fp → 읽은 횟수 (신호③ 재방문)
+    read_last_i = {}        # fp → 마지막 읽기 시점 (신호④ 탐색 종료)
+    last_search_i = None    # 마지막 검색 도구 호출 시점
+    tool_i = 0              # 도구 호출 순번
+    pending_read = {}       # tool_use id → fp (읽기 결과 내용 회수용)
+    read_content = {}       # fp → 읽은 내용 (신호⑤ 내용 겹침, 상한 있음)
     with open(jsonl_path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -325,12 +337,17 @@ def collect_record_stats(jsonl_path):
                             input_w += len(t.split())
                     elif b.get("type") == "tool_result":
                         rc = b.get("content")
-                        if isinstance(rc, str):
-                            reviewed += len(rc.split())
-                        elif isinstance(rc, list):
-                            for c in rc:
-                                if isinstance(c, dict) and c.get("type") == "text":
-                                    reviewed += len(c.get("text", "").split())
+                        parts = ([rc] if isinstance(rc, str) else
+                                 [c.get("text", "") for c in rc
+                                  if isinstance(c, dict) and c.get("type") == "text"]
+                                 if isinstance(rc, list) else [])
+                        text = " ".join(parts)
+                        reviewed += len(text.split())
+                        fp = pending_read.pop(b.get("tool_use_id"), None)
+                        if fp:  # 읽기 결과 내용 보관 (신호⑤, 파일당 2만 단어 상한)
+                            old = read_content.get(fp, "")
+                            if len(old.split()) < 20000:
+                                read_content[fp] = old + " " + text
             elif rtype == "assistant":
                 texts = []
                 for b in blocks:
@@ -340,13 +357,20 @@ def collect_record_stats(jsonl_path):
                         texts.append(b.get("text", ""))
                     if b.get("type") != "tool_use":
                         continue
+                    name = b.get("name")
+                    tool_i += 1
+                    if name in _SEARCH_TOOLS:
+                        last_search_i = tool_i
                     inp = b.get("input") or {}
                     fp = inp.get("file_path")
                     if not fp:
                         continue
-                    name = b.get("name")
                     if name in ("Read", "NotebookRead"):
                         read_files.add(fp)
+                        read_counts[fp] = read_counts.get(fp, 0) + 1
+                        read_last_i[fp] = tool_i
+                        if b.get("id"):
+                            pending_read[b["id"]] = fp
                     elif name == "Write":
                         edited_files.add(fp)
                         artifact[fp] = len((inp.get("content") or "").split())
@@ -357,8 +381,34 @@ def collect_record_stats(jsonl_path):
                             artifact[fp] = artifact.get(fp, 0) + len(new.split())
                 if texts:
                     final_answer = " ".join(texts)
-    contributed = {f for f in read_files
-                   if f in edited_files or Path(f).name in final_answer}
+                    all_text.append(final_answer)
+    spoken = " ".join(all_text)
+
+    # 신호⑤ 준비: 최종 답변의 6단어 연속 조각·식별자 집합 (답변은 짧아 저렴)
+    ans_words = final_answer.lower().split()
+    ans_shingles = {" ".join(ans_words[i:i + 6])
+                    for i in range(len(ans_words) - 5)}
+    ans_idents = set(re.findall(r"[A-Za-z_][A-Za-z0-9_./-]{7,}", final_answer))
+
+    def _overlaps(fp):
+        content = read_content.get(fp, "")
+        if not content:
+            return False
+        if any(t in content for t in ans_idents):
+            return True
+        cw = content.lower().split()
+        return any(" ".join(cw[i:i + 6]) in ans_shingles
+                   for i in range(len(cw) - 5))
+
+    contributed = {
+        f for f in read_files
+        if f in edited_files                                   # ① 편집
+        or Path(f).name in spoken                              # ② 이름 언급
+        or read_counts.get(f, 0) >= 2                          # ③ 재방문
+        or (last_search_i is not None                          # ④ 탐색 종료 후 읽기
+            and read_last_i.get(f, 0) > last_search_i)
+        or _overlaps(f)                                        # ⑤ 내용 겹침
+    }
     return {"reviewed_words": reviewed, "input_words": input_w,
             "artifact_words": sum(artifact.values()),
             "contributed_docs": len(contributed),
