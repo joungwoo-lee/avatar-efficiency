@@ -59,8 +59,12 @@ session-api/         사후 API + 초소형 게이트
   읽고, 요구된 분량만 쓴다. 목표는 할일에 적힌 수량·완료조건에서만 나온다.
 - AI 읽기량은 비율이 아니라 **구조로 환산** — AI는 전수 탐색(brute-force),
   사람은 전략적 항해(논문 "Strategic Navigation or Stochastic Search?").
-  기록에서 기여 자료(정독 300단어/건)와 훑은 후보(스캔 60단어/건)를
-  코드만으로 갈라 사람 읽기량을 만든다. LLM 0회.
+  기록에서 읽힌 파일을 3등급으로 갈라 사람 읽기량을 만든다: 기여 자료(정독
+  300단어/건) · 훑은 후보(스캔 60단어/건) · 헛읽기(기여 확보 후 시행착오,
+  **0** — 사람은 열지도 않음). 판별·재생 전부 코드, LLM 0회.
+  구현: `human-effort/requirement-actions/requirement_actions.py`의
+  `collect_record_stats`(3등급 분류) → `derive_anchors`(읽기 닻 계산) →
+  `apply_anchors`(LLM 추정 치환). 근거: human-effort/doc/PROMPT_DESIGN.md.
 
 ## 신뢰도 현황
 
