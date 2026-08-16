@@ -170,8 +170,8 @@ def derive_anchors(requirements, record_stats=None, rates=None):
     skim_w = rs.get("skim_words", 0)
     if deep_w or skim_w:
         read_rate = ((rates or {}).get("human", {}).get("read", {})
-                     .get("min_per_unit", 0.001))
-        skim_rate = rm.get("skim_min_per_word", 0.0001)
+                     .get("min_per_unit", 0.005))
+        skim_rate = rm.get("skim_min_per_word", 0.0005)
         factor = (skim_rate / read_rate) if read_rate else 0.0
         structured = deep_w + skim_w * factor + rs.get("input_words", 0)
         if structured:
