@@ -143,6 +143,9 @@
     "other_check_min_per_file": 0.5,
     "report_deep_min_per_word": 0.008,
     "report_skim_min_per_word": 0.002,
+    "verified_check_min_per_file": 0.3,
+    "expected_tests_per_file": 3,
+    "_comment_verified": "검증 위임 강등: 세션 안에서 자동 테스트가 통과 상태로 끝났으면 코드 검토가 '직접 돌려 확인(2.0)'→'결과 서명(0.3)'으로 강등. 강등 폭은 커버리지 실측(있으면) 또는 통과 테스트 수÷(수정 코드 파일 수×기대 3건) 비례 — 형식 테스트 1건으로는 거의 강등 안 됨. 실패 상태로 끝나면 강등 0. 없앤 노동은 automation_saved_min으로 출력.",
     "source_type": "expert_seed"
   },
   "human_reading_model": {

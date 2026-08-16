@@ -100,6 +100,44 @@ class TestTranscriptActual(unittest.TestCase):
         finally:
             os.unlink(p)
 
+    def test_automation_discount(self):
+        # 검증 위임 강등: 통과 테스트 규모에 비례, 형식 테스트는 할인 미미
+        import json, tempfile, os
+        from transcript_actual import parse_actions, actual_effort_minutes
+
+        def session(test_output):
+            lines = [
+                {"type": "user", "message": {"role": "user", "content": "고쳐줘"}},
+                {"type": "assistant", "message": {"role": "assistant", "content": [
+                    {"type": "tool_use", "name": "Edit",
+                     "input": {"file_path": "a.py", "new_string": "x " * 100}},
+                    {"type": "tool_use", "name": "Edit",
+                     "input": {"file_path": "b.py", "new_string": "y " * 100}},
+                    {"type": "tool_use", "id": "t1", "name": "Bash",
+                     "input": {"command": "pytest tests/"}}]}},
+                {"type": "user", "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "t1",
+                     "content": test_output}]}},
+            ]
+            fd, p = tempfile.mkstemp(suffix=".jsonl")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                for ln in lines:
+                    f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+            try:
+                return actual_effort_minutes(parse_actions(p))
+            finally:
+                os.unlink(p)
+
+        # 충분한 테스트(12 passed, 기대 2파일×3=6) → ratio 1 → 파일당 0.3
+        m = session("============ 12 passed in 1.2s ============")
+        self.assertAlmostEqual(m["automation_saved_min"], 3.4, places=2)
+        # 형식 테스트(1 passed) → ratio 1/6 → 할인 미미 (saved = 3.4×1/6)
+        m = session("1 passed in 0.1s")
+        self.assertAlmostEqual(m["automation_saved_min"], 0.57, places=2)
+        # 실패 상태로 종료 → 강등 0
+        m = session("2 failed, 3 passed")
+        self.assertEqual(m["automation_saved_min"], 0.0)
+
     def test_deterministic_hand_check(self):
         # 실측 분모: 트랜스크립트 → 기계/HITL 동작 × 요율 (LLM 미사용)
         import json, tempfile, os

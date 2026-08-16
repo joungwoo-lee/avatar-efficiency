@@ -26,6 +26,7 @@ rates.json의 agent/hitl 카드 요율을 곱한다.
 user 턴(사람 발화 아님). sidechain(서브에이전트)은 기계 동작으로 포함.
 """
 import json
+import re
 from pathlib import Path
 
 # user 레코드 안 시스템 주입 텍스트 접두 — 사람 지시 집계에서 제외
@@ -39,6 +40,16 @@ _CODE_EXT = {".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".c", ".cpp", ".h",
              ".cs", ".go", ".rs", ".rb", ".php", ".sh", ".ps1", ".bat", ".sql"}
 _DOC_EXT = {".md", ".txt", ".rst", ".html", ".htm", ".tex",
             ".docx", ".pptx", ".xlsx", ".csv"}
+
+
+# 자동 테스트 실행 명령 — 검증 위임의 결정론 신호
+_TEST_CMD_RE = re.compile(
+    r"pytest|py\.test|unittest|npm +test|yarn +test|pnpm +test|jest|vitest"
+    r"|go +test|cargo +test|mvn +test|gradle +test|make +test|tox\b",
+    re.IGNORECASE)
+_PASSED_RE = re.compile(r"(\d+)\s+passed|Ran\s+(\d+)\s+tests?")
+_FAILED_RE = re.compile(r"\d+\s+failed|FAILED|ERRORS?\b")
+_COVERAGE_RE = re.compile(r"TOTAL\s+.*?(\d+)%")
 
 
 def _artifact_class(fp):
@@ -66,17 +77,20 @@ def _content_blocks(message):
     return content if isinstance(content, list) else []
 
 
-def _result_words(block):
-    """tool_result 내용 단어수 — 문자열 또는 blocks 리스트."""
+def _result_text(block):
+    """tool_result 내용 텍스트 — 문자열 또는 blocks 리스트."""
     content = block.get("content")
     if isinstance(content, str):
-        return _words(content)
-    total = 0
+        return content
     if isinstance(content, list):
-        for c in content:
-            if isinstance(c, dict) and c.get("type") == "text":
-                total += _words(c.get("text", ""))
-    return total
+        return " ".join(c.get("text", "") for c in content
+                        if isinstance(c, dict) and c.get("type") == "text")
+    return ""
+
+
+def _result_words(block):
+    """tool_result 내용 단어수."""
+    return _words(_result_text(block))
 
 
 def parse_actions(jsonl_path):
@@ -90,8 +104,12 @@ def parse_actions(jsonl_path):
               # 유형별 검토용: 산출물 파일 {유형: {경로: 단어수}}, 결론 단어수
               "artifact_files": {"code": {}, "doc": {}, "other": {}},
               "conclusion_words": 0,
+              # 검증 위임 신호: 마지막 테스트 실행의 통과 수·실패 여부·커버리지
+              "tests_passed_last": 0, "last_test_failed": False,
+              "coverage_pct": None,
               "session_id": None, "first_ts": None, "last_ts": None}
     last_answer_w = 0  # 직전 assistant 발언 단어수 (턴 마무리 = 결론 후보)
+    pending_tests = {}  # 테스트 실행 tool_use id → 결과 대기
     with open(jsonl_path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -124,6 +142,11 @@ def parse_actions(jsonl_path):
                     if b.get("type") == "tool_use":
                         counts["tool_calls"] += 1
                         inp = b.get("input") or {}
+                        cmd = inp.get("command")
+                        if (b.get("name") in ("Bash", "PowerShell")
+                                and isinstance(cmd, str)
+                                and _TEST_CMD_RE.search(cmd) and b.get("id")):
+                            pending_tests[b["id"]] = True
                         fp = inp.get("file_path")
                         name = b.get("name")
                         if fp and name in ("Write", "Edit", "NotebookEdit"):
@@ -150,6 +173,19 @@ def parse_actions(jsonl_path):
                     continue
                 if b.get("type") == "tool_result":
                     counts["tool_result_words"] += _result_words(b)
+                    if pending_tests.pop(b.get("tool_use_id"), None):
+                        out = _result_text(b)
+                        if _FAILED_RE.search(out):
+                            counts["last_test_failed"] = True
+                        else:
+                            m = _PASSED_RE.search(out)
+                            if m:
+                                counts["tests_passed_last"] = int(
+                                    m.group(1) or m.group(2))
+                                counts["last_test_failed"] = False
+                        cv = _COVERAGE_RE.search(out)
+                        if cv:
+                            counts["coverage_pct"] = int(cv.group(1))
                 elif b.get("type") == "text":
                     t = b.get("text", "")
                     if not t.lstrip().startswith(_SYSTEM_TEXT_PREFIXES):
@@ -197,8 +233,26 @@ def actual_effort_minutes(counts, rates=None):
         other_files = af.get("other") or {}
         concl = min(counts.get("conclusion_words", 0), counts["assistant_words"])
         progress = counts["assistant_words"] - concl
+        # 검증 위임 강등: 자동 테스트가 통과 상태면 사람 몫은 "직접 돌려 확인"
+        # → "결과 서명"으로. 강등 폭은 실질 규모에 비례 — 커버리지 실측 우선,
+        # 없으면 통과 테스트 수 ÷ (수정 코드 파일 수 × 파일당 기대 테스트 수).
+        # 형식 테스트 1건으로는 강등이 거의 발생하지 않는다. 실패 상태면 0.
+        n_code = len(code_files)
+        run_rate = rm["code_run_min_per_file"]
+        automation_saved = 0.0
+        floor = rm.get("verified_check_min_per_file")
+        if n_code and floor is not None and not counts.get("last_test_failed"):
+            if counts.get("coverage_pct") is not None:
+                ratio = min(1.0, counts["coverage_pct"] / 100.0)
+            else:
+                expected = n_code * rm.get("expected_tests_per_file", 3)
+                ratio = (min(1.0, counts.get("tests_passed_last", 0) / expected)
+                         if expected else 0.0)
+            eff_rate = run_rate - (run_rate - floor) * ratio
+            automation_saved = round((run_rate - eff_rate) * n_code, 2)
+            run_rate = eff_rate
         review_min = (
-            len(code_files) * rm["code_run_min_per_file"]
+            n_code * run_rate
             + sum(code_files.values()) * rm["code_skim_min_per_word"]
             + sum(doc_files.values()) * rm["doc_read_min_per_word"]
             + len(other_files) * rm["other_check_min_per_file"]
@@ -206,6 +260,7 @@ def actual_effort_minutes(counts, rates=None):
             + progress * rm["report_skim_min_per_word"])
     else:  # 폴백: 보고 전량 × 단일 요율 (구식)
         review_min = counts["assistant_words"] * h["review"]["min_per_unit"]
+        automation_saved = 0.0
     hitl = {
         "instruct": instruct_min,
         "review": review_min,
@@ -217,6 +272,7 @@ def actual_effort_minutes(counts, rates=None):
         "machine_min": machine_min,
         "hitl_min": hitl_min,
         "total_min": round(machine_min + hitl_min, 2),
+        "automation_saved_min": automation_saved,  # 자동 검증이 없앤 사람 노동
         "breakdown": {
             "machine": {k: round(v, 2) for k, v in machine.items()},
             "hitl": {k: round(v, 2) for k, v in hitl.items()},
