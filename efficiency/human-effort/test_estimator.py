@@ -735,6 +735,37 @@ class TestRequirementActions(unittest.TestCase):
         finally:
             os.unlink(p)
 
+    def test_internal_artifacts_excluded(self):
+        # 세션 내부 부산물(.output, scratchpad, 스크린샷)은 등급 분류 제외
+        import tempfile, os, json as _json
+        from requirement_actions import collect_record_stats
+        lines = [
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "r1", "name": "Read",
+                 "input": {"file_path": "C:\\proj\\real_doc.md"}},
+                {"type": "tool_use", "id": "r2", "name": "Read",
+                 "input": {"file_path": "C:\\Users\\x\\AppData\\Local\\Temp\\claude\\s1\\tasks\\abc.output"}},
+                {"type": "tool_use", "id": "r3", "name": "Read",
+                 "input": {"file_path": "C:\\Users\\x\\Temp\\claude\\s1\\scratchpad\\log.txt"}},
+                {"type": "tool_use", "id": "r4", "name": "Read",
+                 "input": {"file_path": "C:\\shots\\step1.png"}}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "real_doc.md 확인 완료"}]}},
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(_json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            rs = collect_record_stats(p)
+            # real_doc.md 만 분류 대상(언급 → 기여), 나머지 3건은 internal
+            self.assertEqual(rs["contributed_docs"], 1)
+            self.assertEqual(rs["scanned_docs"], 0)
+            self.assertEqual(rs["waste_docs"], 0)
+            self.assertEqual(rs["internal_docs"], 3)
+        finally:
+            os.unlink(p)
+
     def test_navigation_multiturn_scoping(self):
         # 멀티턴: 신호④는 턴 단위, 분할 이어읽기는 재방문 아님,
         # 같은 구간 재읽기는 재방문, 서브에이전트 기록은 제외

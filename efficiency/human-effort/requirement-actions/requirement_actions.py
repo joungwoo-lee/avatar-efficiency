@@ -32,6 +32,18 @@ from agent_effort import load_rates  # noqa: E402 (human 카드 공용)
 _WORD_READ = ("read",)
 _WORD_WRITE = ("draft", "edit")
 
+# 세션 내부 부산물 — 문서 등급 분류에서 제외 (LLM 대조 실험에서 등급 불일치의
+# 92%가 여기 몰림: 사람이 읽을 "문서"가 아니라 AI의 자기 작업 관리 기록)
+_IMG_EXT = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg", ".ico"}
+
+
+def _is_internal_artifact(fp):
+    p = str(fp).replace("\\", "/").lower()
+    return ("/temp/claude/" in p          # 세션 임시 영역 (scratchpad·tasks)
+            or "/scratchpad/" in p
+            or p.endswith(".output")      # 병렬 작업 결과 로그
+            or Path(p).suffix in _IMG_EXT)  # 스크린샷·이미지
+
 
 def _catalog_lines(card):
     return "\n".join(f"- {name}({spec['unit']})" for name, spec in card.items())
@@ -285,7 +297,7 @@ def estimate_actions_from_requirements(llm, requirements, record_stats=None,
     }
 
 
-def collect_record_stats(jsonl_path):
+def collect_record_stats(jsonl_path, detail=False):
     """트랜스크립트에서 닻용 실측치 수집 (LLM 미사용, 결정론적).
 
     반환: {reviewed_words, artifact_words, input_words,
@@ -308,6 +320,9 @@ def collect_record_stats(jsonl_path):
        읽힌 것 — 기여 확보 후의 시행착오. 사람은 열지도 않았을 파일이라 0.
        어느 턴에서든 항해 중에 읽혔으면 SKIM으로 남는다.
     병렬 서브에이전트 기록(isSidechain)은 전부 제외 — 측정 기조.
+    세션 내부 부산물(작업 결과 .output, scratchpad·세션 임시 파일, 스크린샷)은
+    문서가 아니라 AI의 자기 작업 관리 기록이라 등급 분류에서 제외하고
+    internal_docs 건수로만 보고 (LLM 대조 실험 근거 — CHANGELOG §16).
     AI의 전수 탐색(brute-force) 읽기량을 사람의 전략적 항해 구조로 변환하는 근거.
     """
     _SEARCH_TOOLS = ("Glob", "Grep", "WebSearch", "WebFetch", "LS")
@@ -315,6 +330,7 @@ def collect_record_stats(jsonl_path):
     artifact = {}
     read_files = set()
     edited_files = set()
+    internal = set()         # 세션 내부 부산물 (분류 제외, 건수만 보고)
     final_answer = ""
     all_text = []            # 모든 assistant 발언 (신호② 이름 언급)
     read_regions = {}        # (fp, offset) → 횟수 (신호③ — 같은 구간 재방문만)
@@ -399,6 +415,9 @@ def collect_record_stats(jsonl_path):
                     if not fp:
                         continue
                     if name in ("Read", "NotebookRead"):
+                        if _is_internal_artifact(fp):
+                            internal.add(fp)  # 부산물 — 등급 분류 대상 아님
+                            continue
                         read_files.add(fp)
                         region = (fp, inp.get("offset"))
                         read_regions[region] = read_regions.get(region, 0) + 1
@@ -457,11 +476,16 @@ def collect_record_stats(jsonl_path):
             (waste if last_c is not None and k > last_c else skim).add(fp)
     waste -= skim  # 어느 턴에서든 항해 중 읽혔으면 SKIM 유지
 
-    return {"reviewed_words": reviewed, "input_words": input_w,
-            "artifact_words": sum(artifact.values()),
-            "contributed_docs": len(contributed),
-            "scanned_docs": len(skim),
-            "waste_docs": len(waste)}
+    out = {"reviewed_words": reviewed, "input_words": input_w,
+           "artifact_words": sum(artifact.values()),
+           "contributed_docs": len(contributed),
+           "scanned_docs": len(skim),
+           "waste_docs": len(waste),
+           "internal_docs": len(internal)}
+    if detail:  # 감사·검증용: 등급별 파일 목록
+        out["files"] = {"deep": sorted(contributed), "skim": sorted(skim),
+                        "waste": sorted(waste), "internal": sorted(internal)}
+    return out
 
 
 # ---------------------------------------------------------------- 단일호출 모드
