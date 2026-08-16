@@ -1,40 +1,32 @@
 # -*- coding: utf-8 -*-
-"""efficiency 조합 층 — 방법론(부품)을 명령한 조합으로 돌리는 단일 지점.
+"""아바타(사전) 측정 API — 아바타 카드 → speedup. 조합은 인자로만 지정.
 
-부품(방법론)과 조합 선택을 여기 한 곳에서만 한다. 다른 모듈은 부품일 뿐이다.
-
-    estimate_avatar(llm, card_text, human=..., agent=...)   # 사전
-    measure_session(llm, jsonl_path, human=...)             # 사후
+사전 측정의 조합 입구 (구 efficiency/api.py의 estimate_avatar 이동, §22):
+    estimate_avatar(llm, card_text, human=..., agent=..., calls=...)
 
 분자(human) 방식:
-    "req-actions"    요구사항·행동: 사람 행동 × 단가, 숫자는 닻 (사전·사후 기본)
-    "record-actions" 세션기록·행동: 기록에서 바로 시뮬 (사후 전용, 교차확인)
-    "workunit"       요구사항·산출물 → P50/P80 (사전만 잔존; **사후는 폐기** —
-                     session-api/workunit_deprecated.py, CHANGELOG §20)
-
+    "req-actions" (기본) 요구사항·행동: 사람 행동 × 단가, 숫자는 닻
+    "workunit"           요구사항·산출물 → P50/P80 (분포 필요 시)
 분모(agent) 방식:
-    "agent-llm"    사전 추산 — AI+감독 행동 × 단가 (사전 기본)
-    "record"       기록 실측, LLM 0회 (사후 기본·유일)
+    "agent-llm"   (유일) AI+감독 행동 × 단가
 
-사후(세션) 측정 본체는 session-api/session_api.py — 여기선 위임만.
+호출 병합(방식이 아님): 기본 조합(req-actions + agent-llm) + calls="single"이면
+두 방법론을 한 프롬프트로 묶어 LLM 1회에 처리 (paths.estimate_paths,
+integ-spec §3). calls="staged"면 각자 따로 호출 — 감사·재처리 가능.
 
-호출 병합(방식이 아님): 사전에서 human="req-actions" + agent="agent-llm" +
-calls="single"이면 두 방법론을 **한 프롬프트로 묶어 LLM 1회**에 처리한다
-(paths.estimate_paths, integ-spec §3). 방법론은 그대로고 호출만 합친 것.
-
-반환(공통): {human: {...}, agent: {...}, speedup, notes, ...}
+구 시스템 drop-in 계약(estimate_task)은 compat.py.
+사후(세션) 측정은 ../session-api (req_actions_api / record_actions_api).
 """
 import sys
 from pathlib import Path
 
-_BASE = Path(__file__).resolve().parent
-for _p in (_BASE / "human-effort" / "requirement-based",
-           _BASE / "human-effort" / "requirement-actions",
-           _BASE / "human-effort" / "record-actions",
-           _BASE / "human-effort" / "shared",
-           _BASE / "agent-effort",
-           _BASE / "counterfactual-api",
-           _BASE / "session-api"):
+_HERE = Path(__file__).resolve().parent
+_ROOT = _HERE.parent
+for _p in (_HERE,
+           _ROOT / "human-effort" / "requirement-based",
+           _ROOT / "human-effort" / "requirement-actions",
+           _ROOT / "human-effort" / "shared",
+           _ROOT / "agent-effort"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -44,7 +36,6 @@ from estimator import HumanEffortEstimator, validate_requirements_output  # noqa
 from prompts import build_prompt_a_avatar  # noqa: E402
 from requirement_actions import (estimate_actions_from_requirements,  # noqa: E402
                                  estimate_actions_single)
-from session_api import measure_session as sa_measure_session  # noqa: E402
 
 
 def _extract_avatar_todos(llm, card_text, max_tokens=6000):
@@ -109,21 +100,3 @@ def estimate_avatar(llm, card_text, human="req-actions", agent="agent-llm",
 
     return {"input": "avatar_card", "human": h, "agent": a,
             "speedup": speedup(h["min"], a["total_min"]), "notes": notes}
-
-
-def measure_session(llm, jsonl_path, human="req-actions", force=False,
-                    rates=None, max_chars=8000, calls="single"):
-    """사후 측정: 세션 기록 → speedup. 세션 측정 본체는 session-api에 산다
-    (session_api.measure_session) — 여기서는 위임만 한다.
-
-    human: "req-actions"(기본) | "record-actions"(교차확인 기준선).
-    workunit 방식은 폐기 — session-api/workunit_deprecated.py 참고 보관.
-    calls="single"(기본): 분자를 한 호출(내부 할일 정리 포함)로 — 세션당 LLM 1회.
-    """
-    if human == "workunit":
-        raise ValueError("workunit 방식은 폐기됨 — "
-                         "session-api/workunit_deprecated.py 참고 보관")
-    r = sa_measure_session(llm, jsonl_path, human=human, calls=calls,
-                           rates=rates, max_chars=max_chars, force=force)
-    r["input"] = "session"
-    return r

@@ -12,7 +12,7 @@
 곱한다. 분자 방법론 = 요구사항·행동(행동×사람 단가+닻), 분모 = agent 추산.
 
 이 모듈은 구 계약 어댑터가 전부다 — 다른 방법론 조합이 필요하면
-../api.py (estimate_avatar / measure_session)를 쓸 것.
+avatar_api.py(estimate_avatar, 사전) 또는 ../session-api(사후)를 쓸 것.
 """
 try:  # 배포형: 한 폴더에 모아 복사된 경우
     from paths import estimate_paths

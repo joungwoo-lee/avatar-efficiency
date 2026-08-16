@@ -288,6 +288,19 @@
   (교차확인 기준선) — 각각 `measure`/`measure_batch` + CLI. 공용 코어는
   session_api.py 유지. 폴더 README에 두 API 사용법·반환 스키마 명시.
 
+## 22. 최상위 api.py 해체 — 입구는 폴더 2개로
+
+- 근거: §21 후 api.py는 사후 위임 껍데기 + 사전 estimate_avatar만 남았고,
+  소비자는 자기 테스트뿐. "조합 층 한 곳" 선언은 입구 폴더 체계로 대체.
+- 조치:
+  - `estimate_avatar`(사전 조합 선택) → `counterfactual-api/avatar_api.py` 이동
+    (테스트 `test_avatar_api.py` 동반). compat.py는 구 계약 어댑터 그대로.
+  - `efficiency/api.py`·`test_api.py` 삭제. 사후 세션 테스트는
+    session-api/test_session_api.py가 이미 커버.
+  - 입구 확정: 사전 = counterfactual-api(compat.estimate_task /
+    avatar_api.estimate_avatar), 사후 = session-api(req_actions_api /
+    record_actions_api). README·INTEGRATION.md 참조 갱신.
+
 ## 미해결 (알려진 한계·다음 단계)
 
 1. **사람 실측 정답지 0건** — 모든 절대값의 상한. A급 3~5건 확보가 최우선.
