@@ -732,6 +732,54 @@ class TestRequirementActions(unittest.TestCase):
         finally:
             os.unlink(p)
 
+    def test_navigation_multiturn_scoping(self):
+        # 멀티턴: 신호④는 턴 단위, 분할 이어읽기는 재방문 아님,
+        # 같은 구간 재읽기는 재방문, 서브에이전트 기록은 제외
+        import tempfile, os, json as _json
+        from requirement_actions import collect_record_stats
+        lines = [
+            # 턴1: 검색 후 A 읽음 → 신호④ 기여
+            {"type": "user", "message": {"role": "user", "content": "찾아라"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "s1", "name": "Grep",
+                 "input": {"pattern": "x"}}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "r1", "name": "Read",
+                 "input": {"file_path": "A.md"}}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "턴1 끝"}]}},
+            # 턴2: 검색 없음 — 턴1의 검색이 여기로 새면 안 됨
+            {"type": "user", "message": {"role": "user", "content": "다음 일"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "r2", "name": "Read",
+                 "input": {"file_path": "B.md", "offset": 0}},
+                {"type": "tool_use", "id": "r3", "name": "Read",
+                 "input": {"file_path": "B.md", "offset": 2000}},
+                {"type": "tool_use", "id": "r4", "name": "Read",
+                 "input": {"file_path": "D.md"}},
+                {"type": "tool_use", "id": "r5", "name": "Read",
+                 "input": {"file_path": "D.md"}}]}},
+            # 서브에이전트 기록 — 집계 제외
+            {"type": "assistant", "isSidechain": True,
+             "message": {"role": "assistant", "content": [
+                 {"type": "tool_use", "id": "r6", "name": "Read",
+                  "input": {"file_path": "E.md"}}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "턴2 끝"}]}},
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(_json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            rs = collect_record_stats(p)
+            # A=턴1 탐색 종료 후 읽기(④), D=같은 구간 2회(③) → 기여 2.
+            # B=offset 다른 분할 이어읽기 → 훑기. E=서브에이전트 → 미집계.
+            self.assertEqual(rs["contributed_docs"], 2)
+            self.assertEqual(rs["scanned_docs"], 1)
+        finally:
+            os.unlink(p)
+
     def test_no_rate_leak(self):
         from requirement_actions import build_prompt, build_prompt_single
         from agent_effort import load_rates

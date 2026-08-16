@@ -292,11 +292,16 @@ def collect_record_stats(jsonl_path):
 
     contributed/scanned: AI가 읽은 파일의 구조 분해 —
       기여 자료 = "찾았다"의 흔적이 있는 파일. 5신호 중 하나라도:
-        ① 이후 편집됨  ② 어느 발언에든 이름 언급  ③ 재방문(2회 이상 읽음)
-        ④ 탐색 종료 후 읽음(마지막 검색 도구 호출 뒤의 읽기 — 검색이 멈췄다는
-          건 목적지에 도달했다는 뜻; 검색이 아예 없던 세션엔 미적용)
-        ⑤ 내용 겹침(파일 내용의 6단어 연속 조각 또는 식별자가 최종 답변에 등장)
+        ① 이후 편집됨  ② 어느 발언에든 이름 언급
+        ③ 재방문 — 같은 파일의 **같은 구간**을 2회 이상 읽음 (offset이 다른
+          분할 이어읽기는 전수 읽기이지 재방문이 아님)
+        ④ 탐색 종료 후 읽음 — **사용자 턴 단위**로, 그 턴의 마지막 검색 도구
+          호출 뒤의 읽기 (검색이 멈췄다 = 목적지 도달; 그 턴에 검색이 없으면
+          미적용 — 긴 멀티턴에서 초반 검색 한 번이 전체를 오염시키지 않게)
+        ⑤ 내용 겹침 — 파일 내용의 6단어 연속 조각·식별자가 **각 턴의 마무리
+          답변**에 등장 (마지막 답변만 보면 앞 턴의 기여를 놓침)
       훑은 후보 = 위 신호가 전부 없는 읽힌 파일 (사람은 훑고 지나감)
+    병렬 서브에이전트 기록(isSidechain)은 전부 제외 — 측정 기조.
     AI의 전수 탐색(brute-force) 읽기량을 사람의 전략적 항해 구조로 변환하는 근거.
     """
     _SEARCH_TOOLS = ("Glob", "Grep", "WebSearch", "WebFetch", "LS")
@@ -305,13 +310,26 @@ def collect_record_stats(jsonl_path):
     read_files = set()
     edited_files = set()
     final_answer = ""
-    all_text = []           # 모든 assistant 발언 (신호② 이름 언급)
-    read_counts = {}        # fp → 읽은 횟수 (신호③ 재방문)
-    read_last_i = {}        # fp → 마지막 읽기 시점 (신호④ 탐색 종료)
-    last_search_i = None    # 마지막 검색 도구 호출 시점
-    tool_i = 0              # 도구 호출 순번
-    pending_read = {}       # tool_use id → fp (읽기 결과 내용 회수용)
-    read_content = {}       # fp → 읽은 내용 (신호⑤ 내용 겹침, 상한 있음)
+    all_text = []            # 모든 assistant 발언 (신호② 이름 언급)
+    read_regions = {}        # (fp, offset) → 횟수 (신호③ — 같은 구간 재방문만)
+    tool_i = 0               # 도구 호출 순번
+    turn_search_i = None     # 이 턴의 마지막 검색 시점 (신호④ — 턴 단위)
+    turn_reads = []          # 이 턴의 (fp, 읽기 시점)
+    signal4 = set()          # 탐색 종료 후 읽힌 파일
+    answers = []             # 턴별 마무리 답변 (신호⑤ 대조 대상)
+    pending_read = {}        # tool_use id → fp (읽기 결과 내용 회수용)
+    read_content = {}        # fp → 읽은 내용 (신호⑤ 내용 겹침, 상한 있음)
+
+    def _end_turn():
+        # 사용자 턴 경계: 신호④를 이 턴 안에서만 판정, 턴 마무리 답변 보관
+        nonlocal turn_search_i, turn_reads, final_answer
+        if turn_search_i is not None:
+            signal4.update(fp for fp, i in turn_reads if i > turn_search_i)
+        turn_search_i = None
+        turn_reads = []
+        if final_answer:
+            answers.append(final_answer)
+            final_answer = ""
     with open(jsonl_path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -321,13 +339,17 @@ def collect_record_stats(jsonl_path):
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if not isinstance(rec, dict) or rec.get("isMeta"):
+            if not isinstance(rec, dict) or rec.get("isMeta") \
+                    or rec.get("isSidechain"):  # 병렬 서브에이전트 기록 제외
                 continue
             rtype = rec.get("type")
             content = (rec.get("message") or {}).get("content")
             blocks = ([{"type": "text", "text": content}] if isinstance(content, str)
                       else content if isinstance(content, list) else [])
             if rtype == "user":
+                if any(isinstance(b, dict) and b.get("type") == "text"
+                       for b in blocks):
+                    _end_turn()  # 실제 사용자 발화 = 새 턴 시작
                 for b in blocks:
                     if not isinstance(b, dict):
                         continue
@@ -360,15 +382,16 @@ def collect_record_stats(jsonl_path):
                     name = b.get("name")
                     tool_i += 1
                     if name in _SEARCH_TOOLS:
-                        last_search_i = tool_i
+                        turn_search_i = tool_i
                     inp = b.get("input") or {}
                     fp = inp.get("file_path")
                     if not fp:
                         continue
                     if name in ("Read", "NotebookRead"):
                         read_files.add(fp)
-                        read_counts[fp] = read_counts.get(fp, 0) + 1
-                        read_last_i[fp] = tool_i
+                        region = (fp, inp.get("offset"))
+                        read_regions[region] = read_regions.get(region, 0) + 1
+                        turn_reads.append((fp, tool_i))
                         if b.get("id"):
                             pending_read[b["id"]] = fp
                     elif name == "Write":
@@ -382,13 +405,15 @@ def collect_record_stats(jsonl_path):
                 if texts:
                     final_answer = " ".join(texts)
                     all_text.append(final_answer)
+    _end_turn()  # 마지막 턴 마감
     spoken = " ".join(all_text)
 
-    # 신호⑤ 준비: 최종 답변의 6단어 연속 조각·식별자 집합 (답변은 짧아 저렴)
-    ans_words = final_answer.lower().split()
+    # 신호⑤ 준비: 턴별 마무리 답변들의 6단어 연속 조각·식별자 집합
+    ans_text = " ".join(answers)
+    ans_words = ans_text.lower().split()
     ans_shingles = {" ".join(ans_words[i:i + 6])
                     for i in range(len(ans_words) - 5)}
-    ans_idents = set(re.findall(r"[A-Za-z_][A-Za-z0-9_./-]{7,}", final_answer))
+    ans_idents = set(re.findall(r"[A-Za-z_][A-Za-z0-9_./-]{7,}", ans_text))
 
     def _overlaps(fp):
         content = read_content.get(fp, "")
@@ -400,14 +425,14 @@ def collect_record_stats(jsonl_path):
         return any(" ".join(cw[i:i + 6]) in ans_shingles
                    for i in range(len(cw) - 5))
 
+    revisited = {fp for (fp, _off), n in read_regions.items() if n >= 2}
     contributed = {
         f for f in read_files
         if f in edited_files                                   # ① 편집
         or Path(f).name in spoken                              # ② 이름 언급
-        or read_counts.get(f, 0) >= 2                          # ③ 재방문
-        or (last_search_i is not None                          # ④ 탐색 종료 후 읽기
-            and read_last_i.get(f, 0) > last_search_i)
-        or _overlaps(f)                                        # ⑤ 내용 겹침
+        or f in revisited                                      # ③ 같은 구간 재방문
+        or f in signal4                                        # ④ 탐색 종료 후 읽기(턴 단위)
+        or _overlaps(f)                                        # ⑤ 내용 겹침(턴별 답변)
     }
     return {"reviewed_words": reviewed, "input_words": input_w,
             "artifact_words": sum(artifact.values()),
