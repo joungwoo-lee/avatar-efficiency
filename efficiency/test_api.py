@@ -79,31 +79,34 @@ def _session_file(d):
 
 
 class TestAvatarCombos(unittest.TestCase):
-    def test_default_paths_one_call(self):
+    def test_default_merged_one_call(self):
         llm = MockLLM()
         r = estimate_avatar(llm, CARD)
-        self.assertEqual(len(llm.calls), 1)
+        self.assertEqual(len(llm.calls), 1)          # 호출 병합
+        self.assertEqual(r["human"]["method"], "req-actions")   # 방법론은 기존 것
+        self.assertEqual(r["agent"]["method"], "agent-llm")
+        self.assertTrue(r["human"]["merged_call"])
         self.assertAlmostEqual(r["human"]["min"], 17.0, places=1)
-        self.assertGreater(r["agent"]["total_min"], 0)
         self.assertIsNotNone(r["speedup"])
 
     def test_workunit_combo(self):
         llm = MockLLM()
-        r = estimate_avatar(llm, CARD, human="workunit")
+        r = estimate_avatar(llm, CARD, human="workunit", calls="staged")
         self.assertEqual(r["human"]["method"], "workunit")
         self.assertIsNotNone(r["human"]["p80_min"])
-        self.assertEqual(r["agent"]["method"], "동시분해")
+        self.assertEqual(r["agent"]["method"], "agent-llm")
 
     def test_req_actions_with_agent_llm(self):
         llm = MockLLM()
-        r = estimate_avatar(llm, CARD, human="req-actions", agent="agent-llm")
+        r = estimate_avatar(llm, CARD, human="req-actions", agent="agent-llm",
+                            calls="staged")
         self.assertEqual(r["human"]["method"], "req-actions")
         self.assertEqual(r["agent"]["method"], "agent-llm")
         self.assertGreater(r["human"]["min"], 0)
 
     def test_invalid_combo_rejected(self):
         with self.assertRaises(ValueError):
-            estimate_avatar(MockLLM(), CARD, agent="record")
+            estimate_avatar(MockLLM(), CARD, agent="record", calls="staged")
 
 
 class TestSingleCall(unittest.TestCase):
@@ -111,9 +114,10 @@ class TestSingleCall(unittest.TestCase):
         llm = MockLLM()
         r = estimate_avatar(llm, CARD, human="req-actions", agent="agent-llm",
                             calls="single")
-        # 분자 1회(내부 할일 포함) + 분모 1회 = 2회
-        self.assertEqual(len(llm.calls), 2)
+        # 같은 방법론 쌍 + single = 한 프롬프트로 병합 → 1회
+        self.assertEqual(len(llm.calls), 1)
         self.assertEqual(r["human"]["method"], "req-actions")
+        self.assertTrue(r["human"].get("merged_call"))
 
     def test_session_req_actions_single(self):
         with tempfile.TemporaryDirectory() as d:

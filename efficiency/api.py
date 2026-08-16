@@ -6,16 +6,18 @@
     estimate_avatar(llm, card_text, human=..., agent=...)   # 사전
     measure_session(llm, jsonl_path, human=...)             # 사후
 
-분자(human) 방식:
-    "동시분해"      한 호출로 사람/AI/감독을 같이 분해해 분자·분모를 한꺼번에 뽑음 (사전 전용, 기본)
-    "workunit"     요구사항·산출물: 할일 → 산출물 단위 × 카탈로그 → P50/P80
-    "req-actions"  요구사항·행동: 할일 → 사람 행동 × 단가, 숫자는 닻
+분자(human) 방식 — 방법론은 이 셋뿐이다:
+    "req-actions"    요구사항·행동: 사람 행동 × 단가, 숫자는 닻 (사전 기본)
+    "workunit"       요구사항·산출물: 산출물 단위 × 카탈로그 → P50/P80
     "record-actions" 세션기록·행동: 기록에서 바로 시뮬 (사후 전용, 교차확인)
 
 분모(agent) 방식:
-    "동시분해"      위 한 호출의 AI+감독 몫 (사전 기본)
-    "agent-llm"    별도 호출 사전 추산 (agent_effort)
+    "agent-llm"    사전 추산 — AI+감독 행동 × 단가 (사전 기본)
     "record"       기록 실측, LLM 0회 (사후 기본·유일)
+
+호출 병합(방식이 아님): 사전에서 human="req-actions" + agent="agent-llm" +
+calls="single"이면 두 방법론을 **한 프롬프트로 묶어 LLM 1회**에 처리한다
+(paths.estimate_paths, integ-spec §3). 방법론은 그대로고 호출만 합친 것.
 
 반환(공통): {human: {...}, agent: {...}, speedup, notes, ...}
 """
@@ -53,25 +55,31 @@ def _extract_avatar_todos(llm, card_text, max_tokens=6000):
     return req, notes
 
 
-def estimate_avatar(llm, card_text, human="동시분해", agent="동시분해", rates=None,
-                    calls="staged"):
+def estimate_avatar(llm, card_text, human="req-actions", agent="agent-llm",
+                    rates=None, calls="single"):
     """사전 측정: 아바타 카드 → speedup. 조합은 인자로만 지정.
 
-    calls="single": 분자를 단일호출판으로 — workunit은 Prompt C(할일+분해
-    한 호출), req-actions는 내부 할일 정리 포함 한 호출. 동시분해는 원래 1회.
-    단일호출은 저렴하지만 할일 목록의 단계별 감사·재처리는 포기."""
+    기본(req-actions + agent-llm + calls="single")은 두 방법론을 한 프롬프트로
+    묶어 LLM 1회에 처리한다(호출 병합, integ-spec §3). calls="staged"면 각자
+    따로 호출 — 방법론과 결과 원리는 동일, 감사·재처리 가능."""
     rates = rates or load_rates()
     notes = []
-    pp = None
-    if human == "동시분해" or agent == "동시분해":
+
+    # 호출 병합: 같은 방법론 쌍을 한 프롬프트로 — 방식이 아니라 호출 최적화
+    if calls == "single" and human == "req-actions" and agent == "agent-llm":
         pp = estimate_paths(llm, card_text, rates)
-        notes += pp["notes"]
+        return {"input": "avatar_card",
+                "human": {"min": pp["human_min"], "p80_min": None,
+                          "method": "req-actions", "merged_call": True},
+                "agent": {"total_min": pp["agent_min"],
+                          "ai_min": pp["agent_ai_min"],
+                          "hitl_min": pp["agent_human_min"],
+                          "method": "agent-llm", "merged_call": True},
+                "speedup": speedup(pp["human_min"], pp["agent_min"]),
+                "notes": pp["notes"]}
 
     # ---- 분모
-    if agent == "동시분해":
-        a = {"total_min": pp["agent_min"], "ai_min": pp["agent_ai_min"],
-             "hitl_min": pp["agent_human_min"], "method": "동시분해"}
-    elif agent == "agent-llm":
+    if agent == "agent-llm":
         ap = estimate_agent_min(llm, card_text, rates)
         a = {"total_min": ap["agent_min"], "ai_min": ap["agent_ai_min"],
              "hitl_min": ap["agent_human_min"], "method": "agent-llm"}
@@ -80,9 +88,7 @@ def estimate_avatar(llm, card_text, human="동시분해", agent="동시분해", 
         raise ValueError(f"사전 측정에서 지원하지 않는 agent 방식: {agent}")
 
     # ---- 분자
-    if human == "동시분해":
-        h = {"min": pp["human_min"], "p80_min": None, "method": "동시분해"}
-    elif human == "workunit":
+    if human == "workunit":
         mode = "single" if calls == "single" else "two_pass"
         r = HumanEffortEstimator(llm, mode=mode).estimate(card_text)
         h = {"min": r["effort"]["p50_minutes"], "p80_min": r["effort"]["p80_minutes"],

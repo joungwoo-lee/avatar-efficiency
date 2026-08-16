@@ -7,7 +7,7 @@
     - 예외 raise 금지 — 실패 시 error 필드에 문자열, 수치는 전부 None
     - 출력 키 전부 존재, agent_min 계열 반드시 수치 (§6.4)
 
-산정 (기본, human_method="동시분해"): integ-spec §3 그대로 — **LLM 1회** 호출이 human/agent/hitl 세 경로를
+산정 (기본, human_method="req-actions"): integ-spec §3 그대로 — **LLM 1회** 호출이 human/agent/hitl 세 경로를
 같은 완료상태 기준으로 함께 분해(paths.estimate_paths), 코드가 rates.json 요율을
 곱한다. 아바타 카드는 이미 정리된 업무 정의라 별도 할일 변환 호출이 불필요.
 분자·분모가 같은 행동×단가 체계 — speedup 배율이 해석 가능.
@@ -57,7 +57,7 @@ class CounterfactualEstimator:
 
     def __init__(self, llm=None, rates_path=DEFAULT_RATES_PATH, max_tokens=2000,
                  catalog_path=DEFAULT_CATALOG_PATH, mode="two_pass",
-                 human_method="동시분해"):
+                 human_method="req-actions"):
         if llm is None:
             try:
                 from onprem_llm_sim import OnpremLLM
