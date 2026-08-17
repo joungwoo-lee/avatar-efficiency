@@ -107,15 +107,16 @@ def render(rows, n_excl, n_err, n_excl_suspect, root):
         "| 조합 | 사람시간 평균 | 효율 평균 | 효율 중앙값 |",
         "|---|---|---|---|",
     ] + [
-        f"| {label} | {avg[hk]:.1f}min"
-        + (f" (+{avg[hk] - avg['h_on']:.1f})" if hk != "h_on" else "")
+        f"| {label} | {avg[hk]:.1f}min "
+        + ("(raw)" if hk == "h_raw" else
+           f"(raw대비 −{100 * (avg['h_raw'] - avg[hk]) / avg['h_raw']:.1f}%)")
         + f" | {sum(r[sk] for r in rows) / n:.2f} "
         f"| {statistics.median(r[sk] for r in rows):.2f} |"
         for label, hk, sk in (
-            ("rw ON · act ON (기본, 바닥 자)", "h_on", "sp_on"),
-            ("rw ON · act OFF (읽기·쓰기만 휴먼화)", "h_actoff", "sp_actoff"),
-            ("rw OFF · act ON (행동만 휴먼화)", "h_rwoff", "sp_rwoff"),
-            ("rw OFF · act OFF (로레코드, 궤적 천장)", "h_raw", "sp_raw"))
+            ("rw ON · act ON", "h_on", "sp_on"),
+            ("rw ON · act OFF", "h_actoff", "sp_actoff"),
+            ("rw OFF · act ON", "h_rwoff", "sp_rwoff"),
+            ("rw OFF · act OFF", "h_raw", "sp_raw"))
     ] + [
         "",
         "효과 분해 (평균): "
