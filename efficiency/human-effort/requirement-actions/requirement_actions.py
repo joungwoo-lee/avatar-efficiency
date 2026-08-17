@@ -455,7 +455,6 @@ def collect_record_stats(jsonl_path, detail=False):
     """
     _SEARCH_TOOLS = ("Glob", "Grep", "WebSearch", "WebFetch", "LS")
     reviewed = input_w = 0
-    artifact = {}
     read_files = set()
     edited_files = set()
     internal = set()         # 세션 내부 부산물 (분류 제외, 건수만 보고)
@@ -476,8 +475,8 @@ def collect_record_stats(jsonl_path, detail=False):
     edit_texts = {}          # fp → 편집 원문+수정문 누적 (정독 핵심 위치 증거)
     pending_query = {}       # tool_use id → (도구명, 인자, 호출 순번) — 조회형 후보
     query_tokens = {}        # 조회 신원 → 인자 속 id성 토큰들 (신호② 언급 대조)
-    out_draft = {}           # fp → Write 최종본 단어수 (신규 작성 실측, §28)
-    out_edit = {}            # fp → Edit new_string 누적 단어수 (수정 실측, §28)
+    write_seq = {}           # fp → [(kind, old, new, tool_id)] 쓰기 순서열 (§31 재생용)
+    failed_tool_ids = set()  # 툴 에러가 난 호출 id — 적용 안 된 편집 제외
 
     def _end_turn():
         # 사용자 턴 경계: 신호④를 이 턴 안에서만 판정, 턴 마무리 답변 보관
@@ -527,6 +526,8 @@ def collect_record_stats(jsonl_path, detail=False):
                         if not _is_system_text(t):
                             input_w += len(t.split())
                     elif b.get("type") == "tool_result":
+                        if b.get("is_error") and b.get("tool_use_id"):
+                            failed_tool_ids.add(b["tool_use_id"])
                         rc = b.get("content")
                         parts = ([rc] if isinstance(rc, str) else
                                  [c.get("text", "") for c in rc
@@ -605,24 +606,30 @@ def collect_record_stats(jsonl_path, detail=False):
                             pending_read[b["id"]] = (fp, region)
                     elif name == "Write":
                         edited_files.add(fp)
-                        artifact[fp] = len((inp.get("content") or "").split())
-                        # 쓰기 분할 실측(§28): Write = 신규 작성(draft)
-                        out_draft[fp] = len((inp.get("content") or "").split())
+                        write_seq.setdefault(fp, []).append(
+                            ("write", "", inp.get("content") or "", b.get("id")))
                         # Write 전체 본문은 편집 증거로 안 쓴다 — 파일을 통째로
                         # 다시 쓰면 모든 블록이 정독으로 물들어 구간 분해가 무효화됨.
                         # 핵심 위치 증거는 Edit의 원문(old_string)만 (§26)
                     else:
                         edited_files.add(fp)
-                        new = inp.get("new_string") or inp.get("new_source") or ""
-                        old_s = inp.get("old_string") or ""
-                        if isinstance(new, str) and new:
-                            artifact[fp] = artifact.get(fp, 0) + len(new.split())
-                            # 쓰기 분할 실측(§28): Edit = 수정(edit) 누적
-                            out_edit[fp] = out_edit.get(fp, 0) + len(new.split())
-                        # 편집 원문 위치가 사람이 정독해야 했던 핵심 구간
-                        edit_texts[fp] = (edit_texts.get(fp, "") + " "
-                                          + (old_s if isinstance(old_s, str) else "")
-                                          + " " + (new if isinstance(new, str) else ""))
+                        multi = inp.get("edits")
+                        pairs = ([(e.get("old_string") or "",
+                                   e.get("new_string") or "")
+                                  for e in multi if isinstance(e, dict)]
+                                 if isinstance(multi, list) else
+                                 [(inp.get("old_string") or "",
+                                   inp.get("new_string")
+                                   or inp.get("new_source") or "")])
+                        for old_s, new in pairs:
+                            old_s = old_s if isinstance(old_s, str) else ""
+                            new = new if isinstance(new, str) else ""
+                            if old_s or new:  # 삭제(new="")도 순계에 반영
+                                write_seq.setdefault(fp, []).append(
+                                    ("edit", old_s, new, b.get("id")))
+                            # 편집 원문 위치가 사람이 정독해야 했던 핵심 구간
+                            edit_texts[fp] = (edit_texts.get(fp, "")
+                                              + " " + old_s + " " + new)
                 if texts:
                     final_answer = " ".join(texts)
     _end_turn()  # 마지막 턴 마감
@@ -725,6 +732,58 @@ def collect_record_stats(jsonl_path, detail=False):
         skim_w += file_split[f][1]
     skim_w += sum(file_read_words.get(f, 0) for f in skim)
     waste_w = sum(file_read_words.get(f, 0) for f in waste)
+
+    # ---- 쓰기 순계 재생 (§31): "결말에 살아남은 단어만 노동이다" — 읽기
+    # 3등급과 같은 원리를 쓰기에 적용. 실패한 편집(툴 에러)은 제외.
+    # · 세션이 만든 파일(Write 기점): 편집을 실제로 재생해 최종본 복원
+    #   (실세션 15개 재생 성공 100% 실측) — 만들었다 갈아엎은 왕복은 자동 0.
+    #   순계 전체를 신규 작성(draft)으로 분류.
+    # · 기존 파일(Edit 기점): 바탕 내용이 없어 정확 재생 불가 — 이후 편집의
+    #   원문(old)이 앞서 써넣은 문구와 포함 관계면 그 겹침을 덮어쓰임(왕복)
+    #   으로 폐기. 부분 겹침은 놓치는 보수적(덜 깎는) 근사. 순계를 수정
+    #   (edit)으로 분류.
+    artifact = {}
+    out_draft = {}
+    out_edit = {}
+    for fp, seq in write_seq.items():
+        seq = [op for op in seq
+               if not (op[3] and op[3] in failed_tool_ids)]
+        if not seq:
+            continue
+        if seq[0][0] == "write":
+            content = None
+            for kind, old, new, _id in seq:
+                if kind == "write":
+                    content = new                      # 재작성 = 이전 판 폐기
+                elif old and content is not None and old in content:
+                    content = content.replace(old, new, 1)
+                else:
+                    content = (content or "") + "\n" + new  # 폴백: 덧붙임(과대 방향)
+            net = len((content or "").split())
+            if net:
+                artifact[fp] = net
+                out_draft[fp] = net
+        else:
+            live = []                                  # 세션 중 써넣은 생존 문구들
+            for kind, old, new, _id in seq:
+                if kind == "write":
+                    live = [new]
+                    continue
+                kept = []
+                for s in live:
+                    if s and old and (s in old or old in s):
+                        if old in s and len(s) > len(old):
+                            kept.append(s.replace(old, "", 1))
+                        # 전부 덮어쓰임 → 왕복, 폐기
+                    else:
+                        kept.append(s)
+                if new:
+                    kept.append(new)
+                live = kept
+            net = sum(len(s.split()) for s in live if s)
+            if net:
+                artifact[fp] = net
+                out_edit[fp] = net
 
     out = {"reviewed_words": reviewed, "input_words": input_w,
            "artifact_words": sum(artifact.values()),

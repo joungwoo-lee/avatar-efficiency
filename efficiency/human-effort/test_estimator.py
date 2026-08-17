@@ -1008,6 +1008,50 @@ class TestRequirementActions(unittest.TestCase):
         self.assertAlmostEqual(bd["search"] + bd["execute"], 1.0, places=1)
         self.assertTrue(any("건수형 상한" in n for n in notes))
 
+    def test_write_net_replay(self):
+        # §31: 쓰기 순계 재생 — 만든 파일은 편집을 재생해 최종본 복원(왕복
+        # 자동 제거), 기존 파일은 덮어쓰임 겹침 차감, 실패 편집(is_error) 제외.
+        import tempfile, os, json as _json
+        from requirement_actions import collect_record_stats
+        lines = [
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "w1", "name": "Write",
+                 "input": {"file_path": "new.md",
+                           "content": "alpha " * 60 + "beta " * 40}}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "e1", "name": "Edit",
+                 "input": {"file_path": "new.md", "old_string": "beta " * 40,
+                           "new_string": "gamma " * 10}}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "e2", "name": "Edit",
+                 "input": {"file_path": "old.py", "old_string": "x1",
+                           "new_string": "delta " * 30}}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "e3", "name": "Edit",
+                 "input": {"file_path": "old.py", "old_string": "delta " * 30,
+                           "new_string": "eps " * 5}}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "e4", "name": "Edit",
+                 "input": {"file_path": "old.py", "old_string": "y",
+                           "new_string": "zeta " * 99}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "e4", "is_error": True,
+                 "content": "Error: old_string not found"}]}},
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(_json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            rs = collect_record_stats(p)
+            # 생성 파일: 100단어 중 beta 40 덮어쓰임 → 60 + gamma 10 = 70
+            self.assertEqual(rs["out_draft_words"], 70)
+            # 기존 파일: delta 30 전부 덮어쓰임 → eps 5 생존, 실패 편집 99 제외
+            self.assertEqual(rs["out_edit_words"], 5)
+            self.assertEqual(rs["artifact_words"], 75)
+        finally:
+            os.unlink(p)
+
     def test_single_call_mode(self):
         from requirement_actions import estimate_actions_single
         out = {"todos": [{"title": "보고서",
