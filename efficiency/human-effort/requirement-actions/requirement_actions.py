@@ -204,17 +204,19 @@ def derive_anchors(requirements, record_stats=None, rates=None):
     # 실측 단어가 없으면(읽기 결과 본문 미기록) 구조 닻은 만들지 않는다 —
     # 잴 수 없는 입력에 건당 고정치를 곱해 숫자를 지어내지 않음. 할일 명시
     # 건수 닻(task_read) 또는 실측 총량 상한으로 떨어진다.
-    if out_words:
+    # 쓰기 실측 = 파일 작성량, 없으면 대화 보고량(마지막 턴 마무리 답변).
+    # 보고형 세션의 산출물은 대화 보고다 — 규모 근거가 아예 없으면 LLM이
+    # 분량을 지어내는 것이 실측 확인됨 (§29: staged draft 1500단어 발명)
+    measured_out = rs.get("artifact_words") or rs.get("answer_words") or 0
+    if out_words and out_words <= (measured_out or out_words):
         anchors["out_words"] = out_words          # 요구사항 명시 분량 → 목표
         anchors["out_words_kind"] = "explicit"
-    elif rs.get("artifact_words"):
-        anchors["out_words"] = rs["artifact_words"]  # 실측(AI가 쓴 양) → 상한만
-        anchors["out_words_kind"] = "measured"
-    elif rs.get("answer_words"):
-        # 보고형 세션(파일 산출물 0): 산출물 = 대화 보고. 마지막 턴 마무리
-        # 답변 실측이 쓰기 상한 — 규모 근거가 아예 없으면 LLM이 분량을
-        # 지어내는 것이 실측 확인됨 (§29: staged draft 1500단어 발명)
-        anchors["out_words"] = rs["answer_words"]
+    elif measured_out:
+        # 명시 수량이 실측 산출물을 초과하면 신뢰하지 않는다 (§30: LLM이
+        # 조사 자료 총량 1,419단어를 할일 분량 칸에 옮겨 적어 26단어 세션이
+        # 71분으로 계산된 사고). 명시 채널은 LLM 경유라 위조 가능 — 사후
+        # 측정은 이 세션이 실제 해낸 일만 재므로 실측이 천장이다.
+        anchors["out_words"] = measured_out       # 실측(AI가 쓴 양) → 상한만
         anchors["out_words_kind"] = "measured"
     # 쓰기 분할 실측 (§28): Write=신규 작성 / Edit=수정 — 도구 기록이 분류의
     # 진실. draft:edit 배분을 LLM 재량에서 회수해 두 방식(req/rec)을 통일.

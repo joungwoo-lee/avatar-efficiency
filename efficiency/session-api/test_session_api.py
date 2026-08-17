@@ -76,9 +76,11 @@ class TestSessionApi(unittest.TestCase):
         self.assertAlmostEqual(
             r["speedup"], round(r["human"]["min"] / r["agent"]["total_min"], 2))
         self.assertEqual(r["session_id"], "s-1")
-        # 닻: 할일 명시 2000단어 → draft 목표 대체
+        # 닻(§30): 할일 명시 2000단어라도 실측 산출물(대화 보고 60단어)이
+        # 천장 — 명시 채널은 LLM 경유라 위조 가능, 실측 초과분은 절단
         counts = {b["primitive"]: b["count"] for b in r["human"]["breakdown"]}
-        self.assertEqual(counts["draft"], 2000)
+        self.assertEqual(counts["draft"], 60)
+        self.assertEqual(r["human"]["anchors"]["out_words_kind"], "measured")
         self.assertEqual(r["human"]["todos"], ["경쟁사 비교 보고서"])
 
     def test_measure_session_staged(self):

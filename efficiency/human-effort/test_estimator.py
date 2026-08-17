@@ -969,6 +969,29 @@ class TestRequirementActions(unittest.TestCase):
         single = build_prompt_single("세션 요약", load_rates())
         self.assertNotIn("min_per_unit", single)
 
+    def test_fake_explicit_quantity_clamped(self):
+        # §30: LLM이 지어낸 "명시 수량"(조사 자료 총량 1419를 할일 분량 칸에
+        # 옮겨 적음)이 실측 산출물(26단어)을 초과하면 실측 상한으로 절단 —
+        # 명시 채널은 LLM 경유라 위조 가능, 실측이 천장.
+        from requirement_actions import estimate_actions_single
+        out = {"todos": [{"title": "답변 보고",
+                          "quantities": [{"name": "분량", "value": 1419,
+                                          "unit": "단어"}],
+                          "acceptance_criteria": []}],
+               "human": [{"primitive": "draft", "count": 26}],
+               "rationale": "t"}
+        stats = {"reviewed_words": 1419, "input_words": 20,
+                 "artifact_words": 0, "answer_words": 26,
+                 "deep_words": 0, "skim_words": 0}
+        r = estimate_actions_single(self._Mock([out]), "x", record_stats=stats)
+        bd = {b["primitive"]: b for b in r["breakdown"]}
+        self.assertEqual(bd["draft"]["count"], 26)  # 1419로 확대되지 않음
+        self.assertEqual(r["anchors"]["out_words_kind"], "measured")
+        # 실측이 없으면 명시 수량은 그대로 신뢰 (기존 계약 유지)
+        r2 = estimate_actions_single(self._Mock([out]), "x")
+        bd2 = {b["primitive"]: b for b in r2["breakdown"]}
+        self.assertEqual(bd2["draft"]["count"], 1419)
+
     def test_count_action_cap(self):
         # §29: 건수형 총 건수 ≤ 할일 수 × 3 — verify(닻 결정권)는 제외하고
         # 남은 여유를 나머지 건수형이 비례로 나눈다. 단어 단위는 불변.
