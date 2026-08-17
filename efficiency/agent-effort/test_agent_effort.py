@@ -100,6 +100,29 @@ class TestTranscriptActual(unittest.TestCase):
         finally:
             os.unlink(p)
 
+    def test_structured_output_counted(self):
+        # §34: JSON 보고(StructuredOutput 입력)는 답변 텍스트와 동급 —
+        # AI 쓰기(draft)·사람 검토(결론 정독)에 계상. 텍스트 150 + 숫자 1.
+        import json, tempfile, os
+        from transcript_actual import parse_actions
+        lines = [
+            {"type": "user", "message": {"role": "user", "content": "분석해줘"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "StructuredOutput",
+                 "input": {"summary": "결과 " * 150, "count": 3}}]}},
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            c = parse_actions(p)
+            self.assertEqual(c["assistant_words"], 151)   # 쓰기 계상
+            self.assertEqual(c["conclusion_words"], 151)  # 결론(정독 검토) 계상
+            self.assertEqual(c["tool_calls"], 1)
+        finally:
+            os.unlink(p)
+
     def test_automation_discount(self):
         # 검증 위임 강등: 통과 테스트 규모에 비례, 형식 테스트는 할인 미미
         import json, tempfile, os

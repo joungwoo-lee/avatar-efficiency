@@ -539,6 +539,17 @@
 - 검증: 합성 세션(지시 100단어 + StructuredOutput 151단어) — draft 발명
   500 → 151 절단. 스위트 51건 통과.
 
+## 34. 분모에도 구조화 보고 채널 계상 — §33의 짝 수리
+
+- §33에서 분자의 JSON 보고 사각을 고치자 비대칭 발생: 분모는 여전히
+  StructuredOutput 호출을 "실행 1건"으로만 세고, JSON 안의 내용 분량은
+  AI 쓰기(draft)에도 사람 검토(review)에도 0 — JSON 세션의 효율이 실제보다
+  낮게 나오는 방향.
+- 조치: `transcript_actual.parse_actions`가 StructuredOutput 입력의 텍스트
+  단어수를 답변 텍스트와 동급 계상(assistant_words + 결론 정독). 헬퍼
+  `json_text_words`를 transcript_actual로 승격, 분자 쪽은 import로 공용.
+- 검증: 수기검산 테스트(텍스트 150+숫자 1 → 쓰기·결론 151). 3종 스위트 통과.
+
 ## 미해결 (알려진 한계·다음 단계)
 
 1. **사람 실측 정답지 0건** — 모든 절대값의 상한. A급 3~5건 확보가 최우선.

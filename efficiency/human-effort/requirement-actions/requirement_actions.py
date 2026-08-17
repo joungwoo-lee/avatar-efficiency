@@ -27,6 +27,7 @@ if str(_AGENT_DIR) not in sys.path:
     sys.path.insert(0, str(_AGENT_DIR))
 
 from agent_effort import load_rates  # noqa: E402 (human 카드 공용)
+from transcript_actual import json_text_words as _json_text_words  # noqa: E402
 
 # 닻으로 총량이 확정되는 단어 단위 행동
 _WORD_READ = ("read",)
@@ -65,17 +66,6 @@ _SYSTEM_TEXT_PREFIXES = (
 
 def _is_system_text(t):
     return t.lstrip().startswith(_SYSTEM_TEXT_PREFIXES)
-
-
-def _json_text_words(v):
-    """구조화 값 안의 텍스트 단어수 (재귀). 숫자는 1단어 취급."""
-    if isinstance(v, str):
-        return len(v.split())
-    if isinstance(v, dict):
-        return sum(_json_text_words(x) for x in v.values())
-    if isinstance(v, list):
-        return sum(_json_text_words(x) for x in v)
-    return 1 if isinstance(v, (int, float)) else 0
 
 
 def _is_internal_artifact(fp):

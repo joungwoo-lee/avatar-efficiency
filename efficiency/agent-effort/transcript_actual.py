@@ -70,6 +70,18 @@ def _words(text):
     return len(text.split()) if isinstance(text, str) else 0
 
 
+def json_text_words(v):
+    """구조화 값 안의 텍스트 단어수 (재귀, 숫자=1단어). §34 공용 헬퍼 —
+    분자 쪽(requirement_actions)도 이 함수를 가져다 쓴다."""
+    if isinstance(v, str):
+        return len(v.split())
+    if isinstance(v, dict):
+        return sum(json_text_words(x) for x in v.values())
+    if isinstance(v, list):
+        return sum(json_text_words(x) for x in v)
+    return 1 if isinstance(v, (int, float)) else 0
+
+
 def _content_blocks(message):
     content = (message or {}).get("content")
     if isinstance(content, str):
@@ -142,6 +154,12 @@ def parse_actions(jsonl_path):
                     if b.get("type") == "tool_use":
                         counts["tool_calls"] += 1
                         inp = b.get("input") or {}
+                        if b.get("name") == "StructuredOutput":
+                            # 구조화 보고 채널 (§34): 최종 산출물이 답변 텍스트
+                            # 대신 이 도구 입력(JSON)으로 나간다 — AI가 써낸
+                            # 분량(draft)이자 사람이 읽을 결론(review 정독)으로
+                            # 답변 텍스트와 동급 계상
+                            ans_w += json_text_words(inp)
                         cmd = inp.get("command")
                         if (b.get("name") in ("Bash", "PowerShell")
                                 and isinstance(cmd, str)
