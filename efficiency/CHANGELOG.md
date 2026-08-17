@@ -550,6 +550,15 @@
   `json_text_words`를 transcript_actual로 승격, 분자 쪽은 import로 공용.
 - 검증: 수기검산 테스트(텍스트 150+숫자 1 → 쓰기·결론 151). 3종 스위트 통과.
 
+## 35. 전 세션 마크다운 리포트 실행 파일 (report_all_sessions.py)
+
+- `session-api/report_all_sessions.py`: PC의 세션 전체를 record-actions
+  w/o LLM(휴먼화 ON)으로 측정해 마크다운 리포트 출력 — 요약(휴먼화 ON/OFF
+  평균·차이·대형/소형 분해), 효율 avg·중앙값·히스토그램, 전체 세션 디테일
+  표(agent·human·speedup ON/OFF 병기). `--out` 파일 저장, 루트 지정 가능.
+- 실측(91세션): 휴먼화가 사람 견적 +57.6min(+26.1%) 걷어냄, 효과는 대형
+  세션 집중(116.1 vs 0.4min). 효율 avg 1.81 / 중앙값 1.98.
+
 ## 미해결 (알려진 한계·다음 단계)
 
 1. **사람 실측 정답지 0건** — 모든 절대값의 상한. A급 3~5건 확보가 최우선.
