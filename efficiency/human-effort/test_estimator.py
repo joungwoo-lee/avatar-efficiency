@@ -636,12 +636,14 @@ class TestRequirementActions(unittest.TestCase):
         self.assertAlmostEqual(r["human_min"], 16.0, places=1)
         self.assertTrue(any("쓰기 분할" in n for n in r["notes"]))
 
-    def test_verify_added_when_missing(self):
+    def test_verify_cap_only(self):
+        # §29: verify 닻은 상한 전용 — LLM이 누락하면 추가하지 않는다
+        # (직행 경로에 없던 검증의 코드 주입 금지, req ≤ rec 원칙)
         from requirement_actions import estimate_actions_from_requirements
         out = {"human": [{"primitive": "draft", "count": 500}]}
         r = estimate_actions_from_requirements(self._Mock([out]), self.REQ)
         bd = {b["primitive"]: b for b in r["breakdown"]}
-        self.assertEqual(bd["verify"]["count"], 3)  # LLM 누락 → 완료조건 수로 추가
+        self.assertNotIn("verify", bd)                # 누락 → 미추가
         self.assertEqual(bd["draft"]["count"], 2000)  # 명시 분량으로 대체
 
     def test_measured_anchor_is_cap_only(self):
@@ -966,6 +968,22 @@ class TestRequirementActions(unittest.TestCase):
         self.assertNotIn("0.005", prompt)
         single = build_prompt_single("세션 요약", load_rates())
         self.assertNotIn("min_per_unit", single)
+
+    def test_count_action_cap(self):
+        # §29: 건수형 총 건수 ≤ 할일 수 × 3 — verify(닻 결정권)는 제외하고
+        # 남은 여유를 나머지 건수형이 비례로 나눈다. 단어 단위는 불변.
+        from requirement_actions import cap_count_actions
+        items = [{"primitive": "draft", "count": 500},
+                 {"primitive": "search", "count": 4},
+                 {"primitive": "execute", "count": 5},
+                 {"primitive": "verify", "count": 2}]
+        notes = []
+        cap_count_actions(items, 1, notes)
+        bd = {it["primitive"]: it["count"] for it in items}
+        self.assertEqual(bd["draft"], 500)
+        self.assertEqual(bd["verify"], 2)
+        self.assertAlmostEqual(bd["search"] + bd["execute"], 1.0, places=1)
+        self.assertTrue(any("건수형 상한" in n for n in notes))
 
     def test_single_call_mode(self):
         from requirement_actions import estimate_actions_single
