@@ -96,6 +96,9 @@ def render(rows, n_excl, n_err, n_excl_suspect, n_active, root):
     suspects = [r for r in rows if r["suspect"]]
     avg = {k: sum(r[k] for r in rows) / n
            for k in ("h_on", "h_rwoff", "h_actoff", "h_raw")}
+    agent_sum = sum(r["agent"] for r in rows)
+    total = {k: sum(r[k] for r in rows)
+             for k in ("h_on", "h_rwoff", "h_actoff", "h_raw")}
     n_diff = sum(1 for r in rows if abs(r["h_rwoff"] - r["h_on"]) > 0.005)
     med_agent = statistics.median(r["agent"] for r in rows)
     big = [r["h_rwoff"] - r["h_on"] for r in rows if r["agent"] > med_agent]
@@ -115,14 +118,14 @@ def render(rows, n_excl, n_err, n_excl_suspect, n_active, root):
         "",
         "## 4조합 비교 — 휴먼화 2축(rw=읽기·쓰기, act=행동 건수)",
         "",
-        "| 조합 | 사람시간 평균 | 효율 평균 | 효율 중앙값 |",
-        "|---|---|---|---|",
+        "| 조합 | 사람시간 평균 | 전체 효율 (휴먼 합산 ÷ 에이전트 합산) |",
+        "|---|---|---|",
     ] + [
         f"| {label} | {avg[hk]:.1f}min "
         + ("(raw)" if hk == "h_raw" else
            f"(raw대비 −{100 * (avg['h_raw'] - avg[hk]) / avg['h_raw']:.1f}%)")
-        + f" | {sum(r[sk] for r in rows) / n:.2f} "
-        f"| {statistics.median(r[sk] for r in rows):.2f} |"
+        + f" | {total[hk] / agent_sum:.2f} "
+        f"({total[hk]:.0f} ÷ {agent_sum:.0f}min) |"
         for label, hk, sk in (
             ("rw ON · act ON", "h_on", "sp_on"),
             ("rw OFF · act ON", "h_rwoff", "sp_rwoff"),
