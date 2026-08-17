@@ -1,65 +1,70 @@
-﻿# session-api ???몄뀡 痢≪젙 API (?ы썑, ?ㅽ뻾???몄뀡??AI ?⑥쑉)
+# session-api — 세션 측정 API (사후, 실행된 세션의 AI 효율)
 
-?ㅽ뻾??Claude Code ?몄뀡 ?몃옖?ㅽ겕由쏀듃(JSONL) 1媛쒕? ?ｌ쑝硫?**"???몄뀡???ㅼ젣濡??쇰쭏???⑥쑉?곸씠?덈굹"**瑜?怨꾩궛?쒕떎.
+실행된 Claude Code 세션 트랜스크립트(JSONL) 1개를 넣으면
+**"이 세션이 실제로 얼마나 효율적이었나"**를 계산한다.
 
 ```
-speedup = human_min(遺꾩옄) 첨 agent_min(遺꾨え)
+speedup = human_min(분자) ÷ agent_min(분모)
 
-遺꾩옄(human) ??諛⑹떇 ?좏깮:
-  req-actions    (湲곕낯) 湲곕줉?믫븷?쇄넂?щ엺 ?됰룞횞?붿쑉. 洹쒕え ?レ옄??肄붾뱶 ?살씠 ?뺤젙
-                 (?쎄린 = ?깃툒蹂??ㅼ륫 ?⑥뼱: 湲곗뿬 ?뚯씪 ?ㅼ륫 ?뺣룆 + ?묎린 ?ㅼ륫횞
-                 ?먯깋?붿쑉(1/10) + ?쏆씫湲?0, ?ъ씫湲?以묐났 ?쒓굅; ?곌린 = ?곗텧臾??곹븳).
-                 calls="single"?대㈃ ?좎씪 ?뺣━+?됰룞 遺꾪빐瑜?LLM 1?뚮줈 蹂묓빀.
-  record-actions ?좎씪 ??嫄곗튂怨?湲곕줉?먯꽌 諛붾줈 ?됰룞 遺꾪빐. 媛숈? ???곸슜.
-                 援먯감?뺤씤 湲곗??????곌린 洹쒕え媛 AI ?곗텧 ?꾨웾???곸냽(4~5諛?怨쇰?),
-                 ????뺥깭瑜??몃룞?쇰줈 ?ㅼ씤?섎뒗 ?쒓퀎 (CHANGELOG 짠20 ?議??ㅽ뿕).
-遺꾨え: ?몃옖?ㅽ겕由쏀듃??湲곕줉???숈옉 ?⑥꽌 횞 ?붿쑉  (../agent-effort/transcript_actual,
-      LLM 誘몄궗????tool ?몄텧쨌?앹꽦/?쎄린 ?⑥뼱(湲곌퀎) + 吏?쑣룰??졖룹쨷??hitl))
-      蹂묐젹 ?쒕툕?먯씠?꾪듃???ㅼ젣 ?뚮え ?쒓컙???꾨땲誘濡?誘멸???(?먯썝??李멸퀬 ?듭뀡留?.
-      湲??몄뀡???뺤텞 ?붿빟쨌?쒖뒪??二쇱엯 ?띿뒪?몃룄 ?щ엺 吏?쒓? ?꾨땲誘濡??쒖쇅
-      (CHANGELOG 짠17)
+분자(human) — 방식 선택:
+  req-actions    (기본) 기록→할일→사람 행동×요율. 규모 숫자는 코드 닻이 확정
+                 (읽기 = 등급별 실측 단어: 기여 파일 실측 정독 + 훑기 실측×
+                 탐색요율(1/10) + 헛읽기 0, 재읽기 중복 제거; 쓰기 = 산출물 상한).
+                 calls="single"이면 할일 정리+행동 분해를 LLM 1회로 병합.
+  record-actions 할일 안 거치고 기록에서 바로 행동 분해. 같은 닻 적용.
+                 교차확인 기준선 — 쓰기 규모가 AI 산출 전량을 상속(4~5배 과대),
+                 대화 형태를 노동으로 오인하는 한계 (CHANGELOG §20 대조 실험).
+분모: 트랜스크립트에 기록된 동작 단서 × 요율  (../agent-effort/transcript_actual,
+      LLM 미사용 — tool 호출·생성/읽기 단어(기계) + 지시·검토·중단(hitl))
+      병렬 서브에이전트는 실제 소모 시간이 아니므로 미가산 (자원량 참고 옵션만).
+      긴 세션의 압축 요약·시스템 주입 텍스트도 사람 지시가 아니므로 제외
+      (CHANGELOG §17)
 ```
 
-workunit 諛⑹떇(?붽뎄?ы빆?믪궛異쒕Ъ ?⑥쐞?묺onte Carlo)???ы썑 痢≪젙? **?먭린** ??`workunit_deprecated.py`??李멸퀬 蹂닿? (洹쇨굅: CHANGELOG 짠20 ?좉뎄 ?議?.
+workunit 방식(요구사항→산출물 단위→Monte Carlo)의 사후 측정은 **폐기** —
+`workunit_deprecated.py`에 참고 보관 (근거: CHANGELOG §20 신구 대조).
 
-?ъ쟾(?꾨컮? ?뺤쓽 ?쒖젏) 痢≪젙? [`../counterfactual-api`](../counterfactual-api) ??媛숈? speedup ?뺤쓽, ?낅젰留??ㅻ쫫.
+사전(아바타 정의 시점) 측정은 [`../counterfactual-api`](../counterfactual-api) —
+같은 speedup 정의, 입력만 다름.
 
-## ?뚯씪 援ъ꽦
+## 파일 구성
 
-| ?뚯씪 | ??븷 |
+| 파일 | 역할 |
 |---|---|
-| `req_actions_api.py` | **湲곕낯 API** ???좎씪 嫄곗튂??諛⑹떇 (requirement-actions) |
-| `record_actions_api.py` | **援먯감?뺤씤 API** ???좎씪 ??嫄곗튂??諛⑹떇 (record-actions) |
-| `record_actions_code_api.py` | **LLM 0??API** (짠32) ??遺꾩옄源뚯? 肄붾뱶 ?ㅼ륫(?쎄린 ??빐 援ъ“ + ?곌린 ?쒓퀎 + 嫄댁닔 怨좎젙 洹쒖튃). `humanize=False`(`--raw`)濡??대㉫??湲곕뒫 ???議곌뎔 ?ㅽ뻾 媛??|
-| `record_actions_code_api_all_sessions.bat` / `.sh` | **?먰겢由??ㅽ뻾 ?뚯씪** (Windows ?붾툝?대┃ / Linux `./record_actions_code_api_all_sessions.sh`) ??洹?PC ??`~/.claude/projects`)???몄뀡 ?꾩껜瑜?LLM 0?뚮줈 痢≪젙???덉뿉 `session-efficiency-report.md` ???|
-| `record_actions_code_api_all_sessions.py` | ???ㅽ뻾 ?뚯씪??蹂몄껜 ??留덊겕?ㅼ슫 由ы룷???대㉫??ON/OFF ?④낵 + ?⑥쑉 ?덉뒪?좉렇??+ ?꾩껜 ?몄뀡 ?뷀뀒???? ?앹꽦. 吏곸젒 ???? `python record_actions_code_api_all_sessions.py [猷⑦듃] [--out ?뚯씪.md]` |
-| `session_api.py` | 怨듭슜 肄붿뼱 ??遺꾨え ?ㅼ륫쨌珥덉냼??寃뚯씠?맞?measure_session(human=...)` |
-| `workunit_deprecated.py` | ?먭린??workunit ?몄뀡 痢≪젙 (李멸퀬 蹂닿?) |
+| `req_actions_api.py` | **기본 API** — 할일 거치는 방식 (requirement-actions) |
+| `record_actions_api.py` | **교차확인 API** — 할일 안 거치는 방식 (record-actions) |
+| `record_actions_code_api.py` | **LLM 0회 API** (§32) — 분자까지 코드 실측(읽기 항해 구조 + 쓰기 순계 + 건수 고정 규칙). `humanize=False`(`--raw`)로 휴먼화 기능 끈 대조군 실행 가능 |
+| `record_actions_code_api_all_sessions.bat` / `.sh` | **원클릭 실행 파일** (Windows 더블클릭 / Linux `./record_actions_code_api_all_sessions.sh`) — 그 PC 홈(`~/.claude/projects`)의 세션 전체를 LLM 0회로 측정해 홈에 `session-efficiency-report.md` 저장 |
+| `record_actions_code_api_all_sessions.py` | 위 실행 파일의 본체 — 마크다운 리포트(휴먼화 ON/OFF 효과 + 효율 히스토그램 + 전체 세션 디테일 표) 생성. 직접 쓸 때: `python record_actions_code_api_all_sessions.py [루트] [--out 파일.md]` |
+| `session_api.py` | 공용 코어 — 분모 실측·초소형 게이트·`measure_session(human=...)` |
+| `workunit_deprecated.py` | 폐기된 workunit 세션 측정 (참고 보관) |
 
-## ?ъ슜 ??API ??req-actions (湲곕낯)
+## 사용 — API ① req-actions (기본)
 
-?좎씪 ?뺣━ ???щ엺 ?됰룞 ???붿쑉. 洹쒕え ?レ옄??肄붾뱶 ?살씠 ?뺤젙.
+할일 정리 → 사람 행동 → 요율. 규모 숫자는 코드 닻이 확정.
 
 ```bash
-python req_actions_api.py session.jsonl [s2.jsonl ...]   # ?몄뀡蹂?+ ?⑹궛 由ы룷??python req_actions_api.py session.jsonl --json
-python req_actions_api.py session.jsonl --staged   # ?좎씪?믫뻾??2??(?④퀎 媛먯궗)
+python req_actions_api.py session.jsonl [s2.jsonl ...]   # 세션별 + 합산 리포트
+python req_actions_api.py session.jsonl --json
+python req_actions_api.py session.jsonl --staged   # 할일→행동 2회 (단계 감사)
 ```
 
 ```python
 from req_actions_api import measure, measure_batch
-r = measure(llm, "session.jsonl")        # LLM 1??(?좎씪+?됰룞 蹂묓빀)
-r = measure(llm, "session.jsonl", calls="staged")   # LLM 2?? ?④퀎蹂?媛먯궗
+r = measure(llm, "session.jsonl")        # LLM 1회 (할일+행동 병합)
+r = measure(llm, "session.jsonl", calls="staged")   # LLM 2회, 단계별 감사
 r["speedup"]                             # human_min / agent_total
-r["speedup_vs_hitl"]                     # ?щ엺 媛먮룆?쒓컙留?遺꾨え濡?r["human"]["min"], r["human"]["breakdown"]
-r["human"]["todos"]                      # ?대? ?뺣━???좎씪 紐⑸줉
-r["human"]["anchors"]                    # 肄붾뱶媛 ?뺤젙??洹쒕え ??(媛먯궗??
+r["speedup_vs_hitl"]                     # 사람 감독시간만 분모로
+r["human"]["min"], r["human"]["breakdown"]
+r["human"]["todos"]                      # 내부 정리된 할일 목록
+r["human"]["anchors"]                    # 코드가 확정한 규모 닻 (감사용)
 ```
 
-## ?ъ슜 ??API ??record-actions (援먯감?뺤씤 湲곗???
+## 사용 — API ② record-actions (교차확인 기준선)
 
-?좎씪 ??嫄곗튂怨?湲곕줉?먯꽌 諛붾줈 ?됰룞 遺꾪빐. 媛숈? ???곸슜.
-**?⑤룆 ?먯젙 湲덉?** ???곌린 洹쒕え媛 AI ?곗텧 ?꾨웾???곸냽(4~5諛?怨쇰?)?섎뒗
-?쒓퀎媛 ?ㅼ륫 ?뺤씤??(CHANGELOG 짠20). req-actions 寃곌낵??援먯감?뺤씤??
+할일 안 거치고 기록에서 바로 행동 분해. 같은 닻 적용.
+**단독 판정 금지** — 쓰기 규모가 AI 산출 전량을 상속(4~5배 과대)하는
+한계가 실측 확인됨 (CHANGELOG §20). req-actions 결과의 교차확인용.
 
 ```bash
 python record_actions_api.py session.jsonl [s2.jsonl ...]
@@ -68,34 +73,36 @@ python record_actions_api.py session.jsonl --json
 
 ```python
 from record_actions_api import measure, measure_batch
-r = measure(llm, "session.jsonl")        # LLM 1??r["human"]["min"], r["human"]["anchors"]
+r = measure(llm, "session.jsonl")        # LLM 1회
+r["human"]["min"], r["human"]["anchors"]
 ```
 
-## 怨듭슜 (??API ?숈씪)
+## 공용 (두 API 동일)
 
 ```bash
-python session_api.py session.jsonl --actual-only    # 遺꾨え ?ㅼ륫留?(LLM 遺덊븘??
-python test_session_api.py                           # ?ㅽ봽?쇱씤 ?뚯뒪??(mock)
+python session_api.py session.jsonl --actual-only    # 분모 실측만 (LLM 불필요)
+python test_session_api.py                           # 오프라인 테스트 (mock)
 ```
 
 ```python
 from session_api import JsonRetryLLM
-llm = JsonRetryLLM(OnpremLLM())          # ?꾨줉??遺덈웾 JSON ?먮룞 ?ъ떆??```
+llm = JsonRetryLLM(OnpremLLM())          # 프록시 불량 JSON 자동 재시도
+```
 
-諛섑솚 ?ㅽ궎留덈뒗 ??API ?숈씪: `{session, session_id, human: {min, method,
+반환 스키마는 두 API 동일: `{session, session_id, human: {min, method,
 anchors, todos, breakdown}, agent: {machine_min, hitl_min, total_min, ...},
-speedup, speedup_vs_hitl, notes}` (+珥덉냼?뺤씠硫?`{excluded, reason}`).
+speedup, speedup_vs_hitl, notes}` (+초소형이면 `{excluded, reason}`).
 
-## 珥덉냼???몄뀡 ?먮룞 ?쒖쇅
+## 초소형 세션 자동 제외
 
-痢≪젙 ?꾩뿉 ?ㅼ륫移섎줈 ?먯젙???〓떞쨌?묓릟湲??몄뀡? **痢≪젙?먯꽌 ?쒖쇅**?쒕떎 (LLM ?몄텧 0??:
-- 湲곗?: 寃?졖룹엯???먮즺 100?⑥뼱 誘몃쭔 洹몃━怨??곗텧臾?50?⑥뼱 誘몃쭔
-- 洹쇨굅: 14?몄뀡 ?ㅼ륫?먯꽌 珥덉냼?뺤? ?꾨즺議곌굔 怨좎젙鍮꾨줈 5~7諛?????由??뺤씤
-- 諛섑솚: `{"excluded": true, "reason": ...}` ??媛뺤젣 痢≪젙? `force=True`
+측정 전에 실측치로 판정해 잡담·핑퐁급 세션은 **측정에서 제외**한다 (LLM 호출 0회):
+- 기준: 검토·입력 자료 100단어 미만 그리고 산출물 50단어 미만
+- 근거: 14세션 실측에서 초소형은 완료조건 고정비로 5~7배 역부풀림 확인
+- 반환: `{"excluded": true, "reason": ...}` — 강제 측정은 `force=True`
 
-## ?댁꽍 二쇱쓽
+## 해석 주의
 
-- ?붿쑉? seed ?ㅼ닔 ?ы븿, 蹂댁젙 ?????덈?媛믩낫???몄뀡 媛?**?곷? 鍮꾧탳** ?⑸룄
-  (../agent-effort/README.md ?쒓퀎 ??.
-- ?〓떞쨌?뚯뒪?몄꽦 ?몄뀡? ?붽뎄?ы빆 ?먯껜媛 臾댁쓽誘명빐 ?섏튂 ?섎? ?놁쓬.
-- record-actions ?섏튂??湲곗???鍮꾧탳?????⑤룆 ?먯젙???곗? 留?寃?(짠20).
+- 요율은 seed 다수 포함, 보정 전 — 절대값보다 세션 간 **상대 비교** 용도
+  (../agent-effort/README.md 한계 절).
+- 잡담·테스트성 세션은 요구사항 자체가 무의미해 수치 의미 없음.
+- record-actions 수치는 기준선 비교용 — 단독 판정에 쓰지 말 것 (§20).
