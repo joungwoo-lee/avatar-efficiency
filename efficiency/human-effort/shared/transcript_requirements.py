@@ -21,8 +21,12 @@ from pathlib import Path as _Path
 _RB = _Path(__file__).resolve().parent.parent / "requirement-based"
 if str(_RB) not in _sys.path:
     _sys.path.insert(0, str(_RB))
+_RA = _Path(__file__).resolve().parent.parent / "requirement-actions"
+if str(_RA) not in _sys.path:
+    _sys.path.insert(0, str(_RA))
 from estimator import validate_requirements_output  # noqa: E402
 from prompts import number_lines  # noqa: E402
+from requirement_actions import replay_write_net  # noqa: E402 (§31 순계 공용)
 
 TRANSCRIPT_PROMPT_VERSION = "requirement_extractor.v1"
 
@@ -187,7 +191,8 @@ def normalize_claude_code_jsonl(jsonl_path, max_chars=12000,
     last_assistant_text = ""
     file_ops = []
     tool_counts = {}
-    artifact_words = {}
+    write_seq = {}       # §31 순계 재생용 쓰기 순서열
+    failed_ids = set()   # 툴 에러 난 호출 — 적용 안 된 편집 제외
     with open(jsonl_path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -216,6 +221,8 @@ def normalize_claude_code_jsonl(jsonl_path, max_chars=12000,
                     user_total_words += len(text.split())
                 for bb in blocks:  # 조사에서 검토된 자료(파일·검색 결과) 분량
                     if isinstance(bb, dict) and bb.get("type") == "tool_result":
+                        if bb.get("is_error") and bb.get("tool_use_id"):
+                            failed_ids.add(bb["tool_use_id"])
                         rc = bb.get("content")
                         if isinstance(rc, str):
                             reviewed_words += len(rc.split())
@@ -235,28 +242,41 @@ def normalize_claude_code_jsonl(jsonl_path, max_chars=12000,
                             rf = (b.get("input") or {}).get("file_path")
                             if rf and rf not in read_files:
                                 read_files.append(rf)
-                        if name in ("Write", "Edit", "NotebookEdit"):
+                        if name in ("Write", "Edit", "MultiEdit",
+                                    "NotebookEdit"):
                             inp = b.get("input") or {}
                             fp = inp.get("file_path")
                             if fp and fp not in file_ops:
                                 file_ops.append(fp)
-                            # 산출물 규모(최종 결과물 분량) — AI 경로가 아닌
-                            # 결과물 실측. 반복 재작성 중복 방지: Write는 마지막
-                            # 상태로 리셋, Edit은 그 이후 기여만 가산 (순계 근사)
+                            # 산출물 규모 = §31 순계 재생 — 수집 후 일괄 계산
                             if fp and name == "Write":
                                 content = inp.get("content") or ""
                                 if isinstance(content, str):
-                                    artifact_words[fp] = len(content.split())
+                                    write_seq.setdefault(fp, []).append(
+                                        ("write", "", content, b.get("id")))
                             elif fp:
-                                new = (inp.get("new_string") or
-                                       inp.get("new_source") or "")
-                                if isinstance(new, str) and new:
-                                    artifact_words[fp] = artifact_words.get(fp, 0)                                         + len(new.split())
+                                multi = inp.get("edits")
+                                pairs = ([(e.get("old_string") or "",
+                                           e.get("new_string") or "")
+                                          for e in multi
+                                          if isinstance(e, dict)]
+                                         if isinstance(multi, list) else
+                                         [(inp.get("old_string") or "",
+                                           inp.get("new_string")
+                                           or inp.get("new_source") or "")])
+                                for old_s, new in pairs:
+                                    old_s = (old_s if isinstance(old_s, str)
+                                             else "")
+                                    new = new if isinstance(new, str) else ""
+                                    if old_s or new:
+                                        write_seq.setdefault(fp, []).append(
+                                            ("edit", old_s, new, b.get("id")))
                     elif b.get("type") == "text":
                         texts.append(b.get("text", ""))
                 if texts:
                     last_assistant_text = " ".join(texts).strip()
 
+    artifact_words, _d, _e = replay_write_net(write_seq, failed_ids)
     lines = []
     for i, t in enumerate(user_events, 1):
         lines.append(f"[event:U{i}] 사용자 지시: {t}")

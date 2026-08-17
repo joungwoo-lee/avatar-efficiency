@@ -425,6 +425,66 @@ def estimate_actions_from_requirements(llm, requirements, record_stats=None,
     }
 
 
+def replay_write_net(write_seq, failed_tool_ids=()):
+    """쓰기 순계 재생 (§31): "결말에 살아남은 단어만 노동이다" — 읽기
+    3등급과 같은 원리를 쓰기에 적용. 실패한 편집(툴 에러)은 제외.
+
+    write_seq: fp → [(kind, old, new, tool_id)] 시간순 쓰기 순서열.
+    반환: (artifact, out_draft, out_edit) — fp별 순계 단어수.
+
+    · 세션이 만든 파일(Write 기점): 편집을 실제로 재생해 최종본 복원
+      (실세션 15개 재생 성공 100% 실측) — 만들었다 갈아엎은 왕복은 자동 0.
+      순계 전체를 신규 작성(draft)으로 분류.
+    · 기존 파일(Edit 기점): 바탕 내용이 없어 정확 재생 불가 — 이후 편집의
+      원문(old)이 앞서 써넣은 문구와 포함 관계면 그 겹침을 덮어쓰임(왕복)
+      으로 폐기. 부분 겹침은 놓치는 보수적(덜 깎는) 근사. 순계를 수정
+      (edit)으로 분류.
+    """
+    artifact = {}
+    out_draft = {}
+    out_edit = {}
+    failed = set(failed_tool_ids)
+    for fp, seq in write_seq.items():
+        seq = [op for op in seq if not (op[3] and op[3] in failed)]
+        if not seq:
+            continue
+        if seq[0][0] == "write":
+            content = None
+            for kind, old, new, _id in seq:
+                if kind == "write":
+                    content = new                      # 재작성 = 이전 판 폐기
+                elif old and content is not None and old in content:
+                    content = content.replace(old, new, 1)
+                else:
+                    content = (content or "") + "\n" + new  # 폴백: 덧붙임(과대 방향)
+            net = len((content or "").split())
+            if net:
+                artifact[fp] = net
+                out_draft[fp] = net
+        else:
+            live = []                                  # 세션 중 써넣은 생존 문구들
+            for kind, old, new, _id in seq:
+                if kind == "write":
+                    live = [new]
+                    continue
+                kept = []
+                for s in live:
+                    if s and old and (s in old or old in s):
+                        if old in s and len(s) > len(old):
+                            kept.append(s.replace(old, "", 1))
+                        # 전부 덮어쓰임 → 왕복, 폐기
+                    else:
+                        kept.append(s)
+                if new:
+                    kept.append(new)
+                live = kept
+            net = sum(len(s.split()) for s in live if s)
+            if net:
+                artifact[fp] = net
+                out_edit[fp] = net
+    return artifact, out_draft, out_edit
+
+
 def collect_record_stats(jsonl_path, detail=False):
     """트랜스크립트에서 닻용 실측치 수집 (LLM 미사용, 결정론적).
 
@@ -733,57 +793,7 @@ def collect_record_stats(jsonl_path, detail=False):
     skim_w += sum(file_read_words.get(f, 0) for f in skim)
     waste_w = sum(file_read_words.get(f, 0) for f in waste)
 
-    # ---- 쓰기 순계 재생 (§31): "결말에 살아남은 단어만 노동이다" — 읽기
-    # 3등급과 같은 원리를 쓰기에 적용. 실패한 편집(툴 에러)은 제외.
-    # · 세션이 만든 파일(Write 기점): 편집을 실제로 재생해 최종본 복원
-    #   (실세션 15개 재생 성공 100% 실측) — 만들었다 갈아엎은 왕복은 자동 0.
-    #   순계 전체를 신규 작성(draft)으로 분류.
-    # · 기존 파일(Edit 기점): 바탕 내용이 없어 정확 재생 불가 — 이후 편집의
-    #   원문(old)이 앞서 써넣은 문구와 포함 관계면 그 겹침을 덮어쓰임(왕복)
-    #   으로 폐기. 부분 겹침은 놓치는 보수적(덜 깎는) 근사. 순계를 수정
-    #   (edit)으로 분류.
-    artifact = {}
-    out_draft = {}
-    out_edit = {}
-    for fp, seq in write_seq.items():
-        seq = [op for op in seq
-               if not (op[3] and op[3] in failed_tool_ids)]
-        if not seq:
-            continue
-        if seq[0][0] == "write":
-            content = None
-            for kind, old, new, _id in seq:
-                if kind == "write":
-                    content = new                      # 재작성 = 이전 판 폐기
-                elif old and content is not None and old in content:
-                    content = content.replace(old, new, 1)
-                else:
-                    content = (content or "") + "\n" + new  # 폴백: 덧붙임(과대 방향)
-            net = len((content or "").split())
-            if net:
-                artifact[fp] = net
-                out_draft[fp] = net
-        else:
-            live = []                                  # 세션 중 써넣은 생존 문구들
-            for kind, old, new, _id in seq:
-                if kind == "write":
-                    live = [new]
-                    continue
-                kept = []
-                for s in live:
-                    if s and old and (s in old or old in s):
-                        if old in s and len(s) > len(old):
-                            kept.append(s.replace(old, "", 1))
-                        # 전부 덮어쓰임 → 왕복, 폐기
-                    else:
-                        kept.append(s)
-                if new:
-                    kept.append(new)
-                live = kept
-            net = sum(len(s.split()) for s in live if s)
-            if net:
-                artifact[fp] = net
-                out_edit[fp] = net
+    artifact, out_draft, out_edit = replay_write_net(write_seq, failed_tool_ids)
 
     out = {"reviewed_words": reviewed, "input_words": input_w,
            "artifact_words": sum(artifact.values()),
