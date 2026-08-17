@@ -61,14 +61,21 @@ def collect(root):
     return rows, n_excl, n_err, n_excl_suspect
 
 
-def histogram(values):
-    buckets = {}
-    for s in values:
-        buckets[min(int(s), 10)] = buckets.get(min(int(s), 10), 0) + 1
-    lines = ["| 범위 | 개수 |", "|---|---|"]
-    for b in range(0, 11):
-        if b in buckets:
-            lines.append(f"| {f'{b}.x' if b < 10 else '10.x+'} | {buckets[b]} |")
+def histogram(series):
+    """{조합이름: [효율값...]} → 조합별 효율 구간 개수 표 (마크다운 줄 목록)."""
+    hist = {}
+    for name, values in series.items():
+        b = {}
+        for s in values:
+            b[min(int(s), 10)] = b.get(min(int(s), 10), 0) + 1
+        hist[name] = b
+    top = max((k for b in hist.values() for k in b), default=0)
+    lines = ["| 범위 | " + " | ".join(hist) + " |",
+             "|---|" + "---|" * len(hist)]
+    for k in range(0, top + 1):
+        lbl = f"{k}.x" if k < 10 else "10.x+"
+        lines.append(f"| {lbl} | "
+                     + " | ".join(str(hist[h].get(k, 0)) for h in hist) + " |")
     return lines
 
 
@@ -123,10 +130,14 @@ def render(rows, n_excl, n_err, n_excl_suspect, root):
         f"{sum(small) / len(small) if small else 0:.1f}min "
         "(번복 소거 + 등급 분해 효과는 대형 세션에 집중).",
         "",
-        "## 효율 히스토그램 (기본 자: rw·act ON 기준)",
+        "## 효율값 구간별 개수 (4조합)",
         "",
     ]
-    out += histogram(sps)
+    out += histogram({
+        "rw·act ON": sps,
+        "rwON·actOFF": [r["sp_actoff"] for r in rows],
+        "rwOFF·actON": [r["sp_rwoff"] for r in rows],
+        "로레코드": [r["sp_raw"] for r in rows]})
     out += [
         "",
         "## 디테일 — 전체 측정 표 (agent 시간 큰 순, min/효율)",
