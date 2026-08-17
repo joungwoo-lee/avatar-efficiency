@@ -27,13 +27,36 @@ workunit 방식(요구사항→산출물 단위→Monte Carlo)의 사후 측정�
 사전(아바타 정의 시점) 측정은 [`../counterfactual-api`](../counterfactual-api) —
 같은 speedup 정의, 입력만 다름.
 
+## 세 자의 위치 — 어느 자가 뭘 재나 (필독)
+
+세 API는 같은 세션을 다른 자로 잰다. **핵심: `record_actions_code_api`의
+건수형은 AI 행동의 코드 변환이 아니라 "직행 경로의 바닥값"이다** —
+검색을 40번 했어도 search 1건("흔적 있으면 1건" 규칙). 따라서:
+
+```
+record_actions_code_api  = 바닥 자. 직행 경로의 최소값을 코드로 박음 (LLM 0회)
+req_actions_api          = 바닥 근처. 직행 지시 + 할일 중간층 + 건수 상한(코드
+                           강제)이 바닥으로 수렴시킴. LLM이 항목을 누락하면
+                           바닥 밑으로도 감 (닻은 조정만 하고 추가하지 않음)
+record_actions_api       = 위쪽. 직행 지시는 있으나 요약 속 활동 신호(검색·
+                           실행·왕복 횟수)에 LLM이 앵커링되고, 건수 상한을
+                           의도적으로 안 달아(비대칭 장치, §29) 궤적 냄새를
+                           간직한 기준선
+```
+
+10세션 실측(primitive별): 닻이 있는 draft/edit/read는 세 자가 **완전 동일**,
+닻이 없는 건수형(decide/execute/verify/search 등)만 rec가 +37min(26%) 위 —
+"숫자 결정권을 코드로 옮긴 곳만 결정론이 된다"의 실측 증명. 예상 순서는
+항상 **req ≈ code ≤ rec**이며, 이 순서가 깨지면 측정 버그를 의심할 것
+(§29·§30·§33의 사고들이 전부 이 순서 역전으로 발견됨).
+
 ## 파일 구성
 
 | 파일 | 역할 |
 |---|---|
-| `req_actions_api.py` | **기본 API** — 할일 거치는 방식 (requirement-actions) |
-| `record_actions_api.py` | **교차확인 API** — 할일 안 거치는 방식 (record-actions) |
-| `record_actions_code_api.py` | **LLM 0회 API** (§32) — 분자까지 코드 실측(읽기 항해 구조 + 쓰기 순계 + 건수 고정 규칙). `humanize=False`(`--raw`)로 휴먼화 기능 끈 대조군 실행 가능 |
+| `req_actions_api.py` | **기본 API** — 할일 거치는 방식 (requirement-actions). 직행 자 — 바닥 근처 |
+| `record_actions_api.py` | **교차확인 API** — 할일 안 거치는 방식 (record-actions). 궤적 냄새를 간직한 기준선 — 위쪽 자 |
+| `record_actions_code_api.py` | **LLM 0회 API** (§32) — 분자까지 코드 실측(읽기 항해 구조 + 쓰기 순계 + 건수형은 "흔적 있으면 1건" = **직행 바닥값**). `humanize=False`(`--raw`)로 휴먼화 기능 끈 대조군 실행 가능 |
 | `record_actions_code_api_all_sessions.bat` / `.sh` | **원클릭 실행 파일** (Windows 더블클릭 / Linux `./record_actions_code_api_all_sessions.sh`) — 그 PC 홈(`~/.claude/projects`)의 세션 전체를 LLM 0회로 측정해 홈에 `session-efficiency-report.md` 저장 |
 | `record_actions_code_api_all_sessions.py` | 위 실행 파일의 본체 — 마크다운 리포트(휴먼화 ON/OFF 효과 + 효율 히스토그램 + 전체 세션 디테일 표) 생성. 직접 쓸 때: `python record_actions_code_api_all_sessions.py [루트] [--out 파일.md]` |
 | `session_api.py` | 공용 코어 — 분모 실측·초소형 게이트·`measure_session(human=...)` |
@@ -63,8 +86,11 @@ r["human"]["anchors"]                    # 코드가 확정한 규모 닻 (감�
 ## 사용 — API ② record-actions (교차확인 기준선)
 
 할일 안 거치고 기록에서 바로 행동 분해. 같은 닻 적용.
-**단독 판정 금지** — 쓰기 규모가 AI 산출 전량을 상속(4~5배 과대)하는
-한계가 실측 확인됨 (CHANGELOG §20). req-actions 결과의 교차확인용.
+**단독 판정 금지** — 프롬프트는 직행을 지시하지만 입력 요약의 활동 신호
+(검색·실행·왕복 횟수)에 LLM이 앵커링되고 건수 상한도 의도적으로 없어
+(§29 비대칭 장치) 건수형이 부푼다. 그래서 req-actions보다 **크게 나오는
+것이 정상**이고, 그 간격이 곧 "직행 자와 궤적 자의 거리"다. req-actions
+결과의 교차확인용.
 
 ```bash
 python record_actions_api.py session.jsonl [s2.jsonl ...]
@@ -75,6 +101,24 @@ python record_actions_api.py session.jsonl --json
 from record_actions_api import measure, measure_batch
 r = measure(llm, "session.jsonl")        # LLM 1회
 r["human"]["min"], r["human"]["anchors"]
+```
+
+## 사용 — API ③ record-actions w/o LLM (바닥 자, LLM 0회)
+
+분자까지 전부 코드 실측 — 비용 0, 완전 결정론(같은 입력 = 같은 결과).
+건수형은 "흔적 있으면 1건"(직행 바닥값)이라 **절대값은 보수적** — 판단
+노동이 깊은 세션은 과소. 켬/끔 대조와 세션 간 비교, 대량 일괄 측정 용도.
+
+```bash
+python record_actions_code_api.py session.jsonl [s2.jsonl ...]
+python record_actions_code_api.py session.jsonl --raw    # 휴먼화 끈 대조군
+```
+
+```python
+from record_actions_code_api import measure, measure_batch
+r = measure("session.jsonl")                  # LLM 인자 자체가 없음
+r = measure("session.jsonl", humanize=False)  # 읽기 등급·쓰기 순계 끔
+r["suspect_output_channel"]                   # 쓰기 툴 포맷 미등록 의심(§38)
 ```
 
 ## 공용 (두 API 동일)
