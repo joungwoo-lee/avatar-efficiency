@@ -28,10 +28,20 @@ from record_actions_code_api import measure  # noqa: E402
 DEFAULT_ROOT = os.path.join(str(Path.home()), ".claude", "projects")
 
 
+ACTIVE_GRACE_SEC = 600  # 최근 10분 내 갱신된 세션 = 진행 중 — 측정 제외
+
+
 def collect(root):
+    import time
     files = [f for f in glob.glob(os.path.join(root, "**", "*.jsonl"),
                                   recursive=True)
              if f"{os.sep}subagents{os.sep}" not in f]
+    # 진행 중 세션 제외 (§44): 기록이 아직 자라는 세션을 측정에 넣으면
+    # 실행할 때마다 합계·분포가 흔들린다 — 완결된 세션만 잰다.
+    now = time.time()
+    active = [f for f in files
+              if now - os.path.getmtime(f) < ACTIVE_GRACE_SEC]
+    files = [f for f in files if f not in active]
     rows = []
     n_excl = n_err = n_excl_suspect = 0
     for f in files:
@@ -58,7 +68,7 @@ def collect(root):
                          "suspect_why": (on.get("notes") or [""])[0]})
         except Exception:
             n_err += 1
-    return rows, n_excl, n_err, n_excl_suspect
+    return rows, n_excl, n_err, n_excl_suspect, len(active)
 
 
 def histogram(series):
@@ -79,7 +89,7 @@ def histogram(series):
     return lines
 
 
-def render(rows, n_excl, n_err, n_excl_suspect, root):
+def render(rows, n_excl, n_err, n_excl_suspect, n_active, root):
     n = len(rows)
     if not n:
         return f"측정 가능한 세션 없음 (제외 {n_excl}, 실패 {n_err})"
@@ -96,7 +106,8 @@ def render(rows, n_excl, n_err, n_excl_suspect, root):
         f"# 세션 효율 리포트 — record-actions w/o LLM (휴먼화 2축 4조합)",
         "",
         f"- 측정일: {date.today().isoformat()}  |  루트: `{root}`",
-        f"- 측정 {n}세션 (초소형 제외 {n_excl}, 실패 {n_err}"
+        f"- 측정 {n}세션 (초소형 제외 {n_excl}, 진행 중 제외 {n_active}, "
+        f"실패 {n_err}"
         + (f", **⚠ 쓰기 툴 포맷 의심 {len(suspects)}건"
            + (f"+제외분 {n_excl_suspect}건" if n_excl_suspect else "") + "**"
            if (suspects or n_excl_suspect) else "")
