@@ -40,6 +40,24 @@ from requirement_actions import collect_record_stats  # noqa: E402
 from agent_effort import load_rates, speedup  # noqa: E402
 
 
+# 산출 채널 미확인 의심 (§37): 도구 활동이 이만큼 있는데 잡힌 산출물이
+# 0이면, 결과물이 미등록 채널(외부 시스템·셸 생성 파일 등)로 나갔을 가능성 —
+# 사람 쓰기·확인이 증발해 효율이 과소로 찍히므로 결과에 자백 표시를 남긴다.
+SUSPECT_MIN_TOOL_CALLS = 5
+
+
+def suspect_output_channel(stats):
+    """산출물 0 + 도구 활동 다수 → (의심 여부, 근거 문구)."""
+    captured = (stats.get("artifact_words", 0)
+                + stats.get("answer_words", 0))
+    calls = stats.get("tool_calls", 0)
+    if captured == 0 and calls >= SUSPECT_MIN_TOOL_CALLS:
+        return True, (f"산출 채널 미확인 의심: 도구 호출 {calls}회인데 잡힌 "
+                      "산출물(파일+답변+JSON) 0단어 — 결과물이 미등록 채널로 "
+                      "나갔을 가능성, 사람 시간·효율 과소 가능")
+    return False, ""
+
+
 def build_actions(stats, rates, humanize=True):
     """기록 실측 → 사람 행동 목록 (결정론, LLM 0회). §32 고정 규칙."""
     rm = rates.get("human_reading_model") or {}
@@ -79,9 +97,12 @@ def measure(jsonl_path, humanize=True, rates=None, include_subagents=False,
     """세션 1개 → LLM 0회 분자·분모·speedup. 반환 구조는 measure_session 동일."""
     rates = rates or load_rates()
     stats = collect_record_stats(jsonl_path)
+    suspect, suspect_why = suspect_output_channel(stats)
     if is_trivial_session(stats) and not force:
         return {"session": Path(jsonl_path).name, "excluded": True,
-                "reason": "초소형 세션 (기준 미달)", "record_stats": stats}
+                "reason": "초소형 세션 (기준 미달)", "record_stats": stats,
+                "suspect_output_channel": suspect,
+                **({"suspect_reason": suspect_why} if suspect else {})}
     actual = measure_agent_actual(jsonl_path, rates, include_subagents)
     card = rates["human"]
     total = 0.0
@@ -96,6 +117,7 @@ def measure(jsonl_path, humanize=True, rates=None, include_subagents=False,
     return {
         "session": Path(jsonl_path).name,
         "session_id": actual["counts"].get("session_id"),
+        "suspect_output_channel": suspect,
         "human": {"min": h_min, "method": "record-actions-code",
                   "humanize": humanize, "breakdown": breakdown},
         "agent": {"machine_min": actual["machine_min"],
@@ -105,7 +127,7 @@ def measure(jsonl_path, humanize=True, rates=None, include_subagents=False,
                   "subagent_files": actual["subagent_files"]},
         "speedup": speedup(h_min, actual["total_min"]),
         "speedup_vs_hitl": speedup(h_min, actual["hitl_min"]),
-        "notes": [],
+        "notes": [suspect_why] if suspect else [],
     }
 
 

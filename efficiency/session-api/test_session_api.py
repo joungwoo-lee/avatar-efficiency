@@ -183,6 +183,31 @@ class TestSessionApi(unittest.TestCase):
         # 결정론: 같은 입력 → 같은 결과
         self.assertEqual(r_again["human"]["min"], r_on["human"]["min"])
 
+    def test_suspect_output_channel(self):
+        # §37: 도구 활동 많음 + 잡힌 산출물 0 → 산출 채널 미확인 의심 자백.
+        from record_actions_code_api import measure
+        lines = [{"type": "user",
+                  "message": {"role": "user", "content": "작업 지시 " * 60}}]
+        for i in range(6):  # 도구 호출 6회, 답변·파일·JSON 산출물 없음
+            lines += [
+                {"type": "assistant", "message": {"role": "assistant",
+                 "content": [{"type": "tool_use", "id": f"b{i}", "name": "Bash",
+                              "input": {"command": "do-something"}}]}},
+                {"type": "user", "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": f"b{i}",
+                     "content": "ok " * 30}]}},
+            ]
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "s.jsonl")
+            with open(p, "w", encoding="utf-8") as f:
+                for ln in lines:
+                    f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+            r = measure(p)
+            normal = measure(_make_jsonl(d))
+        self.assertTrue(r["suspect_output_channel"])
+        self.assertIn("산출 채널 미확인 의심", r["notes"][0])
+        self.assertFalse(normal["suspect_output_channel"])  # 정상 세션은 미표시
+
     @unittest.skipUnless(os.environ.get("AE_LIVE_HAIKU") == "1",
                          "실호출(과금)은 AE_LIVE_HAIKU=1일 때만")
     def test_claude_cli_llm_haiku(self):

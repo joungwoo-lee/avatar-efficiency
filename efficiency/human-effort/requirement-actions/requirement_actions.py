@@ -844,6 +844,7 @@ def collect_record_stats(jsonl_path, detail=False):
            "deep_words": deep_w,
            "skim_words": skim_w,
            "waste_words": waste_w,
+           "tool_calls": tool_i,
            "search_calls": search_calls,
            "exec_calls": exec_calls,
            "gross_draft_words": gross_d,

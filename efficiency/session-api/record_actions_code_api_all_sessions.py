@@ -32,22 +32,26 @@ def collect(root):
                                   recursive=True)
              if f"{os.sep}subagents{os.sep}" not in f]
     rows = []
-    n_excl = n_err = 0
+    n_excl = n_err = n_excl_suspect = 0
     for f in files:
         try:
             on = measure(f)
             if on.get("excluded"):
                 n_excl += 1
+                if on.get("suspect_output_channel"):
+                    n_excl_suspect += 1
                 continue
             off = measure(f, humanize=False)
             rows.append({"session": on["session"],
                          "agent": on["agent"]["total_min"],
                          "h_on": on["human"]["min"], "sp_on": on["speedup"] or 0,
                          "h_off": off["human"]["min"],
-                         "sp_off": off["speedup"] or 0})
+                         "sp_off": off["speedup"] or 0,
+                         "suspect": on.get("suspect_output_channel", False),
+                         "suspect_why": (on.get("notes") or [""])[0]})
         except Exception:
             n_err += 1
-    return rows, n_excl, n_err
+    return rows, n_excl, n_err, n_excl_suspect
 
 
 def histogram(values):
@@ -61,10 +65,11 @@ def histogram(values):
     return lines
 
 
-def render(rows, n_excl, n_err, root):
+def render(rows, n_excl, n_err, n_excl_suspect, root):
     n = len(rows)
     if not n:
         return f"측정 가능한 세션 없음 (제외 {n_excl}, 실패 {n_err})"
+    suspects = [r for r in rows if r["suspect"]]
     avg_on = sum(r["h_on"] for r in rows) / n
     avg_off = sum(r["h_off"] for r in rows) / n
     diff = avg_off - avg_on
@@ -78,7 +83,11 @@ def render(rows, n_excl, n_err, root):
         f"# 세션 효율 리포트 — record-actions w/o LLM (휴먼화 ON)",
         "",
         f"- 측정일: {date.today().isoformat()}  |  루트: `{root}`",
-        f"- 측정 {n}세션 (초소형 제외 {n_excl}, 실패 {n_err}) — LLM 0회, 결정론",
+        f"- 측정 {n}세션 (초소형 제외 {n_excl}, 실패 {n_err}"
+        + (f", **⚠ 산출 채널 의심 {len(suspects)}건"
+           + (f"+제외분 {n_excl_suspect}건" if n_excl_suspect else "") + "**"
+           if (suspects or n_excl_suspect) else "")
+        + ") — LLM 0회, 결정론",
         "",
         "## 휴먼화(읽기 등급 분해 + 쓰기 번복 소거) 효과",
         "",
@@ -108,9 +117,25 @@ def render(rows, n_excl, n_err, root):
         "|---|---|---|---|---|---|",
     ]
     for r in sorted(rows, key=lambda r: -r["agent"]):
-        out.append(f"| {r['session'][:16]} | {r['agent']:.1f} "
+        mark = "⚠ " if r["suspect"] else ""
+        out.append(f"| {mark}{r['session'][:16]} | {r['agent']:.1f} "
                    f"| {r['h_on']:.1f} | {r['sp_on']:.2f} "
                    f"| {r['h_off']:.1f} | {r['sp_off']:.2f} |")
+    if suspects:
+        out += [
+            "",
+            "## ⚠ 산출 채널 미확인 의심 세션",
+            "",
+            "이 세션들은 도구 활동은 많은데 잡힌 산출물(파일+답변+JSON)이 "
+            "0단어 — 결과물이 미등록 채널(외부 시스템·셸 생성 파일 등)로 "
+            "나갔을 가능성이 있어 **사람 시간·효율이 과소일 수 있다.**",
+            "",
+            "| 세션 | 효율 ON | 근거 |",
+            "|---|---|---|",
+        ]
+        for r in sorted(suspects, key=lambda r: r["sp_on"]):
+            out.append(f"| {r['session'][:16]} | {r['sp_on']:.2f} "
+                       f"| {r['suspect_why']} |")
     return "\n".join(out)
 
 
