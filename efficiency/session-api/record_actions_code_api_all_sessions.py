@@ -118,12 +118,13 @@ def render(rows, n_excl, n_err, n_excl_suspect, n_active, root):
         "",
         "## 4조합 비교 — 휴먼화 2축(rw=읽기·쓰기, act=행동 건수)",
         "",
-        "| 조합 | 사람시간 평균 | 전체 효율 (휴먼 합산 ÷ 에이전트 합산) |",
-        "|---|---|---|",
+        "| 조합 | 사람시간 평균 | 효율 평균 | 전체 효율 (휴먼 합산 ÷ 에이전트 합산) |",
+        "|---|---|---|---|",
     ] + [
         f"| {label} | {avg[hk]:.1f}min "
         + ("(raw)" if hk == "h_raw" else
            f"(raw대비 −{100 * (avg['h_raw'] - avg[hk]) / avg['h_raw']:.1f}%)")
+        + f" | {sum(r[sk] for r in rows) / n:.2f}"
         + f" | {total[hk] / agent_sum:.2f} "
         f"({total[hk]:.0f} ÷ {agent_sum:.0f}min) |"
         for label, hk, sk in (
