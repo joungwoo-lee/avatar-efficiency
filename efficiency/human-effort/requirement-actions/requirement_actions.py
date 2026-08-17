@@ -521,6 +521,8 @@ def collect_record_stats(jsonl_path, detail=False):
     final_answer = ""
     read_regions = {}        # (fp, offset) → 횟수 (신호③ — 같은 구간 재방문만)
     tool_i = 0               # 도구 호출 순번
+    search_calls = 0         # 검색 도구 호출 수 (LLM 0회 행동 구성용, §32)
+    exec_calls = 0           # 실행 도구(Bash 등) 호출 수 (§32)
     turn_search_i = None     # 이 턴의 마지막 검색 시점 (신호④ — 턴 단위)
     turn_reads = []          # 이 턴의 (fp, 읽기 시점)
     all_turns = []           # 턴별 읽기 목록 (WASTE 위상 재생용)
@@ -641,6 +643,9 @@ def collect_record_stats(jsonl_path, detail=False):
                     tool_i += 1
                     if name in _SEARCH_TOOLS:
                         turn_search_i = tool_i
+                        search_calls += 1
+                    if name in ("Bash", "PowerShell"):
+                        exec_calls += 1
                     inp = b.get("input") or {}
                     fp = inp.get("file_path")
                     if not fp:
@@ -650,6 +655,7 @@ def collect_record_stats(jsonl_path, detail=False):
                             continue
                         if _QUERY_SEARCH_RE.search(name or ""):
                             turn_search_i = tool_i  # 검색형 조회 = 탐색 신호
+                            search_calls += 1
                             continue
                         if b.get("id"):  # 읽기 여부는 결과 본문 크기로 확정
                             pending_query[b["id"]] = (name, inp, tool_i)
@@ -795,6 +801,15 @@ def collect_record_stats(jsonl_path, detail=False):
 
     artifact, out_draft, out_edit = replay_write_net(write_seq, failed_tool_ids)
 
+    # 옛 방식 총량(§31 이전 의미: Write 마지막 판 + Edit 누적, 실패 포함) —
+    # 휴먼화 기능 효과 평가의 대조군(§32)용으로만 보존
+    gross_d = gross_e = 0
+    for _fp, seq in write_seq.items():
+        writes = [op for op in seq if op[0] == "write"]
+        if writes:
+            gross_d += len(writes[-1][2].split())
+        gross_e += sum(len(op[2].split()) for op in seq if op[0] == "edit")
+
     out = {"reviewed_words": reviewed, "input_words": input_w,
            "artifact_words": sum(artifact.values()),
            # 마지막 턴 마무리 답변 실측 — 보고형 세션의 쓰기 상한 닻 재료
@@ -807,7 +822,11 @@ def collect_record_stats(jsonl_path, detail=False):
            "internal_docs": len(internal),
            "deep_words": deep_w,
            "skim_words": skim_w,
-           "waste_words": waste_w}
+           "waste_words": waste_w,
+           "search_calls": search_calls,
+           "exec_calls": exec_calls,
+           "gross_draft_words": gross_d,
+           "gross_edit_words": gross_e}
     if detail:  # 감사·검증용: 등급별 파일 목록(+실측 단어수·기여 파일 분해)
         out["files"] = {"deep": sorted(contributed), "skim": sorted(skim),
                         "waste": sorted(waste), "internal": sorted(internal),

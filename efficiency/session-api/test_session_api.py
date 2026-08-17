@@ -165,6 +165,24 @@ class TestSessionApi(unittest.TestCase):
         self.assertEqual(len(llm.calls), 1)
         self.assertEqual(r["human"]["method"], "record-actions")
 
+    def test_record_actions_code_api(self):
+        # 방식별 전용 API ③(§32): LLM 0회 — 코드 실측만으로 분자 구성.
+        # humanize=False(대조군)는 읽기 등급·쓰기 순계를 끈 옛 자 — 항상 이상.
+        from record_actions_code_api import measure
+        with tempfile.TemporaryDirectory() as d:
+            p = _make_jsonl(d)
+            r_on = measure(p)
+            r_off = measure(p, humanize=False)
+            r_again = measure(p)
+        self.assertEqual(r_on["human"]["method"], "record-actions-code")
+        self.assertTrue(r_on["human"]["humanize"])
+        self.assertGreater(r_on["human"]["min"], 0)
+        self.assertIsNotNone(r_on["speedup"])
+        # 대조군은 검토 전량 정독·번복 미소거라 휴먼화본 이상이어야 함
+        self.assertGreaterEqual(r_off["human"]["min"], r_on["human"]["min"])
+        # 결정론: 같은 입력 → 같은 결과
+        self.assertEqual(r_again["human"]["min"], r_on["human"]["min"])
+
     def test_json_retry_wrapper(self):
         class Flaky:
             def __init__(self):

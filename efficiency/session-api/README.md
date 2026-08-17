@@ -33,6 +33,7 @@ workunit 방식(요구사항→산출물 단위→Monte Carlo)의 사후 측정�
 |---|---|
 | `req_actions_api.py` | **기본 API** — 할일 거치는 방식 (requirement-actions) |
 | `record_actions_api.py` | **교차확인 API** — 할일 안 거치는 방식 (record-actions) |
+| `record_actions_code_api.py` | **LLM 0회 API** (§32) — 분자까지 코드 실측(읽기 항해 구조 + 쓰기 순계 + 건수 고정 규칙). `humanize=False`(`--raw`)로 휴먼화 기능 끈 대조군 실행 가능 |
 | `session_api.py` | 공용 코어 — 분모 실측·초소형 게이트·`measure_session(human=...)` |
 | `workunit_deprecated.py` | 폐기된 workunit 세션 측정 (참고 보관) |
 
