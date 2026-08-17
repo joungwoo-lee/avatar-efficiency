@@ -24,15 +24,16 @@
     humanize_act (기본 ON)  행동 건수 휴먼화 — 건수형 "흔적 있으면 1건".
                             OFF = 로레코드: 행동 횟수를 세션 기록 그대로
                             (검색 40회면 search 40건).
-    둘 다 ON(기본) = 바닥 자 / rw만 OFF = 읽기·쓰기 대조군 /
-    둘 다 OFF = 궤적 재연(구 rawrecord).
+    조합 순서 규약 (표·리포트·문서 공통): rw ON·act ON → rw OFF·act ON →
+    rw ON·act OFF → rw OFF·act OFF(로레코드).
 
-사용:
+사용 (조합 순서 규약대로):
     from record_actions_code_api import measure, measure_batch
-    r = measure("session.jsonl")                        # 기본 (둘 다 ON)
-    r = measure("session.jsonl", humanize_rw=False)     # 읽기·쓰기 대조군
+    r = measure("session.jsonl")                        # rw ON · act ON (기본)
+    r = measure("session.jsonl", humanize_rw=False)     # rw OFF · act ON
+    r = measure("session.jsonl", humanize_act=False)    # rw ON · act OFF
     r = measure("session.jsonl", humanize_rw=False,
-                humanize_act=False)                     # 궤적 재연
+                humanize_act=False)                     # rw OFF · act OFF
     r = measure("session.jsonl", humanize=False)        # 구 인터페이스 호환
     r["speedup"], r["human"]["min"], r["human"]["breakdown"]
 

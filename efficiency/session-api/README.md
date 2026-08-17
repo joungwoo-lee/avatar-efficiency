@@ -138,15 +138,19 @@ python record_actions_code_api.py session.jsonl [s2.jsonl ...]
 python record_actions_code_api.py session.jsonl --raw    # 휴먼화 끈 대조군
 ```
 
+조합 순서 규약 — 모든 표·리포트·문서에서 이 순서를 지킨다:
+**rw ON·act ON → rw OFF·act ON → rw ON·act OFF → rw OFF·act OFF(로레코드)**
+
 ```python
 from record_actions_code_api import measure, measure_batch
-r = measure("session.jsonl")                      # 기본 (LLM 인자 자체가 없음)
 # 휴먼화 2축 (§40): 끈 만큼 "AI 궤적을 그대로 사람이 한 셈"에 가까워짐
-r = measure("session.jsonl", humanize_rw=False)   # 읽기·쓰기 휴먼화 끔
-#   (검토 전량 정독·번복 미소거 — 읽기·쓰기 대조군, CLI --norw)
+r = measure("session.jsonl")                      # rw ON · act ON (기본)
+r = measure("session.jsonl", humanize_rw=False)   # rw OFF · act ON
+#   (검토 전량 정독·번복 미소거, CLI --norw)
+r = measure("session.jsonl", humanize_act=False)  # rw ON · act OFF
+#   (행동 횟수를 세션 기록 그대로, CLI --noact)
 r = measure("session.jsonl", humanize_rw=False, humanize_act=False)
-#   행동 건수 휴먼화까지 끔 = 로레코드(궤적 재연) — 행동 횟수를 세션 기록
-#   그대로(검색 40회면 search 40건, CLI --norw --noact)
+#   rw OFF · act OFF = 로레코드 (CLI --norw --noact)
 r = measure("session.jsonl", humanize=False)      # 구 인터페이스도 그대로 동작
 r["human"]["humanize_rw"], r["human"]["humanize_act"]
 r["suspect_output_channel"]                       # 쓰기 툴 포맷 미등록 의심(§38)
