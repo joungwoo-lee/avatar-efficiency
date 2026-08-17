@@ -214,6 +214,9 @@ class TestSessionApi(unittest.TestCase):
         bd_raw = {b["primitive"]: b["count"] for b in raw["human"]["breakdown"]}
         self.assertEqual(bd_base["execute"], 1)   # 바닥 자: 흔적 있으면 1건
         self.assertEqual(bd_raw["execute"], 6)    # 궤적 재연: 기록 그대로
+        # §43: 마무리 verify는 두 모드 공통 — 소형 세션에서 천장<바닥 역전 방지
+        self.assertEqual(bd_base.get("verify"), 1)
+        self.assertEqual(bd_raw.get("verify"), 1)
         self.assertFalse(raw["human"]["humanize_act"])
         self.assertEqual(raw["human"]["humanize"], "rawrecord")  # 호환 표현
         self.assertEqual(legacy["human"]["min"], raw["human"]["min"])

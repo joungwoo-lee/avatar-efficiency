@@ -88,10 +88,10 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
       humanize_rw  = 읽기·쓰기 휴먼화. ON이면 읽기 등급 분해(정독/훑기/헛읽기)
                      + 쓰기 번복 소계(순계). OFF면 검토 전량 정독·번복 미소거.
       humanize_act = 행동 건수 휴먼화. ON이면 건수형 "흔적 있으면 1건"(직행
-                     바닥값) + 산출물 있으면 verify 1건. OFF면 로레코드 —
-                     행동 횟수를 세션 기록 그대로(search=검색 호출 수,
-                     execute=실행 호출 수; verify는 기록에 대응 행동이 없어
-                     미계상). "AI가 한 행동을 사람이 똑같이 했다면"의 자.
+                     바닥값). OFF면 로레코드 — 행동 횟수를 세션 기록
+                     그대로(search=검색 호출 수, execute=실행 호출 수).
+                     "AI가 한 행동을 사람이 똑같이 했다면"의 자.
+                     마무리 verify 1건(산출물 있을 때)은 두 모드 공통(§43).
     기본(둘 다 ON) = 바닥 자. 구 humanize=True/False/"rawrecord"는
     measure()의 호환 인자로만 남음.
     """
@@ -132,8 +132,13 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
             items.append({"primitive": "search", "count": 1})
         if stats.get("exec_calls"):
             items.append({"primitive": "execute", "count": 1})
-        if draft_w or edit_w:
-            items.append({"primitive": "verify", "count": 1})
+    if draft_w or edit_w:
+        # 마무리 확인 1건 — 두 모드 공통 (§43). 초기 §39는 "기록에 대응
+        # 행동 없음"이라며 로레코드에서 verify를 뺐는데, 그 결과 도구 호출이
+        # 1~2회뿐인 소형 세션에서 궤적 천장이 바닥 자보다 낮아지는 모순이
+        # 실측 43/91건 발생. 궤적을 재연하는 사람도 산출물 확인은 하므로
+        # 공통 계상 — 이로써 건수형이 항목별로 OFF ≥ ON 보장.
+        items.append({"primitive": "verify", "count": 1})
     return items
 
 
