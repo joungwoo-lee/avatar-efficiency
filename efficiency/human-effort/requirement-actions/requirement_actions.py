@@ -67,6 +67,17 @@ def _is_system_text(t):
     return t.lstrip().startswith(_SYSTEM_TEXT_PREFIXES)
 
 
+def _json_text_words(v):
+    """구조화 값 안의 텍스트 단어수 (재귀). 숫자는 1단어 취급."""
+    if isinstance(v, str):
+        return len(v.split())
+    if isinstance(v, dict):
+        return sum(_json_text_words(x) for x in v.values())
+    if isinstance(v, list):
+        return sum(_json_text_words(x) for x in v)
+    return 1 if isinstance(v, (int, float)) else 0
+
+
 def _is_internal_artifact(fp):
     p = str(fp).replace("\\", "/").lower()
     return ("/temp/claude/" in p          # 세션 임시 영역 (scratchpad·tasks)
@@ -523,6 +534,7 @@ def collect_record_stats(jsonl_path, detail=False):
     tool_i = 0               # 도구 호출 순번
     search_calls = 0         # 검색 도구 호출 수 (LLM 0회 행동 구성용, §32)
     exec_calls = 0           # 실행 도구(Bash 등) 호출 수 (§32)
+    tool_report_w = 0        # StructuredOutput 보고 실측 단어수 (§33)
     turn_search_i = None     # 이 턴의 마지막 검색 시점 (신호④ — 턴 단위)
     turn_reads = []          # 이 턴의 (fp, 읽기 시점)
     all_turns = []           # 턴별 읽기 목록 (WASTE 위상 재생용)
@@ -647,6 +659,12 @@ def collect_record_stats(jsonl_path, detail=False):
                     if name in ("Bash", "PowerShell"):
                         exec_calls += 1
                     inp = b.get("input") or {}
+                    if name == "StructuredOutput":
+                        # 구조화 보고 채널 (§33): 워크플로 에이전트의 최종
+                        # 산출물이 텍스트 답변 대신 이 도구 입력으로 나간다 —
+                        # 마지막 호출의 텍스트 단어수 = 보고 실측
+                        tool_report_w = _json_text_words(inp)
+                        continue
                     fp = inp.get("file_path")
                     if not fp:
                         # 조회형 도구 읽기 일반화 (§27): 지라 티켓·위키 등
@@ -812,8 +830,11 @@ def collect_record_stats(jsonl_path, detail=False):
 
     out = {"reviewed_words": reviewed, "input_words": input_w,
            "artifact_words": sum(artifact.values()),
-           # 마지막 턴 마무리 답변 실측 — 보고형 세션의 쓰기 상한 닻 재료
-           "answer_words": len(answers[-1].split()) if answers else 0,
+           # 보고 실측 — 보고형 세션의 쓰기 상한 닻 재료. 채널 2개 중 큰 쪽:
+           # 마지막 턴 마무리 답변 / StructuredOutput 도구 입력 (§33 —
+           # 워크플로 에이전트는 답변 텍스트 0, 보고가 도구 입력으로 나감)
+           "answer_words": max(len(answers[-1].split()) if answers else 0,
+                               tool_report_w),
            "out_draft_words": sum(out_draft.values()),
            "out_edit_words": sum(out_edit.values()),
            "contributed_docs": len(contributed),

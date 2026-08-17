@@ -992,6 +992,37 @@ class TestRequirementActions(unittest.TestCase):
         bd2 = {b["primitive"]: b for b in r2["breakdown"]}
         self.assertEqual(bd2["draft"]["count"], 1419)
 
+    def test_structured_output_report_channel(self):
+        # §33: 답변 텍스트 0 + 파일 0, 산출물이 StructuredOutput 도구 입력으로
+        # 나가는 세션(워크플로 에이전트) — 그 채널 실측이 answer_words가 되어
+        # 쓰기 닻이 살아나고, LLM의 draft 발명이 실측 상한으로 절단된다.
+        import tempfile, os, json as _json
+        from requirement_actions import (collect_record_stats,
+                                         estimate_actions_single)
+        lines = [
+            {"type": "user", "message": {"role": "user",
+                                         "content": "분석 지시 " * 100}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "s1", "name": "StructuredOutput",
+                 "input": {"summary": "결과 " * 150, "count": 3}}]}},
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(_json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            rs = collect_record_stats(p)
+            self.assertEqual(rs["answer_words"], 151)  # 텍스트 150 + 숫자 1
+            out = {"todos": [{"title": "분석 보고", "quantities": [],
+                              "acceptance_criteria": []}],
+                   "human": [{"primitive": "draft", "count": 500}],
+                   "rationale": "t"}
+            r = estimate_actions_single(self._Mock([out]), "x", record_stats=rs)
+            bd = {b["primitive"]: b for b in r["breakdown"]}
+            self.assertEqual(bd["draft"]["count"], 151)  # 발명 500 → 실측 절단
+        finally:
+            os.unlink(p)
+
     def test_count_action_cap(self):
         # §29: 건수형 총 건수 ≤ 할일 수 × 3 — verify(닻 결정권)는 제외하고
         # 남은 여유를 나머지 건수형이 비례로 나눈다. 단어 단위는 불변.

@@ -524,6 +524,21 @@
   req-actions의 LLM 대체는 아님 — 의도·스코프 판단은 자연어라 코드 불가.
 - 테스트: 켬/끔 대소·결정론·전용 API 계약 (test_record_actions_code_api).
 
+## 33. 구조화 보고 채널 실측 — StructuredOutput 세션의 쓰기 닻 소멸 수리
+
+- 사고(외부 대조, 워크플로 에이전트류 세션 4건): 답변 텍스트 0 + 파일 0 —
+  산출물이 **StructuredOutput 도구 입력**(구조화 보고)으로 나가는 세션에서
+  answer_words=0 → 쓰기 닻이 아예 없음 → LLM이 draft=500 발명, req가 rec를
+  역전(req 34~62분 vs rec 15~25분).
+- 오진 정정: "derive_anchors에 answer_words 폴백 없음"이 아니라(§30에 있음)
+  **answer_words의 실측 채널이 하나 빠져 있었던 것.** 제안된 "입력 50단어
+  이상이면 out_words=50 고정" 방식은 §24가 금지한 근거 없는 고정치라 기각.
+- 조치: StructuredOutput 도구 입력의 텍스트 단어수(재귀, 숫자=1단어)를 보고
+  실측으로 집계 — answer_words = max(마지막 턴 답변, 구조화 보고). 닻·코드
+  API 공용이라 req/rec/code 세 방식 동시 수리.
+- 검증: 합성 세션(지시 100단어 + StructuredOutput 151단어) — draft 발명
+  500 → 151 절단. 스위트 51건 통과.
+
 ## 미해결 (알려진 한계·다음 단계)
 
 1. **사람 실측 정답지 0건** — 모든 절대값의 상한. A급 3~5건 확보가 최우선.
