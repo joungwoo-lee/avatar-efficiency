@@ -172,10 +172,12 @@ class TestSessionApi(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p = _make_jsonl(d)
             r_on = measure(p)
-            r_off = measure(p, humanize=False)
+            r_off = measure(p, humanize_rw=False)
             r_again = measure(p)
         self.assertEqual(r_on["human"]["method"], "record-actions-code")
-        self.assertTrue(r_on["human"]["humanize"])
+        self.assertTrue(r_on["human"]["humanize_rw"])
+        self.assertTrue(r_on["human"]["humanize_act"])
+        self.assertFalse(r_off["human"]["humanize_rw"])
         self.assertGreater(r_on["human"]["min"], 0)
         self.assertIsNotNone(r_on["speedup"])
         # 대조군은 검토 전량 정독·번복 미소거라 휴먼화본 이상이어야 함
@@ -206,12 +208,15 @@ class TestSessionApi(unittest.TestCase):
                 for ln in lines:
                     f.write(json.dumps(ln, ensure_ascii=False) + "\n")
             base = measure(p)
-            raw = measure(p, humanize="rawrecord")
+            raw = measure(p, humanize_act=False, humanize_rw=False)
+            legacy = measure(p, humanize="rawrecord")  # 구 인터페이스 호환
         bd_base = {b["primitive"]: b["count"] for b in base["human"]["breakdown"]}
         bd_raw = {b["primitive"]: b["count"] for b in raw["human"]["breakdown"]}
         self.assertEqual(bd_base["execute"], 1)   # 바닥 자: 흔적 있으면 1건
         self.assertEqual(bd_raw["execute"], 6)    # 궤적 재연: 기록 그대로
-        self.assertEqual(raw["human"]["humanize"], "rawrecord")
+        self.assertFalse(raw["human"]["humanize_act"])
+        self.assertEqual(raw["human"]["humanize"], "rawrecord")  # 호환 표현
+        self.assertEqual(legacy["human"]["min"], raw["human"]["min"])
         self.assertGreater(raw["human"]["min"], base["human"]["min"])
 
     def test_suspect_output_channel(self):

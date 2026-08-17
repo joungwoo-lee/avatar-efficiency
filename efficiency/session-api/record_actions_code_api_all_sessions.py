@@ -41,8 +41,8 @@ def collect(root):
                 if on.get("suspect_output_channel"):
                     n_excl_suspect += 1
                 continue
-            off = measure(f, humanize=False)
-            raw = measure(f, humanize="rawrecord")
+            off = measure(f, humanize_rw=False)                      # rw만 끔
+            raw = measure(f, humanize_rw=False, humanize_act=False)  # 궤적 재연
             rows.append({"session": on["session"],
                          "agent": on["agent"]["total_min"],
                          "h_on": on["human"]["min"], "sp_on": on["speedup"] or 0,
@@ -94,14 +94,14 @@ def render(rows, n_excl, n_err, n_excl_suspect, root):
            if (suspects or n_excl_suspect) else "")
         + ") — LLM 0회, 결정론",
         "",
-        "## 3모드 비교 — 휴먼화 ON(바닥 자) / OFF(읽기·쓰기만 원량) / "
-        "raw record(궤적 재연: 행동 횟수까지 세션 그대로)",
+        "## 3모드 비교 — 휴먼화 2축(rw=읽기·쓰기, act=행동 건수): "
+        "둘 다 ON(바닥 자) / rw OFF(읽기·쓰기 원량) / 둘 다 OFF(궤적 재연)",
         "",
         "| | 평균 |",
         "|---|---|",
-        f"| humanize ON | {avg_on:.1f}min |",
-        f"| humanize OFF | {avg_off:.1f}min |",
-        f"| raw record | {avg_raw:.1f}min |",
+        f"| humanize rw+act ON | {avg_on:.1f}min |",
+        f"| rw OFF (act ON) | {avg_off:.1f}min |",
+        f"| rw·act OFF (로레코드) | {avg_raw:.1f}min |",
         f"| OFF−ON | **+{diff:.1f}min (+{100 * diff / avg_on:.1f}%)** "
         "(읽기 등급 분해 + 쓰기 번복 소거 효과) |",
         f"| RAW−ON | **+{diff_raw:.1f}min (+{100 * diff_raw / avg_on:.1f}%)** "

@@ -18,20 +18,27 @@
       verify  = 산출물 있으면 1건
     분모 = 공용 실측 (session_api.measure_agent_actual).
 
-humanize=False (대조군): 읽기·쓰기 휴먼화 기능을 끈 옛 자 —
-      read  = AI가 검토한 전량 + 입력 (전부 정독 취급, 등급 구분 없음)
-      draft/edit = 옛 방식 총량 (Write 마지막 판 + Edit 누적, 번복 소거 없음)
-      건수형 규칙은 동일 (평가 대상이 아니므로 통제 변인).
-    → 두 모드의 차이 = "읽기 항해 구조 환산 + 쓰기 번복 소거"의 순효과.
+휴먼화 2축 (§40) — 끈 만큼 "AI 궤적을 그대로 사람이 한 셈"에 가까워진다:
+    humanize_rw  (기본 ON)  읽기·쓰기 휴먼화 — 읽기 등급 분해 + 쓰기 번복
+                            소거. OFF면 검토 전량 정독·번복 미소거.
+    humanize_act (기본 ON)  행동 건수 휴먼화 — 건수형 "흔적 있으면 1건".
+                            OFF = 로레코드: 행동 횟수를 세션 기록 그대로
+                            (검색 40회면 search 40건).
+    둘 다 ON(기본) = 바닥 자 / rw만 OFF = 읽기·쓰기 대조군 /
+    둘 다 OFF = 궤적 재연(구 rawrecord).
 
 사용:
     from record_actions_code_api import measure, measure_batch
-    r = measure("session.jsonl")                  # 휴먼화 켬 (기본)
-    r = measure("session.jsonl", humanize=False)  # 대조군
+    r = measure("session.jsonl")                        # 기본 (둘 다 ON)
+    r = measure("session.jsonl", humanize_rw=False)     # 읽기·쓰기 대조군
+    r = measure("session.jsonl", humanize_rw=False,
+                humanize_act=False)                     # 궤적 재연
+    r = measure("session.jsonl", humanize=False)        # 구 인터페이스 호환
     r["speedup"], r["human"]["min"], r["human"]["breakdown"]
 
 CLI:
-    python record_actions_code_api.py <session.jsonl> [...] [--raw] [--json]
+    python record_actions_code_api.py <session.jsonl> [...]
+        [--norw] [--noact] [--json]    (--raw, --rawrecord는 구 호환)
 """
 import json
 import sys
@@ -71,24 +78,26 @@ def suspect_output_channel(stats):
     return False, ""
 
 
-RAW_RECORD = "rawrecord"  # 궤적 재연 자 (§39)
+RAW_RECORD = "rawrecord"  # 구 인터페이스 호환용 (§40에서 2축 옵션으로 재편)
 
 
-def build_actions(stats, rates, humanize=True):
+def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
     """기록 실측 → 사람 행동 목록 (결정론, LLM 0회). §32 고정 규칙.
 
-    humanize:
-      True (기본)   바닥 자 — 읽기 등급·쓰기 순계 + 건수형 "흔적 있으면 1건"
-      False         읽기·쓰기 휴먼화 끔 (검토 전량 정독·번복 미소거),
-                    건수형은 바닥 규칙 유지 — 휴먼화 효과 대조군
-      "rawrecord"   궤적 재연 — 읽기·쓰기 원량에 더해 **행동 횟수도 세션
-                    기록 그대로**(search=검색 호출 수, execute=실행 호출 수).
-                    "AI가 한 행동을 사람이 똑같이 했다면"의 자. verify는
-                    기록에 대응 행동이 없어 미계상 (§39)
+    휴먼화 2축 (§40):
+      humanize_rw  = 읽기·쓰기 휴먼화. ON이면 읽기 등급 분해(정독/훑기/헛읽기)
+                     + 쓰기 번복 소계(순계). OFF면 검토 전량 정독·번복 미소거.
+      humanize_act = 행동 건수 휴먼화. ON이면 건수형 "흔적 있으면 1건"(직행
+                     바닥값) + 산출물 있으면 verify 1건. OFF면 로레코드 —
+                     행동 횟수를 세션 기록 그대로(search=검색 호출 수,
+                     execute=실행 호출 수; verify는 기록에 대응 행동이 없어
+                     미계상). "AI가 한 행동을 사람이 똑같이 했다면"의 자.
+    기본(둘 다 ON) = 바닥 자. 구 humanize=True/False/"rawrecord"는
+    measure()의 호환 인자로만 남음.
     """
     rm = rates.get("human_reading_model") or {}
-    raw_record = humanize == RAW_RECORD
-    if humanize is True:
+    raw_record = not humanize_act
+    if humanize_rw:
         read_rate = rates["human"]["read"].get("min_per_unit", 0.005)
         skim_rate = rm.get("skim_min_per_word", 0.00025)
         factor = (skim_rate / read_rate) if read_rate else 0.0
@@ -97,7 +106,7 @@ def build_actions(stats, rates, humanize=True):
                   + stats.get("input_words", 0))
         draft_w = stats.get("out_draft_words", 0)
         edit_w = stats.get("out_edit_words", 0)
-    else:  # False(대조군)·rawrecord — 읽기 전량 정독, 쓰기 번복 미소거
+    else:  # rw 끔 — 읽기 전량 정독, 쓰기 번복 미소거
         read_w = stats.get("reviewed_words", 0) + stats.get("input_words", 0)
         draft_w = stats.get("gross_draft_words", 0)
         edit_w = stats.get("gross_edit_words", 0)
@@ -128,9 +137,19 @@ def build_actions(stats, rates, humanize=True):
     return items
 
 
-def measure(jsonl_path, humanize=True, rates=None, include_subagents=False,
-            force=False):
-    """세션 1개 → LLM 0회 분자·분모·speedup. 반환 구조는 measure_session 동일."""
+def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
+            include_subagents=False, force=False, humanize=None):
+    """세션 1개 → LLM 0회 분자·분모·speedup. 반환 구조는 measure_session 동일.
+
+    humanize_rw / humanize_act: 휴먼화 2축 (build_actions 참조, §40).
+    humanize: 구 인터페이스 호환 — True/False/"rawrecord"를 2축으로 변환
+              (지정 시 2축 인자보다 우선).
+    """
+    if humanize is not None:  # 구 인터페이스 호환 (§39 이전 소비자)
+        if humanize == RAW_RECORD:
+            humanize_rw, humanize_act = False, False
+        else:
+            humanize_rw, humanize_act = bool(humanize), True
     rates = rates or load_rates()
     stats = collect_record_stats(jsonl_path)
     suspect, suspect_why = suspect_output_channel(stats)
@@ -143,7 +162,7 @@ def measure(jsonl_path, humanize=True, rates=None, include_subagents=False,
     card = rates["human"]
     total = 0.0
     breakdown = []
-    for a in build_actions(stats, rates, humanize):
+    for a in build_actions(stats, rates, humanize_rw, humanize_act):
         spec = card[a["primitive"]]
         minutes = a["count"] * spec["min_per_unit"]
         total += minutes
@@ -155,7 +174,12 @@ def measure(jsonl_path, humanize=True, rates=None, include_subagents=False,
         "session_id": actual["counts"].get("session_id"),
         "suspect_output_channel": suspect,
         "human": {"min": h_min, "method": "record-actions-code",
-                  "humanize": humanize, "breakdown": breakdown},
+                  "humanize_rw": humanize_rw, "humanize_act": humanize_act,
+                  # 구 소비자 호환 표현: 둘 다 ON=True / act만 ON=False /
+                  # 둘 다 OFF="rawrecord"
+                  "humanize": (True if humanize_rw and humanize_act else
+                               False if humanize_act else RAW_RECORD),
+                  "breakdown": breakdown},
         "agent": {"machine_min": actual["machine_min"],
                   "hitl_min": actual["hitl_min"],
                   "total_min": actual["total_min"],
@@ -185,15 +209,13 @@ def main(argv):
     paths = [a for a in argv if not a.startswith("--")]
     if not paths:
         print("usage: python record_actions_code_api.py <session.jsonl> [...] "
-              "[--raw | --rawrecord] [--json]", file=sys.stderr)
+              "[--norw] [--noact] [--json]   "
+              "(--raw=--norw, --rawrecord=--norw --noact 호환)",
+              file=sys.stderr)
         return 2
-    if "--rawrecord" in argv:
-        hz = RAW_RECORD
-    elif "--raw" in argv:
-        hz = False
-    else:
-        hz = True
-    rows = measure_batch(paths, humanize=hz)
+    rw = not ("--norw" in argv or "--raw" in argv or "--rawrecord" in argv)
+    act = not ("--noact" in argv or "--rawrecord" in argv)
+    rows = measure_batch(paths, humanize_rw=rw, humanize_act=act)
     if "--json" in argv:
         print(json.dumps(rows, ensure_ascii=False, indent=1))
         return 0
