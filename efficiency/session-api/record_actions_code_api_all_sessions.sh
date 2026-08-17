@@ -6,5 +6,5 @@ set -e
 cd "$(dirname "$0")"
 OUT="$HOME/session-efficiency-report.md"
 PY="$(command -v python3 || command -v python)"
-"$PY" report_all_sessions.py --out "$OUT"
+"$PY" record_actions_code_api_all_sessions.py --out "$OUT"
 echo "리포트 저장: $OUT"

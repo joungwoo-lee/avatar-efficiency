@@ -7,9 +7,9 @@ cd /d "%~dp0"
 set "OUT=%USERPROFILE%\session-efficiency-report.md"
 where python >nul 2>nul
 if %errorlevel%==0 (
-  python report_all_sessions.py --out "%OUT%"
+  python record_actions_code_api_all_sessions.py --out "%OUT%"
 ) else (
-  py -3 report_all_sessions.py --out "%OUT%"
+  py -3 record_actions_code_api_all_sessions.py --out "%OUT%"
 )
 echo.
 echo 리포트 저장: %OUT%
