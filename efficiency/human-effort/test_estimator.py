@@ -609,11 +609,11 @@ class TestRequirementActions(unittest.TestCase):
         self.assertEqual(bd["read"]["count"], 3000)
         # draft+edit: 명시 2000단어가 실측 8888보다 우선, 비율(1:1) 보존
         self.assertEqual(bd["draft"]["count"] + bd["edit"]["count"], 2000)
-        # verify: 완료조건 3개 → 할일당 2개 코드 상한(§41) → 2로 대체
-        self.assertEqual(bd["verify"]["count"], 2)
+        # verify: 완료조건 3개로 대체 (LLM 10 무시)
+        self.assertEqual(bd["verify"]["count"], 3)
         self.assertTrue(any("닻 적용" in n for n in r["notes"]))
-        # 총액 수기검산: read 3000×0.005=15 + (draft1000×0.05+edit1000×0.02)=70 + verify 2×3=6
-        self.assertAlmostEqual(r["human_min"], 91.0, places=1)
+        # 총액 수기검산: read 3000×0.005=15 + (draft1000×0.05+edit1000×0.02)=70 + verify 3×3=9
+        self.assertAlmostEqual(r["human_min"], 94.0, places=1)
 
     def test_write_split_anchor(self):
         # §28: draft/edit 분류를 도구 실측(Write:Edit)으로 통일.
@@ -636,15 +636,14 @@ class TestRequirementActions(unittest.TestCase):
         self.assertAlmostEqual(r["human_min"], 16.0, places=1)
         self.assertTrue(any("쓰기 분할" in n for n in r["notes"]))
 
-    def test_verify_target_restored(self):
-        # §41: verify 닻은 목표 — 명시된 완료조건은 사람이 반드시 확인해야
-        # 할 목록이라 LLM이 누락해도 채워 넣는다 (§29 상한 후퇴를 복원).
-        # 완료조건 수 자체는 할일당 2개 코드 상한 (criteria 3개 → verify 2).
+    def test_verify_cap_only(self):
+        # §29: verify 닻은 상한 전용 — LLM이 누락하면 추가하지 않는다
+        # (직행 경로에 없던 검증의 코드 주입 금지, req ≤ rec 원칙)
         from requirement_actions import estimate_actions_from_requirements
         out = {"human": [{"primitive": "draft", "count": 500}]}
         r = estimate_actions_from_requirements(self._Mock([out]), self.REQ)
         bd = {b["primitive"]: b for b in r["breakdown"]}
-        self.assertEqual(bd["verify"]["count"], 2)    # 누락 → 완료조건만큼 추가
+        self.assertNotIn("verify", bd)                # 누락 → 미추가
         self.assertEqual(bd["draft"]["count"], 2000)  # 명시 분량으로 대체
 
     def test_measured_anchor_is_cap_only(self):
@@ -1095,7 +1094,7 @@ class TestRequirementActions(unittest.TestCase):
         r = estimate_actions_single(self._Mock([out]), "세션 요약")
         bd = {b["primitive"]: b for b in r["breakdown"]}
         self.assertEqual(bd["draft"]["count"], 2000)   # 내부 할일 명시 분량 닻
-        self.assertEqual(bd["verify"]["count"], 2)     # 완료조건 3개 → 2 상한(§41)
+        self.assertEqual(bd["verify"]["count"], 3)     # 완료조건 3개 닻
         self.assertEqual(r["todos"], ["보고서"])
 
 

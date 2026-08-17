@@ -11,8 +11,7 @@
     규모 숫자는 코드가 닻(anchor)으로 확정한다 (편차 제거):
       쓸 단어수   = 요구사항 명시 분량 > 기록 실측 산출물량 > LLM값
       읽을 단어수 = 기록 실측 검토 자료량 > LLM값
-      검증 건수   = 요구사항 완료조건 개수 (목표 — 누락 시 추가, §41 복원;
-                    완료조건 자체는 할일당 2개 코드 상한)
+      검증 건수   = 요구사항 완료조건 개수 상한 (누락 미추가, §29)
     치환 내역은 notes에 전부 기록된다 (감사 가능).
 
 프롬프트 설계 근거: doc/PROMPT_DESIGN.md
@@ -190,9 +189,7 @@ def derive_anchors(requirements, record_stats=None, rates=None):
                 task_items += val
             elif unit in page_units:
                 task_pages += val
-        # 완료조건은 프롬프트 규칙(할일당 최대 2개)을 코드로도 상한 —
-        # 격식 과잉 추출(A/B 실측 17개)이 검증 노동으로 번지는 것 차단 (§41)
-        verify_n += min(len(q.get("acceptance_criteria") or []), 2)
+        verify_n += len(q.get("acceptance_criteria") or [])
     # 할일 기반 읽기 수요: 사람은 자료 1건당 필요한 부분만 읽는다 (선별적 읽기)
     task_read = (task_items * rm.get("words_per_item", 0)
                  + task_pages * rm.get("words_per_page", 0))
@@ -323,22 +320,16 @@ def apply_anchors(items, anchors, notes):
     if anchors.get("verify_n"):
         v_total = sum(it["count"] for it in items if it["primitive"] == "verify")
         target = anchors["verify_n"]
-        # 목표 복원 (§41): 명시된 완료조건은 사람이 반드시 확인해야 할
-        # 목록 — LLM이 누락해도 채워 넣는다 (§28 "신방식 verify가 기준"
-        # 원칙 복원). §29에서 req ≤ rec 부등호를 위해 상한 전용으로
-        # 후퇴시켰던 것을 되돌림 — 부등호는 논리 보장이 아니라 경향으로
-        # 재정의됐고(README), 완료조건 수 자체가 할일당 2개로 상한되어
-        # 고정비 폭주는 이미 차단됨.
-        if v_total > 0 and v_total != target:
+        # 상한 전용 (§29): 완료조건 개수는 검증 노동의 상한 목록이지, 직행
+        # 경로에 없던 검증을 추가·증액하는 근거가 아니다. 미달·누락은 유지 —
+        # 목표 강제(추가 포함)는 소형 세션에서 6분/2건 고정비를 만들어
+        # record-actions(verify 닻 없음)보다 커지는 역전을 실측으로 냈다.
+        if v_total > target:
             for it in items:
                 if it["primitive"] == "verify":
                     it["count"] = round(it["count"] * target / v_total, 1)
             notes.append(f"닻 적용: 검증 건수 {v_total:.0f}→{target} "
-                         "(완료조건 개수)")
-        elif v_total == 0:
-            items.append({"primitive": "verify", "count": float(target)})
-            notes.append(f"닻 적용: 검증 {target}건 추가 "
-                         "(완료조건 개수, LLM 누락)")
+                         "(완료조건 개수, 상한 절단)")
     return items
 
 
