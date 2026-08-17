@@ -183,6 +183,21 @@ class TestSessionApi(unittest.TestCase):
         # 결정론: 같은 입력 → 같은 결과
         self.assertEqual(r_again["human"]["min"], r_on["human"]["min"])
 
+    @unittest.skipUnless(os.environ.get("AE_LIVE_HAIKU") == "1",
+                         "실호출(과금)은 AE_LIVE_HAIKU=1일 때만")
+    def test_claude_cli_llm_haiku(self):
+        # 실LLM 꽂기 예시: 클로드 코드를 서브프로세스로 하이쿠 모델 호출.
+        # llm 자리는 complete_json(prompt, max_tokens)->dict 객체면 뭐든 된다 —
+        # ClaudeCliLLM이 그 계약을 `claude -p --model haiku`로 구현(어댑터
+        # 본체는 claude_cli_llm.py). 비용이 들므로 AE_LIVE_HAIKU=1일 때만 실행.
+        from claude_cli_llm import ClaudeCliLLM
+        llm = JsonRetryLLM(ClaudeCliLLM())          # 기본 모델 haiku
+        with tempfile.TemporaryDirectory() as d:
+            p = _make_jsonl(d)
+            r = measure_session(llm, p, force=True)
+        self.assertGreater(r["human"]["min"], 0)
+        self.assertIsNotNone(r["speedup"])
+
     def test_json_retry_wrapper(self):
         class Flaky:
             def __init__(self):
