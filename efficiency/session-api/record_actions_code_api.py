@@ -40,21 +40,28 @@ from requirement_actions import collect_record_stats  # noqa: E402
 from agent_effort import load_rates, speedup  # noqa: E402
 
 
-# 산출 채널 미확인 의심 (§37): 도구 활동이 이만큼 있는데 잡힌 산출물이
-# 0이면, 결과물이 미등록 채널(외부 시스템·셸 생성 파일 등)로 나갔을 가능성 —
-# 사람 쓰기·확인이 증발해 효율이 과소로 찍히므로 결과에 자백 표시를 남긴다.
-SUSPECT_MIN_TOOL_CALLS = 5
+# 쓰기 툴 포맷 미등록 의심 (§38): "도구 활동 많음 + 산출물 0" 같은 헐거운
+# 규칙은 운영성 세션(실행만 하고 산출물 없음)을 오탐해 리포트 신뢰만 깎는다
+# (게다가 §33 실사고 세션은 도구 호출 1회라 그 규칙에 안 걸렸음). 대신
+# 사고의 실제 서명을 겨냥한다: **미등록 도구의 입력에 글(50단어↑)이 실려
+# 나갔는데 그 도구의 응답은 짧은 ack** — 산출물이 그 도구로 제출됐다는
+# 직접 증거. 여기에 잡힌 산출물까지 없으면 쓰기 포맷 미등록이 원인이다.
+_SUSPECT_MIN_WORDS = 50  # 조회형 읽기 인정 문턱(§27)과 동일 눈금
 
 
 def suspect_output_channel(stats):
-    """산출물 0 + 도구 활동 다수 → (의심 여부, 근거 문구)."""
+    """미등록 쓰기 포맷 서명 감지 → (의심 여부, 근거 문구). 결정론."""
     captured = (stats.get("artifact_words", 0)
                 + stats.get("answer_words", 0))
-    calls = stats.get("tool_calls", 0)
-    if captured == 0 and calls >= SUSPECT_MIN_TOOL_CALLS:
-        return True, (f"산출 채널 미확인 의심: 도구 호출 {calls}회인데 잡힌 "
-                      "산출물(파일+답변+JSON) 0단어 — 결과물이 미등록 채널로 "
-                      "나갔을 가능성, 사람 시간·효율 과소 가능")
+    unrec_w = stats.get("unrec_write_words", 0)
+    tools = stats.get("unrec_write_tools") or {}
+    if unrec_w >= _SUSPECT_MIN_WORDS and captured < _SUSPECT_MIN_WORDS:
+        names = ", ".join(f"{t}({w}단어)" for t, w in
+                          sorted(tools.items(), key=lambda x: -x[1]))
+        return True, (f"쓰기 툴 포맷 미등록 의심: 미등록 도구 {names} 입력으로 "
+                      f"글 {unrec_w}단어가 나갔는데(응답은 짧은 확인뿐) 잡힌 "
+                      f"산출물은 {captured}단어 — 이 도구의 쓰기 포맷을 "
+                      "측정기에 등록해야 할 수 있음. 사람 시간·효율 과소 가능")
     return False, ""
 
 

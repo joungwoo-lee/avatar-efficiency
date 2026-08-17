@@ -535,6 +535,7 @@ def collect_record_stats(jsonl_path, detail=False):
     search_calls = 0         # 검색 도구 호출 수 (LLM 0회 행동 구성용, §32)
     exec_calls = 0           # 실행 도구(Bash 등) 호출 수 (§32)
     tool_report_w = 0        # StructuredOutput 보고 실측 단어수 (§33)
+    unrec_write = {}         # 미등록 도구명 → 입력에 실려 나간 단어수 (§38)
     turn_search_i = None     # 이 턴의 마지막 검색 시점 (신호④ — 턴 단위)
     turn_reads = []          # 이 턴의 (fp, 읽기 시점)
     all_turns = []           # 턴별 읽기 목록 (WASTE 위상 재생용)
@@ -630,6 +631,15 @@ def collect_record_stats(jsonl_path, detail=False):
                                 str(v) for v in qinp.values()
                                 if isinstance(v, (str, int))
                                 and 4 <= len(str(v)) <= 60}
+                        elif pq and not b.get("is_error"):
+                            # 미등록 쓰기 포맷 의심 재료 (§38): 미등록 도구의
+                            # 입력에 글(50단어↑)이 실려 나갔는데 응답은 짧은
+                            # ack — 산출물이 이 도구로 나갔을 서명 (§33 사고의
+                            # StructuredOutput이 정확히 이 모양이었음)
+                            in_w = _json_text_words(pq[1])
+                            if in_w >= _QUERY_READ_MIN_WORDS:
+                                unrec_write[pq[0]] = (
+                                    unrec_write.get(pq[0], 0) + in_w)
                         if pr:
                             fp, region = pr
                             # 파일별 실측 단어수 — 같은 구간 재읽기는 1회만
@@ -847,6 +857,8 @@ def collect_record_stats(jsonl_path, detail=False):
            "tool_calls": tool_i,
            "search_calls": search_calls,
            "exec_calls": exec_calls,
+           "unrec_write_tools": unrec_write,
+           "unrec_write_words": sum(unrec_write.values()),
            "gross_draft_words": gross_d,
            "gross_edit_words": gross_e}
     if detail:  # 감사·검증용: 등급별 파일 목록(+실측 단어수·기여 파일 분해)

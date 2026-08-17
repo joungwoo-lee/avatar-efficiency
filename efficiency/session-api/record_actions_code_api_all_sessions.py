@@ -84,7 +84,7 @@ def render(rows, n_excl, n_err, n_excl_suspect, root):
         "",
         f"- 측정일: {date.today().isoformat()}  |  루트: `{root}`",
         f"- 측정 {n}세션 (초소형 제외 {n_excl}, 실패 {n_err}"
-        + (f", **⚠ 산출 채널 의심 {len(suspects)}건"
+        + (f", **⚠ 쓰기 툴 포맷 의심 {len(suspects)}건"
            + (f"+제외분 {n_excl_suspect}건" if n_excl_suspect else "") + "**"
            if (suspects or n_excl_suspect) else "")
         + ") — LLM 0회, 결정론",
@@ -124,11 +124,13 @@ def render(rows, n_excl, n_err, n_excl_suspect, root):
     if suspects:
         out += [
             "",
-            "## ⚠ 산출 채널 미확인 의심 세션",
+            "## ⚠ 쓰기 툴 포맷 미등록 의심 세션",
             "",
-            "이 세션들은 도구 활동은 많은데 잡힌 산출물(파일+답변+JSON)이 "
-            "0단어 — 결과물이 미등록 채널(외부 시스템·셸 생성 파일 등)로 "
-            "나갔을 가능성이 있어 **사람 시간·효율이 과소일 수 있다.**",
+            "이 세션들은 **미등록 도구의 입력에 글이 실려 나갔는데 응답은 "
+            "짧은 확인뿐**이고 잡힌 산출물(파일+답변+JSON)도 없다 — 산출물이 "
+            "그 도구로 제출됐을 직접 증거가 있어 **사람 시간·효율이 과소일 "
+            "수 있다.** 근거의 도구 이름을 측정기에 쓰기 채널로 등록하면 "
+            "해소된다.",
             "",
             "| 세션 | 효율 ON | 근거 |",
             "|---|---|---|",

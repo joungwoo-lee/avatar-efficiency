@@ -184,12 +184,23 @@ class TestSessionApi(unittest.TestCase):
         self.assertEqual(r_again["human"]["min"], r_on["human"]["min"])
 
     def test_suspect_output_channel(self):
-        # §37: 도구 활동 많음 + 잡힌 산출물 0 → 산출 채널 미확인 의심 자백.
+        # §38: 미등록 도구 입력에 글 60단어가 실려 나갔고 응답은 ack,
+        # 잡힌 산출물 0 → 쓰기 툴 포맷 미등록 의심 자백 (§33 사고의 서명).
+        # 운영성 세션(실행만 하고 산출물 없음)은 오탐하지 않아야 한다.
         from record_actions_code_api import measure
-        lines = [{"type": "user",
-                  "message": {"role": "user", "content": "작업 지시 " * 60}}]
-        for i in range(6):  # 도구 호출 6회, 답변·파일·JSON 산출물 없음
-            lines += [
+        base = [{"type": "user",
+                 "message": {"role": "user", "content": "작업 지시 " * 60}}]
+        write_like = base + [
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "w1", "name": "mcp__jira__add_comment",
+                 "input": {"issue": "PROJ-1", "body": "분석 결과 " * 30}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "w1",
+                 "content": "comment added"}]}},
+        ]
+        ops_only = base
+        for i in range(6):  # 실행만 6회 — 산출물 없음 = 정당한 무산출 세션
+            ops_only = ops_only + [
                 {"type": "assistant", "message": {"role": "assistant",
                  "content": [{"type": "tool_use", "id": f"b{i}", "name": "Bash",
                               "input": {"command": "do-something"}}]}},
@@ -198,15 +209,21 @@ class TestSessionApi(unittest.TestCase):
                      "content": "ok " * 30}]}},
             ]
         with tempfile.TemporaryDirectory() as d:
-            p = os.path.join(d, "s.jsonl")
-            with open(p, "w", encoding="utf-8") as f:
-                for ln in lines:
-                    f.write(json.dumps(ln, ensure_ascii=False) + "\n")
-            r = measure(p)
+            paths = {}
+            for name, lines in (("w.jsonl", write_like), ("o.jsonl", ops_only)):
+                p = os.path.join(d, name)
+                with open(p, "w", encoding="utf-8") as f:
+                    for ln in lines:
+                        f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+                paths[name] = p
+            r_w = measure(paths["w.jsonl"])
+            r_o = measure(paths["o.jsonl"])
             normal = measure(_make_jsonl(d))
-        self.assertTrue(r["suspect_output_channel"])
-        self.assertIn("산출 채널 미확인 의심", r["notes"][0])
-        self.assertFalse(normal["suspect_output_channel"])  # 정상 세션은 미표시
+        self.assertTrue(r_w["suspect_output_channel"])
+        self.assertIn("쓰기 툴 포맷 미등록 의심", r_w["notes"][0])
+        self.assertIn("mcp__jira__add_comment", r_w["notes"][0])  # 도구명 명시
+        self.assertFalse(r_o["suspect_output_channel"])   # 운영성 세션 미표시
+        self.assertFalse(normal["suspect_output_channel"])
 
     @unittest.skipUnless(os.environ.get("AE_LIVE_HAIKU") == "1",
                          "실호출(과금)은 AE_LIVE_HAIKU=1일 때만")
