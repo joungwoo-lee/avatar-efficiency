@@ -68,9 +68,19 @@ def _is_system_text(t):
     return t.lstrip().startswith(_SYSTEM_TEXT_PREFIXES)
 
 
+def _basename(p):
+    """구분자 불문 파일명 — 윈도우 기록(역슬래시)을 리눅스에서 분석해도 동작.
+
+    Path(...).name은 실행 OS의 구분자만 인식해 교차 분석 시 파일명 추출이
+    깨진다 (리눅스에서 'C:\\a\\b.md'.name == 전체 문자열 — 신호② 사멸).
+    """
+    return str(p).replace("\\", "/").rsplit("/", 1)[-1]
+
+
 def _is_internal_artifact(fp):
     p = str(fp).replace("\\", "/").lower()
-    return ("/temp/claude/" in p          # 세션 임시 영역 (scratchpad·tasks)
+    return ("/temp/claude/" in p          # 세션 임시 영역 (scratchpad·tasks, Win)
+            or "/tmp/claude/" in p        # 세션 임시 영역 (Linux/macOS)
             or "/scratchpad/" in p
             or p.endswith(".output")      # 병렬 작업 결과 로그
             or Path(p).suffix in _IMG_EXT)  # 스크린샷·이미지
@@ -743,7 +753,7 @@ def collect_record_stats(jsonl_path, detail=False):
         # 파일 = 파일명, 조회형 = 인자 속 id성 토큰(티켓 키·문서명·URL)
         if f in query_tokens:
             return any(t in ans_text for t in query_tokens[f])
-        return Path(f).name in ans_text
+        return _basename(f) in ans_text
 
     revisited = {fp for (fp, _off), n in read_regions.items() if n >= 2}
     contributed = {

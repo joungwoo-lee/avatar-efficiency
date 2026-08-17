@@ -26,7 +26,7 @@ if str(_RA) not in _sys.path:
     _sys.path.insert(0, str(_RA))
 from estimator import validate_requirements_output  # noqa: E402
 from prompts import number_lines  # noqa: E402
-from requirement_actions import replay_write_net  # noqa: E402 (§31 순계 공용)
+from requirement_actions import replay_write_net, _basename  # noqa: E402 (공용)
 
 TRANSCRIPT_PROMPT_VERSION = "requirement_extractor.v1"
 
@@ -301,7 +301,7 @@ def normalize_claude_code_jsonl(jsonl_path, max_chars=12000,
                   " 종류'. 아래 횟수는 AI의 경로이니 절대 그대로 베끼지 말고, 사람이"
                   " 같은 결과를 내려면 어떤 종류의 단계가 필요한지 참고로만 쓸 것]"]
         if read_files:
-            names = ", ".join(Path(f).name for f in read_files[:12])
+            names = ", ".join(_basename(f) for f in read_files[:12])
             struct.append(f"  검토된 파일 {len(read_files)}개: {names}")
         if search_n:
             struct.append(f"  탐색·검색 수행 있었음 (AI 기준 {search_n}회)")
@@ -316,8 +316,7 @@ def normalize_claude_code_jsonl(jsonl_path, max_chars=12000,
     if artifact_words:
         total = sum(artifact_words.values())
         tops = sorted(artifact_words.items(), key=lambda x: -x[1])[:10]
-        detail = ", ".join(f"{Path(f).name if hasattr(f,'rsplit') else f}"
-                           f" ~{w}단어" for f, w in tops)
+        detail = ", ".join(f"{_basename(f)} ~{w}단어" for f, w in tops)
         lines.append(f"[산출물 규모] 총 작성·수정 ~{total}단어 — {detail}")
     if tool_counts and include_tool_stats:
         # 주의: 도구 통계는 AI의 실행 경로다 — 사람 경로 분해(primitive_effort)
