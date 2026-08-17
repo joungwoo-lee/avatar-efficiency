@@ -183,6 +183,37 @@ class TestSessionApi(unittest.TestCase):
         # 결정론: 같은 입력 → 같은 결과
         self.assertEqual(r_again["human"]["min"], r_on["human"]["min"])
 
+    def test_rawrecord_mode(self):
+        # §39: rawrecord = 궤적 재연 — 행동 횟수를 세션 기록 그대로.
+        # Bash 6회 세션: 기본 자는 execute 1건, rawrecord는 6건.
+        from record_actions_code_api import measure
+        lines = [{"type": "user",
+                  "message": {"role": "user", "content": "작업 지시 " * 60}}]
+        for i in range(6):
+            lines += [
+                {"type": "assistant", "message": {"role": "assistant",
+                 "content": [{"type": "tool_use", "id": f"b{i}", "name": "Bash",
+                              "input": {"command": "run"}}]}},
+                {"type": "user", "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": f"b{i}",
+                     "content": "ok " * 30}]}},
+            ]
+        lines.append({"type": "assistant", "message": {"role": "assistant",
+                      "content": [{"type": "text", "text": "완료 보고 " * 30}]}})
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "s.jsonl")
+            with open(p, "w", encoding="utf-8") as f:
+                for ln in lines:
+                    f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+            base = measure(p)
+            raw = measure(p, humanize="rawrecord")
+        bd_base = {b["primitive"]: b["count"] for b in base["human"]["breakdown"]}
+        bd_raw = {b["primitive"]: b["count"] for b in raw["human"]["breakdown"]}
+        self.assertEqual(bd_base["execute"], 1)   # 바닥 자: 흔적 있으면 1건
+        self.assertEqual(bd_raw["execute"], 6)    # 궤적 재연: 기록 그대로
+        self.assertEqual(raw["human"]["humanize"], "rawrecord")
+        self.assertGreater(raw["human"]["min"], base["human"]["min"])
+
     def test_suspect_output_channel(self):
         # §38: 미등록 도구 입력에 글 60단어가 실려 나갔고 응답은 ack,
         # 잡힌 산출물 0 → 쓰기 툴 포맷 미등록 의심 자백 (§33 사고의 서명).

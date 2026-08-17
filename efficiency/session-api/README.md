@@ -116,8 +116,11 @@ python record_actions_code_api.py session.jsonl --raw    # 휴먼화 끈 대조�
 
 ```python
 from record_actions_code_api import measure, measure_batch
-r = measure("session.jsonl")                  # LLM 인자 자체가 없음
-r = measure("session.jsonl", humanize=False)  # 읽기 등급·쓰기 순계 끔
+r = measure("session.jsonl")                  # LLM 인자 자체가 없음 (바닥 자)
+r = measure("session.jsonl", humanize=False)  # 읽기 등급·쓰기 순계 끔 (대조군)
+r = measure("session.jsonl", humanize="rawrecord")  # 궤적 재연 — 읽기·쓰기
+#   원량 + 행동 횟수까지 세션 기록 그대로(검색 40회면 search 40건).
+#   "AI가 한 행동을 사람이 똑같이 했다면"의 자 (CLI: --rawrecord, §39)
 r["suspect_output_channel"]                   # 쓰기 툴 포맷 미등록 의심(§38)
 ```
 

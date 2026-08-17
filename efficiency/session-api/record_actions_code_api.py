@@ -71,10 +71,24 @@ def suspect_output_channel(stats):
     return False, ""
 
 
+RAW_RECORD = "rawrecord"  # 궤적 재연 자 (§39)
+
+
 def build_actions(stats, rates, humanize=True):
-    """기록 실측 → 사람 행동 목록 (결정론, LLM 0회). §32 고정 규칙."""
+    """기록 실측 → 사람 행동 목록 (결정론, LLM 0회). §32 고정 규칙.
+
+    humanize:
+      True (기본)   바닥 자 — 읽기 등급·쓰기 순계 + 건수형 "흔적 있으면 1건"
+      False         읽기·쓰기 휴먼화 끔 (검토 전량 정독·번복 미소거),
+                    건수형은 바닥 규칙 유지 — 휴먼화 효과 대조군
+      "rawrecord"   궤적 재연 — 읽기·쓰기 원량에 더해 **행동 횟수도 세션
+                    기록 그대로**(search=검색 호출 수, execute=실행 호출 수).
+                    "AI가 한 행동을 사람이 똑같이 했다면"의 자. verify는
+                    기록에 대응 행동이 없어 미계상 (§39)
+    """
     rm = rates.get("human_reading_model") or {}
-    if humanize:
+    raw_record = humanize == RAW_RECORD
+    if humanize is True:
         read_rate = rates["human"]["read"].get("min_per_unit", 0.005)
         skim_rate = rm.get("skim_min_per_word", 0.00025)
         factor = (skim_rate / read_rate) if read_rate else 0.0
@@ -83,7 +97,7 @@ def build_actions(stats, rates, humanize=True):
                   + stats.get("input_words", 0))
         draft_w = stats.get("out_draft_words", 0)
         edit_w = stats.get("out_edit_words", 0)
-    else:
+    else:  # False(대조군)·rawrecord — 읽기 전량 정독, 쓰기 번복 미소거
         read_w = stats.get("reviewed_words", 0) + stats.get("input_words", 0)
         draft_w = stats.get("gross_draft_words", 0)
         edit_w = stats.get("gross_edit_words", 0)
@@ -96,12 +110,21 @@ def build_actions(stats, rates, humanize=True):
         items.append({"primitive": "draft", "count": round(draft_w, 1)})
     if edit_w:
         items.append({"primitive": "edit", "count": round(edit_w, 1)})
-    if stats.get("search_calls"):
-        items.append({"primitive": "search", "count": 1})
-    if stats.get("exec_calls"):
-        items.append({"primitive": "execute", "count": 1})
-    if draft_w or edit_w:
-        items.append({"primitive": "verify", "count": 1})
+    if raw_record:
+        # 궤적 재연: 행동 횟수 = 세션 기록의 호출 수 그대로
+        if stats.get("search_calls"):
+            items.append({"primitive": "search",
+                          "count": stats["search_calls"]})
+        if stats.get("exec_calls"):
+            items.append({"primitive": "execute",
+                          "count": stats["exec_calls"]})
+    else:
+        if stats.get("search_calls"):
+            items.append({"primitive": "search", "count": 1})
+        if stats.get("exec_calls"):
+            items.append({"primitive": "execute", "count": 1})
+        if draft_w or edit_w:
+            items.append({"primitive": "verify", "count": 1})
     return items
 
 
@@ -162,9 +185,15 @@ def main(argv):
     paths = [a for a in argv if not a.startswith("--")]
     if not paths:
         print("usage: python record_actions_code_api.py <session.jsonl> [...] "
-              "[--raw] [--json]", file=sys.stderr)
+              "[--raw | --rawrecord] [--json]", file=sys.stderr)
         return 2
-    rows = measure_batch(paths, humanize="--raw" not in argv)
+    if "--rawrecord" in argv:
+        hz = RAW_RECORD
+    elif "--raw" in argv:
+        hz = False
+    else:
+        hz = True
+    rows = measure_batch(paths, humanize=hz)
     if "--json" in argv:
         print(json.dumps(rows, ensure_ascii=False, indent=1))
         return 0

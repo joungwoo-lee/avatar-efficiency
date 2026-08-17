@@ -42,11 +42,14 @@ def collect(root):
                     n_excl_suspect += 1
                 continue
             off = measure(f, humanize=False)
+            raw = measure(f, humanize="rawrecord")
             rows.append({"session": on["session"],
                          "agent": on["agent"]["total_min"],
                          "h_on": on["human"]["min"], "sp_on": on["speedup"] or 0,
                          "h_off": off["human"]["min"],
                          "sp_off": off["speedup"] or 0,
+                         "h_raw": raw["human"]["min"],
+                         "sp_raw": raw["speedup"] or 0,
                          "suspect": on.get("suspect_output_channel", False),
                          "suspect_why": (on.get("notes") or [""])[0]})
         except Exception:
@@ -72,7 +75,9 @@ def render(rows, n_excl, n_err, n_excl_suspect, root):
     suspects = [r for r in rows if r["suspect"]]
     avg_on = sum(r["h_on"] for r in rows) / n
     avg_off = sum(r["h_off"] for r in rows) / n
+    avg_raw = sum(r["h_raw"] for r in rows) / n
     diff = avg_off - avg_on
+    diff_raw = avg_raw - avg_on
     n_diff = sum(1 for r in rows if abs(r["h_off"] - r["h_on"]) > 0.005)
     med_agent = statistics.median(r["agent"] for r in rows)
     big = [r["h_off"] - r["h_on"] for r in rows if r["agent"] > med_agent]
@@ -89,23 +94,33 @@ def render(rows, n_excl, n_err, n_excl_suspect, root):
            if (suspects or n_excl_suspect) else "")
         + ") — LLM 0회, 결정론",
         "",
-        "## 휴먼화(읽기 등급 분해 + 쓰기 번복 소거) 효과",
+        "## 3모드 비교 — 휴먼화 ON(바닥 자) / OFF(읽기·쓰기만 원량) / "
+        "raw record(궤적 재연: 행동 횟수까지 세션 그대로)",
         "",
         "| | 평균 |",
         "|---|---|",
         f"| humanize ON | {avg_on:.1f}min |",
         f"| humanize OFF | {avg_off:.1f}min |",
-        f"| 차이 | **+{diff:.1f}min (+{100 * diff / avg_on:.1f}%)** |",
+        f"| raw record | {avg_raw:.1f}min |",
+        f"| OFF−ON | **+{diff:.1f}min (+{100 * diff / avg_on:.1f}%)** "
+        "(읽기 등급 분해 + 쓰기 번복 소거 효과) |",
+        f"| RAW−ON | **+{diff_raw:.1f}min (+{100 * diff_raw / avg_on:.1f}%)** "
+        "(위 효과 + 행동 횟수 궤적 상속까지) |",
         "",
-        f"{n_diff}개 세션에서 차이 발생. 대형 세션(agent 중앙값 "
+        f"{n_diff}개 세션에서 ON/OFF 차이 발생. 대형 세션(agent 중앙값 "
         f"{med_agent:.1f}min 초과) 평균 차이 "
         f"{sum(big) / len(big) if big else 0:.1f}min vs 소형 "
         f"{sum(small) / len(small) if small else 0:.1f}min "
         "(번복 소거 + 등급 분해 효과는 대형 세션에 집중).",
         "",
-        "## 효율값 (휴먼화 ON)",
+        "## 효율값",
         "",
-        f"avg: {sum(sps) / n:.2f}  |  중앙값: {statistics.median(sps):.2f}",
+        f"휴먼화 ON — avg: {sum(sps) / n:.2f}  |  중앙값: "
+        f"{statistics.median(sps):.2f}",
+        f"raw record — avg: {sum(r['sp_raw'] for r in rows) / n:.2f}  |  "
+        f"중앙값: {statistics.median(r['sp_raw'] for r in rows):.2f}",
+        "",
+        "(히스토그램은 휴먼화 ON 기준)",
         "",
     ]
     out += histogram(sps)
@@ -113,14 +128,16 @@ def render(rows, n_excl, n_err, n_excl_suspect, root):
         "",
         "## 디테일 — 전체 측정 표 (agent 시간 큰 순)",
         "",
-        "| 세션 | agent(min) | human ON(min) | 효율 ON | human OFF(min) | 효율 OFF |",
-        "|---|---|---|---|---|---|",
+        "| 세션 | agent(min) | ON(min) | 효율 ON | OFF(min) | 효율 OFF "
+        "| RAW(min) | 효율 RAW |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for r in sorted(rows, key=lambda r: -r["agent"]):
         mark = "⚠ " if r["suspect"] else ""
         out.append(f"| {mark}{r['session'][:16]} | {r['agent']:.1f} "
                    f"| {r['h_on']:.1f} | {r['sp_on']:.2f} "
-                   f"| {r['h_off']:.1f} | {r['sp_off']:.2f} |")
+                   f"| {r['h_off']:.1f} | {r['sp_off']:.2f} "
+                   f"| {r['h_raw']:.1f} | {r['sp_raw']:.2f} |")
     if suspects:
         out += [
             "",
