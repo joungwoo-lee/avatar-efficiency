@@ -125,8 +125,8 @@ def render(rows, n_excl, n_err, n_excl_suspect, n_active, root):
         f"| {statistics.median(r[sk] for r in rows):.2f} |"
         for label, hk, sk in (
             ("rw ON · act ON", "h_on", "sp_on"),
-            ("rw ON · act OFF", "h_actoff", "sp_actoff"),
             ("rw OFF · act ON", "h_rwoff", "sp_rwoff"),
+            ("rw ON · act OFF", "h_actoff", "sp_actoff"),
             ("rw OFF · act OFF", "h_raw", "sp_raw"))
     ] + [
         "",
@@ -146,24 +146,24 @@ def render(rows, n_excl, n_err, n_excl_suspect, n_active, root):
         "",
     ]
     out += histogram({
-        "rw·act ON": sps,
-        "rwON·actOFF": [r["sp_actoff"] for r in rows],
+        "rwON·actON": sps,
         "rwOFF·actON": [r["sp_rwoff"] for r in rows],
-        "로레코드": [r["sp_raw"] for r in rows]})
+        "rwON·actOFF": [r["sp_actoff"] for r in rows],
+        "rwOFF·actOFF": [r["sp_raw"] for r in rows]})
     out += [
         "",
         "## 디테일 — 전체 측정 표 (agent 시간 큰 순, min/효율)",
         "",
-        "| 세션 | agent(min) | rw·act ON | 효율 | rwON·actOFF | 효율 "
-        "| rwOFF·actON | 효율 | 로레코드 | 효율 |",
+        "| 세션 | agent(min) | rwON·actON | 효율 | rwOFF·actON | 효율 "
+        "| rwON·actOFF | 효율 | rwOFF·actOFF | 효율 |",
         "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in sorted(rows, key=lambda r: -r["agent"]):
         mark = "⚠ " if r["suspect"] else ""
         out.append(f"| {mark}{r['session'][:16]} | {r['agent']:.1f} "
                    f"| {r['h_on']:.1f} | {r['sp_on']:.2f} "
-                   f"| {r['h_actoff']:.1f} | {r['sp_actoff']:.2f} "
                    f"| {r['h_rwoff']:.1f} | {r['sp_rwoff']:.2f} "
+                   f"| {r['h_actoff']:.1f} | {r['sp_actoff']:.2f} "
                    f"| {r['h_raw']:.1f} | {r['sp_raw']:.2f} |")
     if suspects:
         out += [
