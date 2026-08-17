@@ -618,6 +618,18 @@
   휴먼화분(58분)의 2.7배: 행동 횟수 상속이 최대 왜곡원임을 정량 확인.
   효율은 ON 1.81 vs RAW 2.41 — 궤적 자로 재면 AI가 33% 더 잘해 보인다.
 
+## 40. 휴먼화 옵션 2축 재편 — humanize_rw + humanize_act
+
+- 재편: 단일 humanize(True/False/"rawrecord")를 직교 2축으로 —
+  humanize_rw(읽기·쓰기: 등급 분해+번복 소거) / humanize_act(행동 건수:
+  "흔적 있으면 1건"; OFF = 로레코드, 행동 횟수를 세션 기록 그대로).
+  기본은 둘 다 ON(종전 기본과 동일 동작). act OFF가 구 rawrecord.
+- 호환: measure(humanize=...) 구 인자·CLI --raw/--rawrecord 그대로 동작,
+  반환에 humanize_rw/humanize_act 병기 + 구 표현("humanize") 유지.
+  CLI 신규 --norw/--noact. 테스트로 신구 동등성 고정.
+- 리포트 라벨 2축 표기로 갱신. 91세션 재실행 결과 종전과 동일
+  (ON 221.4 / rw OFF 279.2 / 로레코드 435.9분).
+
 ## 미해결 (알려진 한계·다음 단계)
 
 1. **사람 실측 정답지 0건** — 모든 절대값의 상한. A급 3~5건 확보가 최우선.
