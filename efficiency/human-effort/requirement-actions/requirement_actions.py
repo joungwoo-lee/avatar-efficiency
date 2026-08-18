@@ -49,6 +49,64 @@ _EXEC_TOOLS = {"Bash", "PowerShell", "Write", "Edit", "MultiEdit",
                "NotebookEdit", "TodoWrite", "Task", "Agent", "Workflow",
                "TaskOutput", "TaskStop", "KillShell", "SendMessage",
                "AskUserQuestion", "ExitPlanMode", "EnterPlanMode", "Skill"}
+# 셸 속 검색·읽기 재분류 (§47): Bash/PowerShell 호출 대부분이 실은 grep·sed류
+# 검색·읽기다(실측: 실행 신원 상위가 grep -n 396종·sed -n 302종). 이를 실행
+# 축에 두면 사람 실행 건수가 어휘 우연으로 부풀거나(로레코드) 눌린다(순계).
+# 동사 기준으로 제 축에 보낸다 — 검색 동사는 검색 축(착지 로직), 읽기 동사는
+# 조회형 읽기(3등급 분해), 나머지만 진짜 실행. 판정: 명령을 &&·||·;·| 로
+# 조각내 조각별 첫 동사(경로·.exe·ENV= 접두 제거)로 — 검색 조각이 있고 실행
+# 조각이 없으면 search, 전 조각이 읽기·중립이면 read, 그 외는 exec.
+# 파일 리다이렉트(>)·히어독(<<)·sed -i 는 쓰기·생성 부수효과라 무조건 exec —
+# 애매하면 실행에 남기는 덜 깎는(보수적) 방향.
+_SHELL_SEARCH_VERBS = {"grep", "egrep", "fgrep", "rg", "ag", "find", "fd",
+                       "locate", "which", "where", "whereis", "ls", "dir",
+                       "tree", "select-string", "get-childitem", "gci",
+                       "get-command"}
+_SHELL_READ_VERBS = {"cat", "head", "tail", "less", "more", "type", "sed",
+                     "awk", "wc", "nl", "od", "xxd", "hexdump", "stat",
+                     "file", "diff", "get-content", "gc", "select-object",
+                     "measure-object"}
+_SHELL_NEUTRAL_VERBS = {"cd", "echo", "printf", "pwd", "true", "set",
+                        "export", "chcp", "date"}
+# 파일 쓰기가 아닌 리다이렉트(스트림 병합·널 버림)는 판정에서 소거
+_SHELL_REDIR_NOISE = re.compile(
+    r"2>&1|1>&2|2>\s*(?:/dev/null|\$null|nul)\b|>\s*(?:/dev/null|\$null|nul)\b",
+    re.I)
+
+
+def classify_shell_command(cmd):
+    """셸 명령 1개 → "search" | "read" | "exec" (§47). 결정론."""
+    c = " ".join(str(cmd).split())
+    if not c:
+        return "exec"
+    if "<<" in c or ">" in _SHELL_REDIR_NOISE.sub("", c):
+        return "exec"
+    kinds = set()
+    for seg in re.split(r"&&|\|\||;|\|", c):
+        toks = seg.split()
+        while toks and re.match(r"^\w+=", toks[0]):
+            toks = toks[1:]                      # ENV=값 접두 제거
+        if not toks:
+            continue
+        verb = toks[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+        verb = verb[:-4] if verb.endswith(".exe") else verb
+        if verb in _SHELL_NEUTRAL_VERBS:
+            continue
+        if verb == "sed" and "-i" in toks:
+            return "exec"
+        if verb in _SHELL_SEARCH_VERBS:
+            kinds.add("search")
+        elif verb in _SHELL_READ_VERBS:
+            kinds.add("read")
+        else:
+            return "exec"
+    if "search" in kinds:
+        return "search"
+    if "read" in kinds:
+        return "read"
+    return "exec"  # 전 조각 중립(echo뿐 등) — 실행에 남김
+
+
 # 이름이 검색형(search/list/query/find)인 도구 = 검색 신호(④)로 취급, 읽기 아님
 _QUERY_SEARCH_RE = re.compile(r"(?:^|_|-)(search|list|query|find)(?:$|_|-)",
                               re.IGNORECASE)
@@ -634,7 +692,8 @@ def collect_record_stats(jsonl_path, detail=False):
                                 str(v) for v in qinp.values()
                                 if isinstance(v, (str, int))
                                 and 4 <= len(str(v)) <= 60}
-                        elif pq and not b.get("is_error"):
+                        elif pq and not b.get("is_error") \
+                                and pq[0] != "shell":  # §47: 셸 읽기는 §38 제외
                             # 미등록 쓰기 포맷 의심 재료 (§38): 미등록 도구의
                             # 입력에 글(50단어↑)이 실려 나갔는데 응답은 짧은
                             # ack — 산출물이 이 도구로 나갔을 서명 (§33 사고의
@@ -670,10 +729,21 @@ def collect_record_stats(jsonl_path, detail=False):
                         turn_search_i = tool_i
                         search_calls += 1
                     if name in ("Bash", "PowerShell"):
-                        exec_calls += 1
-                        exec_canons.add(" ".join(
-                            str((b.get("input") or {}).get("command", "")
-                                ).split())[:120])
+                        cmd = str((b.get("input") or {}).get("command", ""))
+                        canon = " ".join(cmd.split())[:120]
+                        kind = classify_shell_command(cmd)
+                        if kind == "search":         # §47: 셸 grep·find류
+                            turn_search_i = tool_i   # = 탐색 신호(착지 로직)
+                            search_calls += 1
+                        elif kind == "read" and b.get("id"):
+                            # §47: 셸 sed -n·cat류 = 조회형 읽기 후보 —
+                            # 결과 본문 크기(§27 문턱)로 읽기 여부 확정,
+                            # 이후 등급 분해·재방문·착지는 조회형과 동일 경로
+                            pending_query[b["id"]] = (
+                                "shell", {"command": canon}, tool_i)
+                        else:
+                            exec_calls += 1
+                            exec_canons.add(canon)
                     inp = b.get("input") or {}
                     if name == "StructuredOutput":
                         # 구조화 보고 채널 (§33): 워크플로 에이전트의 최종

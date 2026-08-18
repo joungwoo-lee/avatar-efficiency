@@ -74,7 +74,7 @@ record_actions_api       = 위쪽. 직행 지시는 있으나 요약 속 활동 
 |---|---|
 | `req_actions_api.py` | **기본 API** — 할일 거치는 방식 (requirement-actions). 직행 자 — 바닥 근처 |
 | `record_actions_api.py` | **교차확인 API** — 할일 안 거치는 방식 (record-actions). 궤적 냄새를 간직한 기준선 — 위쪽 자 |
-| `record_actions_code_api.py` | **LLM 0회 API** (§32) — 분자까지 코드 실측(읽기 항해 구조 + 쓰기 순계 + 건수형은 행동 순계(§46): 검색=착지-기여 문서당 1건·실행=명령 신원당 1건, 하한 1). `humanize=False`(`--raw`)로 휴먼화 기능 끈 대조군 실행 가능 |
+| `record_actions_code_api.py` | **LLM 0회 API** (§32) — 분자까지 코드 실측(읽기 항해 구조 + 쓰기 순계 + 건수형은 행동 순계(§46): 검색=착지-기여 문서당 1건·실행=명령 신원당 1건, 하한 1. 셸 속 grep·sed류는 검색·읽기 축으로 재분류(§47)). `humanize=False`(`--raw`)로 휴먼화 기능 끈 대조군 실행 가능 |
 | `record_actions_code_api_all_sessions.bat` / `.sh` | **원클릭 실행 파일** (Windows 더블클릭 / Linux `./record_actions_code_api_all_sessions.sh`) — 그 PC 홈(`~/.claude/projects`)의 세션 전체를 LLM 0회로 측정해 홈에 `session-efficiency-report.md` 저장 |
 | `record_actions_code_api_all_sessions.py` | 위 실행 파일의 본체 — 마크다운 리포트(휴먼화 ON/OFF 효과 + 효율 히스토그램 + 전체 세션 디테일 표) 생성. 직접 쓸 때: `python record_actions_code_api_all_sessions.py [루트] [--out 파일.md]` |
 | `session_api.py` | 공용 코어 — 분모 실측·초소형 게이트·`measure_session(human=...)` |

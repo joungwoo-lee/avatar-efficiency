@@ -254,6 +254,54 @@ class TestSessionApi(unittest.TestCase):
         self.assertEqual(bd_raw["execute"], 5)    # 로레코드: 호출 수 그대로
         self.assertLessEqual(bd_base["execute"], bd_raw["execute"])  # 단조성
 
+    def test_shell_reclassify(self):
+        # §47: 셸 명령 재분류 — grep류=검색, sed -n류=읽기, 나머지=실행.
+        import record_actions_code_api  # noqa: F401 (sys.path 세팅)
+        from requirement_actions import (classify_shell_command,
+                                         collect_record_stats)
+        cases = {"grep -n foo a.py": "search",
+                 "cd /x && grep -rn bar . | head -5": "search",
+                 "grep x || true": "search",
+                 "sed -n 10,40p mod.py": "read",
+                 "PYTHONIOENCODING=utf-8 cat f.md | wc -l": "read",
+                 "sed -i s/a/b/ f.py": "exec",
+                 "pytest tests/": "exec",
+                 "cat > out.txt <<EOF": "exec",
+                 "grep x && git commit -m m": "exec",
+                 "echo done": "exec",
+                 "grep x 2>&1 | head": "search"}
+        for cmd, want in cases.items():
+            self.assertEqual(classify_shell_command(cmd), want, cmd)
+        # 통합: 셸 grep(검색 신호) → 직후 셸 sed -n 60단어(조회형 읽기 착지)
+        lines = [
+            {"type": "user",
+             "message": {"role": "user", "content": "작업 지시 " * 60}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "g1", "name": "Bash",
+                 "input": {"command": "grep -n needle src/mod.py"}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "g1",
+                 "content": "src/mod.py:3: needle"}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "r1", "name": "Bash",
+                 "input": {"command": "sed -n 1,80p src/mod.py"}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "r1",
+                 "content": "본문 " * 60}]}},
+            {"type": "assistant", "message": {"role": "assistant",
+             "content": [{"type": "text", "text": "완료 보고 " * 30}]}},
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "s.jsonl")
+            with open(p, "w", encoding="utf-8") as f:
+                for ln in lines:
+                    f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+            rs = collect_record_stats(p)
+        self.assertEqual(rs["search_calls"], 1)       # grep = 검색 축
+        self.assertEqual(rs["exec_calls"], 0)         # 실행 축 비움
+        self.assertEqual(rs["contributed_docs"], 1)   # sed 착지 = 기여 조회
+        self.assertEqual(rs["search_landing_docs"], 1)
+
     def test_suspect_output_channel(self):
         # §38: 미등록 도구 입력에 글 60단어가 실려 나갔고 응답은 ack,
         # 잡힌 산출물 0 → 쓰기 툴 포맷 미등록 의심 자백 (§33 사고의 서명).
