@@ -147,3 +147,136 @@ AI가 읽은 파일(조회형 도구·셸 sed/cat류 읽기 포함, §27·§47)�
    않는다.
 4. 판단 노동 과소 — verify가 규모 무관 고정 1건.
 5. 여러 세션 파일로 이어진 작업은 기여 승격이 파일 경계를 못 넘는다(§17).
+
+## 6. 사람 요율의 외부 연구 근거
+
+`rates.json`의 사람 요율은 작업별 사람 실측 정답에서 직접 추정한 값이 아니라
+seed가 다수다. 다만 읽기·작성·타이핑·검색은 인간 수행 연구와 대응시켜
+현재 값의 규모가 현실 범위에 있는지 확인할 수 있다.
+
+근거 수준은 다음처럼 구분한다.
+
+- **직접 실증**: 현재 측정 단위와 상당히 유사한 인간 과제의 실측값이 존재.
+- **인접 실증**: 관련 인간 수행 실측값은 있으나 현재 행동과 과제가 완전히 같지는 않음.
+- **모델 가정**: 일반적인 단일 인간 속도로 환원하기 어렵고 현재 값은 seed로 봐야 함.
+
+| 행동 | 현재 요율 | 속도로 환산 | 외부 근거 | 근거 수준 |
+|---|---:|---:|---|---|
+| read | 0.005분/단어 | **200 wpm** | 성인 영어 비문학 묵독 메타분석 평균 238 wpm, 일반 성인 주요 범위 175~300 wpm [R1] | **직접 실증** |
+| skim | 0.00025분/단어 | 문서 기준 **4,000 wpm 상당** | 실제 skimming은 일반 묵독의 약 2~4배까지 가능하나 이해도가 낮아짐 [R2] | **모델 가정 — 선택 읽기로 해석** |
+| draft | 0.05분/단어 | **20 wpm** | 실제 메시지를 구성하며 작성한 keyboard composition 연구에서 약 19 corrected wpm [R3] | **직접 실증** |
+| edit | 0.02분/단어 | **50 wpm** | 168,960명·1.37억 keystroke 연구의 일반 타이핑 평균 51.56 wpm [R4] | **인접 실증** |
+| search | 2.0분/건 | — | 정보검색 연구의 성공 과제 평균 176.2초(2.94분), 평균 4.98 queries/task [R5] | **인접 실증** |
+| execute | 2.0분/건 | — | 저수준 컴퓨터 조작 자체는 HCI 연구에서 초 단위. KLM의 한 명령 수행 예시는 수초, mental preparation 연산도 초 단위 [R6] | **모델 가정** |
+| review(문서) | 0.008분/단어 | **125 wpm** | 리뷰·inspection은 대상·목적·결함 탐색 수준에 따라 달라짐. NASA도 inspection별 실제 투입 시간을 별도 기록하도록 함 [R7] | **모델 가정** |
+| verify | 3.0분/건 | — | 작업 규모와 검증 방법에 따라 변동. 직접 대응되는 보편 인간 요율 없음 | **모델 가정** |
+| correct | 4.0분/interrupt | — | 중단의 원인·복구 범위에 따라 변동. 직접 대응되는 보편 인간 요율 없음 | **모델 가정** |
+
+### 6.1 read — 200 wpm
+
+Brysbaert의 읽기 속도 메타분석은 **190개 연구, 18,573명**을 종합해
+성인의 영어 비문학 묵독 평균을 **238 wpm**, 일반적인 주요 범위를
+**175~300 wpm**으로 추정한다. 현재 200 wpm은 이 범위 안이며 평균보다
+약간 보수적이다. 따라서 `read = 0.005분/단어`는 외부 인간 연구로 가장
+직접 방어할 수 있는 요율이다.
+
+### 6.2 skim — "4,000 wpm"이 아니라 5% 선택 읽기
+
+`skim = read의 1/20`을 문자 그대로 읽기 속도로 환산하면 4,000 wpm이지만,
+이를 사람이 실제로 4,000단어를 읽고 이해한다는 뜻으로 해석하면 안 된다.
+
+읽기 연구에서는 skimming이 일반 묵독보다 약 **2~4배 빠를 수 있지만
+이해도와 정확도가 떨어지며**, 효과적인 skimming은 중요한 구간을 선택해
+읽는 행동에 가깝다.
+
+따라서 본 측정기의 `1/20`은 다음과 같이 해석한다.
+
+> **전체 문서를 4,000 wpm으로 읽는다는 뜻이 아니라, 직행하는 사람은 비기여
+> 텍스트 대부분을 건너뛰고 전체 단어의 약 5%에 해당하는 비용만 쓴다는 뜻이다.**
+
+즉 **5%는 인간 연구에서 측정된 보편적 선택률이 아니라 현재 휴먼화 모델의
+비용 등가 해석**이다. 이 표현이 실제 인간 읽기 연구와 충돌하지 않는다.
+
+### 6.3 draft — 20 wpm
+
+Karat et al.의 CHI 연구는 사용자가 주어진 내용을 베껴 쓰는 transcription과
+직접 내용을 만들어 쓰는 composition을 구분했다. Composition은 업무·사회적
+메시지에 대한 짧은 답변을 직접 구성하는 과제였으며, 이 연구의 keyboard
+composition 결과는 약 **19 corrected wpm**으로 보고됐다. 현재
+`draft = 20 wpm`과 거의 일치한다.
+
+따라서 draft는 단순 키 입력 속도가 아니라 **무엇을 쓸지 생각하면서 최종
+문장을 생산하는 속도**로 설명하는 것이 맞다.
+
+### 6.4 edit — 50 wpm
+
+Dhakal et al.은 **168,960명, 136,857,600 keystroke**를 분석했고 평균
+타이핑 속도를 **51.56 wpm**으로 보고했다. 현재 `edit = 50 wpm`과 수치상
+거의 같다.
+
+다만 이 연구는 주어진 문장을 입력하는 text-entry 과제이며, 기존 문장을
+이해하고 수정 방향을 판단하는 편집 과제 자체를 측정한 것은 아니다.
+따라서 **50 wpm은 수정 문구를 실제로 입력하는 처리량의 실증 anchor**로
+사용하되, edit 전체의 직접 실측값이라고 주장하지 않는다.
+
+또한 WPM은 통상 5 characters를 1 word로 환산하는 관례가 있으므로,
+현재 구현의 단어 집계 방식이 공백 기준이라면 한국어·코드에서는 절대값을
+직접 동일시하지 않는다.
+
+### 6.5 search — 2분/기여 착지
+
+Aula et al.의 Google 연구에서 성공한 정보검색 과제는 평균 **176.2초
+(2.94분)**가 걸렸고 평균 **4.98개 query**가 사용됐다.
+
+현재 측정기는 query 하나마다 2분을 부과하지 않고 **여러 query refinement를
+거쳐 실제 기여 문서에 착지한 search episode 하나**에 2분을 부과한다.
+따라서 연구의 2.94분과 정확히 같은 값은 아니지만 같은 크기이며, 단순
+검색 호출당 요율보다 현재 정의와 더 잘 대응한다.
+
+### 6.6 execute·review·verify — 인간 상수가 아니라 episode 비용
+
+HCI의 Keystroke-Level Model에서는 숙련 사용자의 키 입력·포인팅·명령
+실행 같은 저수준 조작은 대체로 초 단위로 모델링한다.
+
+따라서 `execute = 2분/건`을 **명령을 입력하고 실행 버튼을 누르는 시간**으로
+설명하면 근거가 맞지 않는다. 본 측정에서는 다음이 합쳐진 **execution
+episode 비용**으로 해석한다.
+
+```text
+무엇을 실행할지 판단 → 명령 구성 → 실행 → 결과 확인
+```
+
+review도 동일하다. NASA의 software inspection 지침은 inspection별 총 투입
+시간과 참여자가 개별 검토에 쓴 시간을 실제 데이터로 기록하도록 한다.
+이는 리뷰 비용이 고정 인간 상수라기보다 대상과 검토 수준에 따라 달라지는
+작업이라는 해석과 맞는다.
+
+따라서 `review 125 wpm`, `execute 2분`, `verify 3분`, `correct 4분`은
+현재 단계에서는 **실증 인간 평균이 아니라 모델링 seed**로 유지한다.
+
+### 6.7 외부 설명 시 권장 표기
+
+요율의 근거를 외부에 설명할 때는 다음과 같이 구분한다.
+
+- **문헌 직접 anchor:** read 200 wpm, draft 20 wpm
+- **문헌 인접 anchor:** edit 50 wpm, search 2분/기여 착지
+- **모델링 seed:** skim 1/20, execute 2분, review 요율, verify 3분, correct 4분
+- skim 1/20은 **4,000 wpm 인간 독해 주장**이 아니라 **비기여 텍스트를
+  대부분 건너뛴 선택적 읽기의 비용 근사**
+- 외부 문헌은 현재 요율이 인간 수행 범위에서 크게 이탈하지 않는지 확인하는
+  anchor일 뿐, 이 측정기와 동일 과제를 사람이 수행한 ground truth는 아니다.
+
+따라서 §5의 **"사람 실측 정답 0건" 한계는 그대로 유지**한다. 향후 동일
+작업을 사람에게 직접 수행시킨 paired measurement가 확보되면 해당 실측이
+외부 문헌보다 우선한다.
+
+### 6.8 참고문헌
+
+- **[R1]** Brysbaert, M. (2019). *How many words do we read per minute? A review and meta-analysis of reading rate.* Journal of Memory and Language, 109, 104047. DOI: https://doi.org/10.1016/j.jml.2019.104047
+- **[R2]** Rayner, K., Schotter, E. R., Masson, M. E. J., Potter, M. C., & Treiman, R. (2016). *So Much to Read, So Little Time: How Do We Read, and Can Speed Reading Help?* Psychological Science in the Public Interest, 17(1), 4–34. DOI: https://doi.org/10.1177/1529100615623267
+- **[R3]** Karat, C.-M., Halverson, C., Horn, D., & Karat, J. (1999). *Patterns of Entry and Correction in Large Vocabulary Continuous Speech Recognition Systems.* CHI '99, 568–575. DOI: https://doi.org/10.1145/302979.303160
+- **[R4]** Dhakal, V., Feit, A. M., Kristensson, P. O., & Oulasvirta, A. (2018). *Observations on Typing from 136 Million Keystrokes.* CHI 2018. DOI: https://doi.org/10.1145/3173574.3174220
+- **[R5]** Aula, A., Khan, R. M., & Guan, Z. (2010). *How does Search Behavior Change as Search Becomes More Difficult?* CHI 2010. DOI: https://doi.org/10.1145/1753326.1753333
+- **[R6]** Card, S. K., Moran, T. P., & Newell, A. (1980). *The Keystroke-Level Model for User Performance Time with Interactive Systems.* Communications of the ACM, 23(7), 396–410. DOI: https://doi.org/10.1145/358886.358895
+- **[R7]** NASA. *Software Formal Inspections Standard*, NASA-STD-8739.9 및 *Software Engineering Handbook — Software Inspection / Peer Reviews / Inspections*.
+
