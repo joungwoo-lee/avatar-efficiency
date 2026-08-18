@@ -74,7 +74,7 @@ record_actions_api       = 위쪽. 직행 지시는 있으나 요약 속 활동 
 |---|---|
 | `req_actions_api.py` | **기본 API** — 할일 거치는 방식 (requirement-actions). 직행 자 — 바닥 근처 |
 | `record_actions_api.py` | **교차확인 API** — 할일 안 거치는 방식 (record-actions). 궤적 냄새를 간직한 기준선 — 위쪽 자 |
-| `record_actions_code_api.py` | **LLM 0회 API** (§32) — 분자까지 코드 실측(읽기 항해 구조 + 쓰기 순계 + 건수형은 행동 순계(§46): 검색=착지-기여 문서당 1건·실행=명령 신원당 1건, 하한 1. 셸 속 grep·sed류는 검색·읽기 축으로 재분류(§47)). `humanize=False`(`--raw`)로 휴먼화 기능 끈 대조군 실행 가능 |
+| `record_actions_code_api.py` | **LLM 0회 API** (§32) — 분자까지 코드 실측(읽기 항해 구조 + 쓰기 순계 + 건수형은 행동 순계(§46~48): 검색=착지-기여 문서당 1건·실행=명령 신원당 1건(실패 호출 상쇄), 하한 1. 셸 속 grep·sed류는 검색·읽기 축으로 재분류(§47)). `humanize=False`(`--raw`)로 휴먼화 기능 끈 대조군 실행 가능 |
 | `record_actions_code_api_all_sessions.bat` / `.sh` | **원클릭 실행 파일** (Windows 더블클릭 / Linux `./record_actions_code_api_all_sessions.sh`) — 그 PC 홈(`~/.claude/projects`)의 세션 전체를 LLM 0회로 측정해 홈에 `session-efficiency-report.md` 저장 |
 | `record_actions_code_api_all_sessions.py` | 위 실행 파일의 본체 — 마크다운 리포트(휴먼화 ON/OFF 효과 + 효율 히스토그램 + 전체 세션 디테일 표) 생성. 직접 쓸 때: `python record_actions_code_api_all_sessions.py [루트] [--out 파일.md]` |
 | `session_api.py` | 공용 코어 — 분모 실측·초소형 게이트·`measure_session(human=...)` |
@@ -124,8 +124,18 @@ r["human"]["min"], r["human"]["anchors"]
 ## 사용 — API ③ record-actions w/o LLM (바닥 자, LLM 0회)
 
 분자까지 전부 코드 실측 — 비용 0, 완전 결정론(같은 입력 = 같은 결과).
-건수형은 "흔적 있으면 1건"(직행 바닥값)이라 **절대값은 보수적** — 판단
-노동이 깊은 세션은 과소. 켬/끔 대조와 세션 간 비교, 대량 일괄 측정 용도.
+건수형은 **행동 순계**(§46~48) — 읽기 3등급·쓰기 순계의 원리를 건수에 적용:
+
+- **검색** = 착지-기여 문서당 1건 (쿼리 다듬기는 그 1건에 흡수, 착지 없는
+  검색은 자동 0). 셸 속 grep·find류도 검색 축으로 재분류(§47).
+- **실행** = 정규화 명령 신원당 1건 (같은 명령 반복 = 번복 상쇄, 실패
+  호출은 쓰기 순계의 실패 편집 제외처럼 상쇄 — §48). 셸 속 sed·cat류는
+  조회형 읽기로 재분류(§47), 리다이렉트·히어독·sed -i는 실행 잔류.
+- 클램프: 항목별 하한 1(흔적 있으면 최소 1건) · 상한 기록 호출 수 —
+  act OFF(로레코드) 이하가 구조적으로 보장(§43).
+
+절대값은 여전히 보수적 — 판단 노동이 깊은 세션은 과소. 켬/끔 대조와
+세션 간 비교, 대량 일괄 측정 용도.
 
 ```bash
 python record_actions_code_api.py session.jsonl [s2.jsonl ...]

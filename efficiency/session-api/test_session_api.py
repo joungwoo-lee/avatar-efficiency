@@ -302,6 +302,34 @@ class TestSessionApi(unittest.TestCase):
         self.assertEqual(rs["contributed_docs"], 1)   # sed 착지 = 기여 조회
         self.assertEqual(rs["search_landing_docs"], 1)
 
+    def test_failed_exec_cancelled(self):
+        # §48: 실패 실행 상쇄 — 쓰기 순계의 "실패한 편집 제외"(§31) 이식.
+        # npm test 2회 전부 실패(신원 탈락) + pytest 실패→성공(신원 생존)
+        # + build 성공 → 순계 2. 로레코드 exec_calls는 5 그대로.
+        import record_actions_code_api  # noqa: F401 (sys.path 세팅)
+        from requirement_actions import collect_record_stats
+        runs = [("npm test", True), ("npm test", True), ("pytest tests/", True),
+                ("pytest tests/", False), ("make build", False)]
+        lines = [{"type": "user",
+                  "message": {"role": "user", "content": "작업 지시 " * 60}}]
+        for i, (c, err) in enumerate(runs):
+            lines += [
+                {"type": "assistant", "message": {"role": "assistant",
+                 "content": [{"type": "tool_use", "id": f"e{i}", "name": "Bash",
+                              "input": {"command": c}}]}},
+                {"type": "user", "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": f"e{i}",
+                     "is_error": err, "content": "log " * 30}]}},
+            ]
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "s.jsonl")
+            with open(p, "w", encoding="utf-8") as f:
+                for ln in lines:
+                    f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+            rs = collect_record_stats(p)
+        self.assertEqual(rs["exec_calls"], 5)      # 로레코드 불변
+        self.assertEqual(rs["exec_net_calls"], 2)  # pytest(성공 有)+build
+
     def test_suspect_output_channel(self):
         # §38: 미등록 도구 입력에 글 60단어가 실려 나갔고 응답은 ack,
         # 잡힌 산출물 0 → 쓰기 툴 포맷 미등록 의심 자백 (§33 사고의 서명).
