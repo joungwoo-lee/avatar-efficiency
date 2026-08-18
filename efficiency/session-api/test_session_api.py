@@ -212,7 +212,7 @@ class TestSessionApi(unittest.TestCase):
             legacy = measure(p, humanize="rawrecord")  # 구 인터페이스 호환
         bd_base = {b["primitive"]: b["count"] for b in base["human"]["breakdown"]}
         bd_raw = {b["primitive"]: b["count"] for b in raw["human"]["breakdown"]}
-        self.assertEqual(bd_base["execute"], 1)   # 바닥 자: 흔적 있으면 1건
+        self.assertEqual(bd_base["execute"], 1)   # 순계: 같은 명령 6회 = 신원 1건
         self.assertEqual(bd_raw["execute"], 6)    # 궤적 재연: 기록 그대로
         # §43: 마무리 verify는 두 모드 공통 — 소형 세션에서 천장<바닥 역전 방지
         self.assertEqual(bd_base.get("verify"), 1)
@@ -221,6 +221,38 @@ class TestSessionApi(unittest.TestCase):
         self.assertEqual(raw["human"]["humanize"], "rawrecord")  # 호환 표현
         self.assertEqual(legacy["human"]["min"], raw["human"]["min"])
         self.assertGreater(raw["human"]["min"], base["human"]["min"])
+
+    def test_act_net_counts(self):
+        # §46: act ON = 행동 순계 — 실행은 명령 신원당 1건. 서로 다른 명령
+        # 2종(각각 반복 포함, 총 5회) → execute 2건. 로레코드는 5건 그대로.
+        from record_actions_code_api import measure
+        cmds = ["pytest tests/", "pytest tests/", "pytest tests/",
+                "git diff", "git diff"]
+        lines = [{"type": "user",
+                  "message": {"role": "user", "content": "작업 지시 " * 60}}]
+        for i, c in enumerate(cmds):
+            lines += [
+                {"type": "assistant", "message": {"role": "assistant",
+                 "content": [{"type": "tool_use", "id": f"c{i}", "name": "Bash",
+                              "input": {"command": c}}]}},
+                {"type": "user", "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": f"c{i}",
+                     "content": "ok " * 30}]}},
+            ]
+        lines.append({"type": "assistant", "message": {"role": "assistant",
+                      "content": [{"type": "text", "text": "완료 보고 " * 30}]}})
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "s.jsonl")
+            with open(p, "w", encoding="utf-8") as f:
+                for ln in lines:
+                    f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+            base = measure(p)
+            raw = measure(p, humanize_rw=False, humanize_act=False)
+        bd_base = {b["primitive"]: b["count"] for b in base["human"]["breakdown"]}
+        bd_raw = {b["primitive"]: b["count"] for b in raw["human"]["breakdown"]}
+        self.assertEqual(bd_base["execute"], 2)   # 신원 2개(pytest, git diff)
+        self.assertEqual(bd_raw["execute"], 5)    # 로레코드: 호출 수 그대로
+        self.assertLessEqual(bd_base["execute"], bd_raw["execute"])  # 단조성
 
     def test_suspect_output_channel(self):
         # §38: 미등록 도구 입력에 글 60단어가 실려 나갔고 응답은 ack,

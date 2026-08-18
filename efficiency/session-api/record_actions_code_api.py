@@ -88,10 +88,15 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
     휴먼화 2축 (§40):
       humanize_rw  = 읽기·쓰기 휴먼화. ON이면 읽기 등급 분해(정독/훑기/헛읽기)
                      + 쓰기 번복 소계(순계). OFF면 검토 전량 정독·번복 미소거.
-      humanize_act = 행동 건수 휴먼화. ON이면 건수형 "흔적 있으면 1건"(직행
-                     바닥값). OFF면 로레코드 — 행동 횟수를 세션 기록
-                     그대로(search=검색 호출 수, execute=실행 호출 수).
-                     "AI가 한 행동을 사람이 똑같이 했다면"의 자.
+      humanize_act = 행동 건수 휴먼화. ON이면 행동 순계(§46) — 읽기 3등급·
+                     쓰기 순계의 원리를 건수형에 적용: 검색 = 착지-기여
+                     문서당 1건(쿼리 다듬기는 그 1건에 흡수, 헛검색 자동 0),
+                     실행 = 정규화 명령 신원당 1건(같은 명령 반복 = 번복
+                     상쇄). 하한 max(1,·) — 흔적 있으면 최소 1건(구 바닥값),
+                     상한 min(·, 호출 수) — 로레코드 이하. OFF면 로레코드 —
+                     행동 횟수를 세션 기록 그대로(search=검색 호출 수,
+                     execute=실행 호출 수). "AI가 한 행동을 사람이 똑같이
+                     했다면"의 자.
                      마무리 verify 1건(산출물 있을 때)은 두 모드 공통(§43).
     기본(둘 다 ON) = 바닥 자. 구 humanize=True/False/"rawrecord"는
     measure()의 호환 인자로만 남음.
@@ -129,10 +134,16 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
             items.append({"primitive": "execute",
                           "count": stats["exec_calls"]})
     else:
+        # 행동 순계 (§46): 하한 1(흔적 있으면 최소 1건) ≤ 순계 ≤ 호출 수
+        # (로레코드) — 항목별 ON ≤ OFF 단조성 유지(§43 교훈)
         if stats.get("search_calls"):
-            items.append({"primitive": "search", "count": 1})
+            n = max(1, stats.get("search_landing_docs", 0))
+            items.append({"primitive": "search",
+                          "count": min(n, stats["search_calls"])})
         if stats.get("exec_calls"):
-            items.append({"primitive": "execute", "count": 1})
+            n = max(1, stats.get("exec_net_calls", 0))
+            items.append({"primitive": "execute",
+                          "count": min(n, stats["exec_calls"])})
     if draft_w or edit_w:
         # 마무리 확인 1건 — 두 모드 공통 (§43). 초기 §39는 "기록에 대응
         # 행동 없음"이라며 로레코드에서 verify를 뺐는데, 그 결과 도구 호출이

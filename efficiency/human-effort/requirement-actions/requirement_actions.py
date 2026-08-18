@@ -534,6 +534,9 @@ def collect_record_stats(jsonl_path, detail=False):
     tool_i = 0               # 도구 호출 순번
     search_calls = 0         # 검색 도구 호출 수 (LLM 0회 행동 구성용, §32)
     exec_calls = 0           # 실행 도구(Bash 등) 호출 수 (§32)
+    exec_canons = set()      # 실행 명령 신원(정규화 앞 120자) — 행동 순계(§46).
+                             # 같은 명령 반복(편집→재실행 왕복)은 신원 1개로
+                             # 접힘 = 쓰기 순계 "살아남은 판만 노동"의 행동판
     tool_report_w = 0        # StructuredOutput 보고 실측 단어수 (§33)
     unrec_write = {}         # 미등록 도구명 → 입력에 실려 나간 단어수 (§38)
     turn_search_i = None     # 이 턴의 마지막 검색 시점 (신호④ — 턴 단위)
@@ -668,6 +671,9 @@ def collect_record_stats(jsonl_path, detail=False):
                         search_calls += 1
                     if name in ("Bash", "PowerShell"):
                         exec_calls += 1
+                        exec_canons.add(" ".join(
+                            str((b.get("input") or {}).get("command", "")
+                                ).split())[:120])
                     inp = b.get("input") or {}
                     if name == "StructuredOutput":
                         # 구조화 보고 채널 (§33): 워크플로 에이전트의 최종
@@ -857,6 +863,10 @@ def collect_record_stats(jsonl_path, detail=False):
            "tool_calls": tool_i,
            "search_calls": search_calls,
            "exec_calls": exec_calls,
+           # 행동 순계 재료 (§46): 검색 = 착지-기여 문서 수(신호④∩DEEP —
+           # 항해·헛검색은 착지에 흡수/자동 0), 실행 = 명령 신원 수
+           "search_landing_docs": len(signal4 & contributed),
+           "exec_net_calls": len(exec_canons),
            "unrec_write_tools": unrec_write,
            "unrec_write_words": sum(unrec_write.values()),
            "gross_draft_words": gross_d,
