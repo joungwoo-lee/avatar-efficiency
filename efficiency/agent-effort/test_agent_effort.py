@@ -151,15 +151,100 @@ class TestTranscriptActual(unittest.TestCase):
             finally:
                 os.unlink(p)
 
-        # 충분한 테스트(12 passed, 기대 2파일×3=6) → ratio 1 → 파일당 0.3
+        # 충분한 테스트(12 passed, 기대 2파일×3=6) → ratio 1 → 에피소드
+        # 기본비 2.0→0.3 (§49: 강등은 파일당이 아니라 에피소드 기본비에 적용)
         m = session("============ 12 passed in 1.2s ============")
-        self.assertAlmostEqual(m["automation_saved_min"], 3.4, places=2)
-        # 형식 테스트(1 passed) → ratio 1/6 → 할인 미미 (saved = 3.4×1/6)
+        self.assertAlmostEqual(m["automation_saved_min"], 1.7, places=2)
+        # 형식 테스트(1 passed) → ratio 1/6 → 할인 미미 (saved = 1.7×1/6)
         m = session("1 passed in 0.1s")
-        self.assertAlmostEqual(m["automation_saved_min"], 0.57, places=2)
+        self.assertAlmostEqual(m["automation_saved_min"], 0.28, places=2)
         # 실패 상태로 종료 → 강등 0
         m = session("2 failed, 3 passed")
         self.assertEqual(m["automation_saved_min"], 0.0)
+
+    def test_code_review_episode_billing(self):
+        # §49: 코드 검토 기본비는 에피소드당 1회 + 추가 파일당 0.3 —
+        # 같은 변경을 7파일로 쪼개도 기본비가 7배가 되지 않는다
+        import json, tempfile, os
+        from transcript_actual import parse_actions, actual_effort_minutes
+        lines = [
+            {"type": "user", "message": {"role": "user", "content": "만들어줘"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Write",
+                 "input": {"file_path": f"m{i}.py", "content": "x " * 10}}
+                for i in range(7)]}},
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            m = actual_effort_minutes(parse_actions(p))
+            # 검토 = 기본 2.0 + 추가 6파일×0.3 + 70단어×0.002 = 3.94
+            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 3.94,
+                                   places=2)
+        finally:
+            os.unlink(p)
+
+    def test_demotion_excludes_files_edited_after_test(self):
+        # §49: 마지막 테스트 결과 이후 수정된 파일은 검증 분율에서 제외 —
+        # 테스트 후 2파일 중 1파일을 더 고치면 강등 폭이 절반
+        import json, tempfile, os
+        from transcript_actual import parse_actions, actual_effort_minutes
+        lines = [
+            {"type": "user", "message": {"role": "user", "content": "고쳐줘"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Edit",
+                 "input": {"file_path": "a.py", "new_string": "x " * 100}},
+                {"type": "tool_use", "name": "Edit",
+                 "input": {"file_path": "b.py", "new_string": "y " * 100}},
+                {"type": "tool_use", "id": "t1", "name": "Bash",
+                 "input": {"command": "pytest tests/"}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1",
+                 "content": "12 passed in 1.2s"}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Edit",
+                 "input": {"file_path": "b.py", "new_string": "z " * 10}}]}},
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            m = actual_effort_minutes(parse_actions(p))
+            # ratio 1 × 검증분율 1/2 → eff = 2.0 − 1.7×0.5 = 1.15,
+            # saved = 0.85 (전판 검증이었으면 1.7)
+            self.assertAlmostEqual(m["automation_saved_min"], 0.85, places=2)
+        finally:
+            os.unlink(p)
+
+    def test_conclusion_promotion_threshold(self):
+        # §49: 5단어 미만 짧은 이어가기 지시는 직전 답변을 결론으로 승격하지
+        # 않는다 — 중간 보고가 정독 과금되는 오차 방지. 세션 마지막 답변은
+        # 문턱과 무관하게 결론.
+        import json, tempfile, os
+        from transcript_actual import parse_actions
+        lines = [
+            {"type": "user", "message": {"role": "user", "content": "이 문제 원인 분석해서 보고해줘"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "진행 " * 100}]}},
+            {"type": "user", "message": {"role": "user", "content": "계속해"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "결론 " * 40}]}},
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            c = parse_actions(p)
+            # "계속해"(1단어)는 승격 안 함 → 진행 100단어는 훑기로 남고,
+            # 마지막 답변 40단어만 결론
+            self.assertEqual(c["conclusion_words"], 40)
+            # 5단어 이상 지시였다면 100단어가 결론으로 승격됐을 것
+        finally:
+            os.unlink(p)
 
     def test_deterministic_hand_check(self):
         # 실측 분모: 트랜스크립트 → 기계/HITL 동작 × 요율 (LLM 미사용)
@@ -184,6 +269,8 @@ class TestTranscriptActual(unittest.TestCase):
             self.assertEqual(c["tool_calls"], 1)
             self.assertEqual(c["user_instructions"], 2)
             self.assertEqual(c["interrupts"], 1)
+            # §49: interrupt 직후 첫 지시("제목 바꿔줘") = 교정성 지시 표시
+            self.assertEqual(c["corrective_instructions"], 1)
             m = actual_effort_minutes(c)
             # machine = 1×0.3 + 100×0.0005 + 20×0.002 = 0.39
             # hitl = 지시 2건×(0.5+0.05×2단어) + 검토(결론 20단어×정독 0.008,

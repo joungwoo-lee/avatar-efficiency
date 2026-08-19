@@ -55,8 +55,16 @@ def collect(root):
             rwoff = measure(f, humanize_rw=False)                     # rw만 끔
             actoff = measure(f, humanize_act=False)                   # act만 끔
             raw = measure(f, humanize_rw=False, humanize_act=False)   # 로레코드
+            hb = on["agent"]["breakdown"]["hitl"]
             rows.append({"session": on["session"],
                          "agent": on["agent"]["total_min"],
+                         # 민감도용 분해 (§49): machine+instruct는 고정
+                         # (instruct는 실측 보정), seed 요율(review·correct)만
+                         # 0.5×/1×/2×로 흔든다
+                         "agent_fixed": (on["agent"]["machine_min"]
+                                         + hb.get("instruct", 0)),
+                         "agent_seed": (hb.get("review", 0)
+                                        + hb.get("correct", 0)),
                          "h_on": on["human"]["min"], "sp_on": on["speedup"] or 0,
                          "h_rwoff": rwoff["human"]["min"],
                          "sp_rwoff": rwoff["speedup"] or 0,
@@ -145,6 +153,21 @@ def render(rows, n_excl, n_err, n_excl_suspect, n_active, root):
         f"{sum(big) / len(big) if big else 0:.1f}min vs 소형 "
         f"{sum(small) / len(small) if small else 0:.1f}min "
         "(번복 소거 + 등급 분해 효과는 대형 세션에 집중).",
+        "",
+        "## hitl seed 요율 민감도 (0.5× / 1× / 2×)",
+        "",
+        "분모의 사람 감독 중 **미보정 seed 요율(review·correct)만** 흔든 전체"
+        " 효율(휴먼 합산 ÷ 에이전트 합산, rw ON·act ON). instruct는 실측"
+        " 보정(지시 1,456건)이라 고정, 기계 시간도 고정. 절대값 불확실성을"
+        " 숨기지 않으면서 상대 결론의 강건성을 보이기 위함(§49).",
+        "",
+        "| seed 배율 | 에이전트 합산(min) | 전체 효율 |",
+        "|---|---|---|",
+    ] + [
+        (lambda d: f"| {k}× | {d:.0f} | {total['h_on'] / d:.2f} |")(
+            sum(r["agent_fixed"] + k * r["agent_seed"] for r in rows))
+        for k in (0.5, 1, 2)
+    ] + [
         "",
         "## 효율값 구간별 개수 (4조합)",
         "",
