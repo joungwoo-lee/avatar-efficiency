@@ -15,13 +15,15 @@ rates.json의 agent/hitl 카드 요율을 곱한다.
   기계(machine):
     execute  = tool_use 블록 수            × agent.execute (tool_call_count)
     read     = tool_result 내용 단어수      × agent.read    (word_count)
-    draft    = assistant 텍스트 단어수      × agent.draft   (word_count)
+    draft    = (assistant 텍스트 + 파일 본문·서브에이전트 지시문 등
+               도구 입력으로 생산된 글) 단어수 × agent.draft (word_count, §52)
   사람(hitl) — 동작 카운트는 실측이나 요율은 추정이므로 hitl_min은
   "실제 비용"이 아니라 **추정 감독 비용**이다 (instruct만 실측 보정, §49):
     instruct = 사용자 텍스트 메시지 수       × hitl.instruct (instruction_count)
     review   = assistant 텍스트 단어수      × hitl.review   (word_count)
-               (사람이 읽어야 하는 AI 출력. 코드 검토 기본비는 파일당이
-               아니라 세션 검토 에피소드당 — §49 파일 분할 편향 제거)
+               (사람이 읽어야 하는 AI 출력. §50 턴 확인 모델: 확인
+               시점마다 결론 정독 + 진행·내용물 훑기 + 코드 동작 확인
+               1회 — 전량 정독 아님. 파일당 과금 폐지 §49→§50)
     correct  = 사용자 중단(interrupt) 횟수  × hitl.correct  (correction_count)
                (정의: 끊고 다시 방향 잡는 **재정향 추가 비용** — 새 지시
                작성 노동은 instruct가 별도 계상. 발화형 교정("아니 그게
@@ -129,18 +131,44 @@ def parse_actions(jsonl_path):
               "corrective_instructions": 0,
               # 유형별 검토용: 산출물 파일 {유형: {경로: 단어수}}, 결론 단어수
               "artifact_files": {"code": {}, "doc": {}, "other": {}},
+              # 기계 draft 보충 (§52): 파일 본문·서브에이전트 지시문 등
+              # 도구 입력으로 생산된 글 — AI 생산 비용에만 가산 (사람 검토는
+              # 산출물 채널로 별도 계상되므로 assistant_words에는 안 섞음)
+              "tool_input_draft_words": 0,
               "conclusion_words": 0,
+              # 결론별 단어수 목록 (§51): 정독 상한을 결론 건별로 적용
+              "conclusion_word_list": [],
               # 검증 위임 신호: 마지막 테스트 실행의 통과 수·실패 여부·커버리지
               # + 사건 순서 (§49): 코드 파일별 마지막 쓰기 순번·마지막 테스트
               # 결과 순번 — 테스트 이후 수정된 파일은 강등에서 제외
               "tests_passed_last": 0, "last_test_failed": False,
               "coverage_pct": None,
               "code_write_seq": {}, "last_test_seq": None,
+              # 턴 확인 모델 (§50): 확인 시점(실질 지시 턴·세션 끝)마다
+              # 그 구간에 코드 변경이 있으면 동작 확인 사건 1건 —
+              # 그 시점의 테스트 상태 스냅샷을 함께 기록
+              "code_check_events": [],
               "session_id": None, "first_ts": None, "last_ts": None}
     last_answer_w = 0  # 직전 assistant 발언 단어수 (턴 마무리 = 결론 후보)
     pending_tests = {}  # 테스트 실행 tool_use id → 결과 대기
     seq = 0             # 도구 사건 순번 (§49 쓰기↔테스트 선후 판정용)
     after_interrupt = False  # 직전 사람 발화가 interrupt였는가 (§49)
+    seg_code = {}       # 이번 확인 구간에 변경된 코드 파일 {fp: 마지막 seq}
+
+    def _flush_check_event():
+        """확인 시점 도달: 구간에 코드 변경이 있으면 사건 기록 (§50)."""
+        if not seg_code:
+            return
+        lt = counts["last_test_seq"]
+        dirty = (sum(1 for s in seg_code.values() if s > lt)
+                 if lt is not None else 0)
+        counts["code_check_events"].append({
+            "files": len(seg_code), "dirty": dirty,
+            "has_test": lt is not None,
+            "tests_passed": counts["tests_passed_last"],
+            "test_failed": counts["last_test_failed"],
+            "coverage": counts["coverage_pct"]})
+        seg_code.clear()
     with open(jsonl_path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -187,10 +215,14 @@ def parse_actions(jsonl_path):
                             pending_tests[b["id"]] = True
                         fp = inp.get("file_path")
                         name = b.get("name")
+                        if name in ("Agent", "Task"):  # §52 서브에이전트 지시문
+                            counts["tool_input_draft_words"] += _words(
+                                inp.get("prompt") or "")
                         if fp and name in ("Write", "Edit", "NotebookEdit"):
                             body = (inp.get("content")
                                     or inp.get("new_string")
                                     or inp.get("new_source") or "")
+                            counts["tool_input_draft_words"] += _words(body)
                             acls = _artifact_class(fp)
                             cls = counts["artifact_files"][acls]
                             if name == "Write":  # 전체 재작성 — 마지막 판만
@@ -199,6 +231,7 @@ def parse_actions(jsonl_path):
                                 cls[fp] = cls.get(fp, 0) + _words(body)
                             if acls == "code":   # §49 마지막 쓰기 순번
                                 counts["code_write_seq"][fp] = seq
+                                seg_code[fp] = seq  # §50 이번 구간 코드 변경
                     elif b.get("type") == "text":
                         ans_w += _words(b.get("text", ""))
                 counts["assistant_words"] += ans_w
@@ -250,10 +283,18 @@ def parse_actions(jsonl_path):
                     # 단, 짧은 이어가기("계속해" 등, 문턱 미만)는 승격 안 함
                     # (§49) — 직전 답변은 유지되어 다음 답변이 나오면 진행
                     # 보고(훑기)로, 세션 끝이면 최종 flush로 결론이 된다.
+                    # 같은 문턱이 산출물 확인 시점(§50)도 정한다 — 실질
+                    # 지시 턴 = 사람이 멈춰서 결과를 살펴본 시점.
                     if w >= _CONCL_PROMOTE_MIN_WORDS:
-                        counts["conclusion_words"] += last_answer_w
+                        if last_answer_w:
+                            counts["conclusion_words"] += last_answer_w
+                            counts["conclusion_word_list"].append(last_answer_w)
                         last_answer_w = 0
-    counts["conclusion_words"] += last_answer_w  # 마지막 턴 결론
+                        _flush_check_event()
+    if last_answer_w:  # 마지막 턴 결론
+        counts["conclusion_words"] += last_answer_w
+        counts["conclusion_word_list"].append(last_answer_w)
+    _flush_check_event()  # 세션 끝 = 마지막 확인 시점 (§50)
     return counts
 
 
@@ -266,7 +307,13 @@ def actual_effort_minutes(counts, rates=None):
     machine = {
         "execute": counts["tool_calls"] * a["execute"]["min_per_unit"],
         "read": counts["tool_result_words"] * a["read"]["min_per_unit"],
-        "draft": counts["assistant_words"] * a["draft"]["min_per_unit"],
+        # draft = 답변 + 도구 입력으로 생산된 글(파일 본문·서브에이전트
+        # 지시문, §52) — 파일에 쓴 2,000단어가 채팅에 쓴 2,000단어와 같은
+        # 생산 비용이 되도록. 셸 명령 텍스트는 execute 건당 요율에 포함된
+        # 것으로 보고 제외(이중과금 방지).
+        "draft": (counts["assistant_words"]
+                  + counts.get("tool_input_draft_words", 0))
+                 * a["draft"]["min_per_unit"],
     }
     im = r.get("hitl_instruct_model")
     if im:  # 실측 보정 모델: base + per_word×min(단어수, cap) — 붙여넣기 과금 방지
@@ -282,44 +329,60 @@ def actual_effort_minutes(counts, rates=None):
         code_files = af.get("code") or {}
         doc_files = af.get("doc") or {}
         other_files = af.get("other") or {}
-        concl = min(counts.get("conclusion_words", 0), counts["assistant_words"])
+        # 결론 정독 상한 (§51): 사람은 긴 마무리 답변도 요약·결론부까지만
+        # 정독하고 나머지는 훑는다 — 결론 건별로 cap 단어까지 정독, 초과분은
+        # 훑기로 강등. instruct의 붙여넣기 상한(60단어)과 같은 원리.
+        cap = rm.get("report_deep_word_cap")
+        cl = counts.get("conclusion_word_list")
+        if cap and cl is not None:
+            concl = sum(min(w, cap) for w in cl)
+        else:  # 구 counts 호환 — 상한 없이 결론 전량 정독
+            concl = counts.get("conclusion_words", 0)
+        concl = min(concl, counts["assistant_words"])
         progress = counts["assistant_words"] - concl
-        # 코드 검토 = 에피소드 과금 (§49): 기본 "돌려 확인"은 세션 검토
-        # 에피소드당 1회(구 파일당 → 저장소의 파일 분할 방식이 hitl을
-        # 좌우하던 편향 제거), 추가 파일은 맥락 이동 비용만(파일당 소액).
-        # 검증 위임 강등: 자동 테스트가 통과 상태면 "직접 돌려 확인" →
-        # "결과 서명"으로, 에피소드 기본비에 적용. 강등 폭은 커버리지 실측
-        # 우선, 없으면 통과 테스트 수 ÷ (수정 코드 파일 수 × 파일당 기대
-        # 테스트 수) — 형식 테스트 1건으로는 거의 강등 안 됨. 실패 상태면 0.
-        # 마지막 테스트 결과 **이후에 수정된** 파일은 검증 안 된 상태이므로
-        # 검증 분율(verified_frac)로 강등을 깎는다 (§49).
-        n_code = len(code_files)
+        # 턴 확인 모델 (§50): 사람은 AI 출력을 전량 정독하지 않는다 —
+        # 확인 시점(실질 지시 턴·세션 끝)마다 멈춰서 살펴보고 넘어간다.
+        #   대화: 결론만 정독, 나머지 진행 보고는 훑기 (기존과 동일).
+        #   산출물: 내용 전량 읽기 대신 ① 그 구간에 코드 변경이 있으면
+        #   동작 확인 1회(확인 시점의 테스트 상태로 강등 — 통과면 "결과
+        #   서명" 0.3까지, 구간 내 테스트 이후 수정 파일은 검증 분율에서
+        #   제외 §49) ② 변경된 내용물(코드·문서 단어)은 훑기 ③ 문서·기타
+        #   파일은 파일당 표본 확인. 구 문서 전량 정독(0.008/단어)·§49
+        #   에피소드+추가파일 과금은 폐지.
         run_rate = rm["code_run_min_per_file"]
         automation_saved = 0.0
         floor = rm.get("verified_check_min_per_file")
-        extra_rate = rm.get("code_extra_min_per_file",
-                            floor if floor is not None else 0.5)
-        if n_code and floor is not None and not counts.get("last_test_failed"):
-            if counts.get("coverage_pct") is not None:
-                ratio = min(1.0, counts["coverage_pct"] / 100.0)
-            else:
-                expected = n_code * rm.get("expected_tests_per_file", 3)
-                ratio = (min(1.0, counts.get("tests_passed_last", 0) / expected)
-                         if expected else 0.0)
-            wseq = counts.get("code_write_seq") or {}
-            tseq = counts.get("last_test_seq")
-            if wseq and tseq is not None:  # 테스트 이후 수정분은 검증 제외
-                dirty = sum(1 for s in wseq.values() if s > tseq)
-                ratio *= (n_code - dirty) / n_code
-            eff_rate = run_rate - (run_rate - floor) * ratio
-            automation_saved = round(run_rate - eff_rate, 2)
-            run_rate = eff_rate
-        code_base = (run_rate + (n_code - 1) * extra_rate) if n_code else 0.0
+        events = counts.get("code_check_events")
+        if events is None:  # 구 counts 호환 — 세션 전체를 확인 1회로 근사
+            n_code = len(code_files)
+            events = [{"files": n_code, "dirty": 0, "has_test":
+                       counts.get("last_test_seq") is not None,
+                       "tests_passed": counts.get("tests_passed_last", 0),
+                       "test_failed": counts.get("last_test_failed", False),
+                       "coverage": counts.get("coverage_pct")}] if n_code else []
+        check_min = 0.0
+        for ev in events:
+            rate = run_rate
+            if (floor is not None and ev.get("has_test")
+                    and not ev.get("test_failed") and ev.get("files")):
+                if ev.get("coverage") is not None:
+                    ratio = min(1.0, ev["coverage"] / 100.0)
+                else:
+                    expected = (ev["files"]
+                                * rm.get("expected_tests_per_file", 3))
+                    ratio = (min(1.0, ev.get("tests_passed", 0) / expected)
+                             if expected else 0.0)
+                ratio *= (ev["files"] - ev.get("dirty", 0)) / ev["files"]
+                rate = run_rate - (run_rate - floor) * ratio
+                automation_saved += run_rate - rate
+            check_min += rate
+        automation_saved = round(automation_saved, 2)
+        skim_rate = rm["code_skim_min_per_word"]  # 내용물 공용 훑기 요율
         review_min = (
-            code_base
-            + sum(code_files.values()) * rm["code_skim_min_per_word"]
-            + sum(doc_files.values()) * rm["doc_read_min_per_word"]
-            + len(other_files) * rm["other_check_min_per_file"]
+            check_min
+            + (sum(code_files.values()) + sum(doc_files.values())) * skim_rate
+            + (len(doc_files) + len(other_files))
+            * rm["other_check_min_per_file"]
             + concl * rm["report_deep_min_per_word"]
             + progress * rm["report_skim_min_per_word"])
     else:  # 폴백: 보고 전량 × 단일 요율 (구식)

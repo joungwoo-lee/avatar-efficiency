@@ -137,17 +137,17 @@
     "source_type": "internal_measured"
   },
   "hitl_review_model": {
-    "_comment": "산출물 유형별 검토 (seed, 미보정): 검토 방식은 산출물이 정한다 — 코드는 동작을 돌려 확인(§49 검토 에피소드당 기본 2.0 1회 + 추가 파일당 0.3 + diff 훑기 — 구 파일당 2.0은 저장소의 파일 분할 방식이 hitl을 좌우하는 편향이라 폐지, modern code review의 change 중심 활동과 정합), 문서는 내용 정독(단어당), 설정·데이터는 표본 확인(파일당), 채팅 보고는 결론(턴 마무리 답변)만 정독하고 진행 보고는 훑기. 없으면 구식 폴백: assistant 전량 × hitl.review.",
+    "_comment": "턴 확인 모델 (§50, seed 미보정): 사람은 AI 출력을 전량 정독하지 않는다 — 확인 시점(실질 지시 턴·세션 끝)마다 멈춰서 살펴보고 넘어간다. 대화는 결론(턴 마무리 답변)만 정독(report_deep)하고 진행 보고는 훑기(report_skim). 산출물은 내용 전량 읽기 대신: 구간에 코드 변경 있으면 동작 확인 1회(code_run, 확인 시점 테스트 상태로 강등), 변경된 코드·문서 내용물은 훑기(code_skim 공용), 문서·기타 파일은 파일당 표본 확인(other_check). 구 문서 전량 정독(doc_read 0.008)·파일당/에피소드당 코드 과금(§49 이전)은 폐지. 없으면 구식 폴백: assistant 전량 × hitl.review.",
     "code_run_min_per_file": 2.0,
-    "code_extra_min_per_file": 0.3,
     "code_skim_min_per_word": 0.002,
-    "doc_read_min_per_word": 0.008,
     "other_check_min_per_file": 0.5,
     "report_deep_min_per_word": 0.008,
+    "report_deep_word_cap": 300,
     "report_skim_min_per_word": 0.002,
+    "_comment_deep_cap": "결론 정독 상한 (§51): 결론 건별로 300단어(약 2.4분)까지만 정독 과금, 초과분은 훑기(report_skim)로. 사람은 긴 마무리 답변도 요약·결론부까지만 정독한다는 행태 반영 — instruct word_cap(붙여넣기 상한)과 같은 원리. seed.",
     "verified_check_min_per_file": 0.3,
     "expected_tests_per_file": 3,
-    "_comment_verified": "검증 위임 강등 (§49 개편): 세션 안에서 자동 테스트가 통과 상태로 끝났으면 코드 검토 에피소드 기본비가 '직접 돌려 확인(2.0)'→'결과 서명(0.3)'으로 강등. 강등 폭은 커버리지 실측(있으면) 또는 통과 테스트 수÷(수정 코드 파일 수×기대 3건) 비례에 검증 분율(마지막 테스트 결과 이후 수정된 파일 제외)을 곱함 — 형식 테스트 1건으로는 거의 강등 안 됨. 실패 상태로 끝나면 강등 0. 없앤 노동은 automation_saved_min으로 출력.",
+    "_comment_verified": "검증 위임 강등 (§49·§50): 확인 시점의 테스트 상태가 통과면 그 확인 사건의 동작 확인비가 '직접 돌려 확인(2.0)'→'결과 서명(0.3)'으로 강등. 강등 폭은 커버리지 실측(있으면) 또는 통과 테스트 수÷(그 구간 코드 파일 수×기대 3건) 비례에 검증 분율(마지막 테스트 결과 이후 수정된 파일 제외 §49)을 곱함 — 형식 테스트 1건으로는 거의 강등 안 됨. 확인 시점이 실패 상태면 강등 0. 없앤 노동은 automation_saved_min으로 출력.",
     "source_type": "expert_seed"
   },
   "human_reading_model": {

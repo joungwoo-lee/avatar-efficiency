@@ -92,11 +92,14 @@ class TestTranscriptActual(unittest.TestCase):
                 f.write(json.dumps(ln, ensure_ascii=False) + "\n")
         try:
             m = actual_effort_minutes(parse_actions(p))
-            # 검토 = 코드 1파일×2.0(실행 확인) + 코드 500단어×0.002(diff 훑기)
-            #      + 문서 250단어×0.008(정독) + 기타 1파일×0.5(표본 확인)
-            #      + 결론 100×0.008 + 진행 100×0.002 = 2+1+2+0.5+0.8+0.2 = 6.5
-            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 6.5,
+            # §50 턴 확인: 동작 확인 1회 2.0 + 내용물 훑기 (500+250)×0.002
+            #      + 문서·기타 파일당 표본 확인 2×0.5
+            #      + 결론 100×0.008 + 진행 100×0.002 = 2+1.5+1+0.8+0.2 = 5.5
+            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 5.5,
                                    places=2)
+            # §52 기계 draft = (답변 200 + 파일 본문 500+250+1)×0.002
+            #                = 1.902, execute 3×0.3 → machine 2.80
+            self.assertAlmostEqual(m["machine_min"], 2.80, places=2)
         finally:
             os.unlink(p)
 
@@ -162,9 +165,9 @@ class TestTranscriptActual(unittest.TestCase):
         m = session("2 failed, 3 passed")
         self.assertEqual(m["automation_saved_min"], 0.0)
 
-    def test_code_review_episode_billing(self):
-        # §49: 코드 검토 기본비는 에피소드당 1회 + 추가 파일당 0.3 —
-        # 같은 변경을 7파일로 쪼개도 기본비가 7배가 되지 않는다
+    def test_code_review_turn_billing(self):
+        # §50: 코드 동작 확인은 확인 시점(턴)당 1회 — 같은 변경을 7파일로
+        # 쪼개도 확인비가 7배가 되지 않고, 파일 수는 훑기 단어로만 반영
         import json, tempfile, os
         from transcript_actual import parse_actions, actual_effort_minutes
         lines = [
@@ -180,8 +183,41 @@ class TestTranscriptActual(unittest.TestCase):
                 f.write(json.dumps(ln, ensure_ascii=False) + "\n")
         try:
             m = actual_effort_minutes(parse_actions(p))
-            # 검토 = 기본 2.0 + 추가 6파일×0.3 + 70단어×0.002 = 3.94
-            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 3.94,
+            # 검토 = 확인 시점(세션 끝) 1회 2.0 + 70단어×0.002 = 2.14
+            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 2.14,
+                                   places=2)
+        finally:
+            os.unlink(p)
+
+    def test_code_check_per_real_turn(self):
+        # §50: 실질 지시 턴(5단어+)이 확인 시점 — 코드 변경이 있는 구간마다
+        # 동작 확인 1회. 2구간 = 2회. 짧은 이어가기 턴은 확인 시점 아님.
+        import json, tempfile, os
+        from transcript_actual import parse_actions, actual_effort_minutes
+
+        def turn(fp):
+            return {"type": "assistant", "message": {
+                "role": "assistant", "content": [
+                    {"type": "tool_use", "name": "Edit",
+                     "input": {"file_path": fp, "new_string": "x " * 10}}]}}
+        lines = [
+            {"type": "user", "message": {"role": "user",
+             "content": "이 버그 원인 찾아서 고쳐줘"}},
+            turn("a.py"),
+            {"type": "user", "message": {"role": "user",
+             "content": "좋아 이제 b 모듈도 같은 방식으로 고쳐"}},  # 확인 시점
+            turn("b.py"),
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            c = parse_actions(p)
+            self.assertEqual(len(c["code_check_events"]), 2)  # 턴 + 세션 끝
+            m = actual_effort_minutes(c)
+            # 검토 = 동작 확인 2회×2.0 + 20단어×0.002 = 4.04
+            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 4.04,
                                    places=2)
         finally:
             os.unlink(p)
@@ -246,6 +282,27 @@ class TestTranscriptActual(unittest.TestCase):
         finally:
             os.unlink(p)
 
+    def test_conclusion_deep_read_cap(self):
+        # §51: 결론 정독은 건별 300단어 상한 — 초과분은 훑기로 강등
+        import json, tempfile, os
+        from transcript_actual import parse_actions, actual_effort_minutes
+        lines = [
+            {"type": "user", "message": {"role": "user", "content": "이 주제 심층 분석 보고서 작성해줘"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "결론 " * 500}]}},   # 결론 500단어
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            m = actual_effort_minutes(parse_actions(p))
+            # 검토 = 정독 300×0.008 + 초과 훑기 200×0.002 = 2.4 + 0.4 = 2.8
+            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 2.8,
+                                   places=2)
+        finally:
+            os.unlink(p)
+
     def test_deterministic_hand_check(self):
         # 실측 분모: 트랜스크립트 → 기계/HITL 동작 × 요율 (LLM 미사용)
         import json, tempfile, os
@@ -273,10 +330,11 @@ class TestTranscriptActual(unittest.TestCase):
             self.assertEqual(c["corrective_instructions"], 1)
             m = actual_effort_minutes(c)
             # machine = 1×0.3 + 100×0.0005 + 20×0.002 = 0.39
-            # hitl = 지시 2건×(0.5+0.05×2단어) + 검토(결론 20단어×정독 0.008,
-            #        문서 산출물 0단어) + 교정 1×4.0 = 1.2 + 0.16 + 4.0 = 5.36
+            # hitl = 지시 2건×(0.5+0.05×2단어) + 검토(결론 20단어×정독 0.008
+            #        + 문서 파일 표본 확인 0.5, 내용물 0단어)
+            #        + 교정 1×4.0 = 1.2 + 0.66 + 4.0 = 5.86
             self.assertAlmostEqual(m["machine_min"], 0.39, places=2)
-            self.assertAlmostEqual(m["hitl_min"], 5.36, places=2)
+            self.assertAlmostEqual(m["hitl_min"], 5.86, places=2)
             self.assertEqual(m["total_min"],
                              actual_effort_minutes(parse_actions(p))["total_min"])
         finally:
