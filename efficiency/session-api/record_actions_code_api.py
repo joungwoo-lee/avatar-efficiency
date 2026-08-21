@@ -16,6 +16,8 @@
       search  = 검색 흔적 있으면 1건
       execute = 실행 흔적 있으면 1건
       verify  = 산출물 있으면 1건
+      think   = 전략 생각 (§53) — 지시 직후 첫 응답의 생각 토큰 × 요율.
+                기본 ON, 휴먼화 축과 독립 (include_think=False로 끔).
     분모 = 공용 실측 (session_api.measure_agent_actual).
 
 휴먼화 2축 (§40) — 끈 만큼 "AI 궤적을 그대로 사람이 한 셈"에 가까워진다:
@@ -39,7 +41,8 @@
 
 CLI:
     python record_actions_code_api.py <session.jsonl> [...]
-        [--norw] [--noact] [--json]    (--raw, --rawrecord는 구 호환)
+        [--norw] [--noact] [--nothink] [--json]
+        (--raw, --rawrecord는 구 호환)
 """
 import json
 import sys
@@ -80,6 +83,75 @@ def suspect_output_channel(stats):
 
 
 RAW_RECORD = "rawrecord"  # 구 인터페이스 호환용 (§40에서 2축 옵션으로 재편)
+
+
+# 전략 생각 계상 (§53) — 원리: 일을 아는 사람은 실무 도구 사용에 생각을
+# 쓰지 않는다(숙련 가정). 사람 고민은 문제를 어떻게 풀지 전략 짤 때 든다.
+# 따라서 도구 사용 중간의 잔생각은 제외하고, **지시 직후 첫 응답의 생각**
+# (= 전략 수립)만 분자에 계상한다. 실측(51세션): 전체 생각 토큰의 68%가
+# 지시 직후에 몰림 — 위치 선별만으로 도구 잔생각이 걸러진다.
+THINK_TOK2WORD = 0.75        # 토큰→단어 환산
+THINK_AVG_STRAT_TOK = 1454   # 구 포맷 대체 단가 — 신 포맷 51세션 419지점
+#                              실측 평균 (2026-08-21, §53)
+_THINK_DEFAULT_SPEC = {"unit": "word_count", "min_per_unit": 0.0025}
+#                      # rates.json에 think 항목이 없을 때의 폴백 (400wpm 상당)
+
+
+def collect_strategy_thinking(jsonl_path):
+    """지시 직후 첫 응답의 생각(=전략 생각)만 선별 집계. 결정론, LLM 0회.
+
+    선별 규칙 (§53):
+      지시 = user 메시지 중 도구 결과 회신(tool_result)·meta·사이드체인 제외.
+      전략 지점 = 그 지시 직후 첫 assistant 메시지에 생각 흔적이 있는 경우.
+      생각량 = usage.output_tokens_details.thinking_tokens (2026-08-12+ 기록).
+      구 포맷(토큰 수 미기록, 생각 블록만 존재)은 fallback_points로 세어
+      실측 평균 단가(THINK_AVG_STRAT_TOK)로 대체 계상한다.
+
+    반환: {"points": 전략 지점 수, "tokens": 토큰 실측 합,
+           "fallback_points": 토큰 미기록 지점 수}
+    """
+    points = tokens = fallback = 0
+    seen = set()
+    awaiting = False
+    with open(jsonl_path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if rec.get("isSidechain"):
+                continue
+            t = rec.get("type")
+            if t == "user":
+                content = (rec.get("message") or {}).get("content")
+                if isinstance(content, list) and any(
+                        isinstance(b, dict) and b.get("type") == "tool_result"
+                        for b in content):
+                    continue  # 도구 결과 회신 — 지시 아님
+                if rec.get("isMeta"):
+                    continue
+                awaiting = True
+            elif t == "assistant" and awaiting:
+                msg = rec.get("message") or {}
+                mid = msg.get("id")
+                if mid in seen:
+                    continue  # 같은 메시지의 스트리밍 중복 기록
+                if mid:
+                    seen.add(mid)
+                det = ((msg.get("usage") or {}).get("output_tokens_details")
+                       or {})
+                tt = det.get("thinking_tokens") or 0
+                has_block = any(
+                    isinstance(b, dict) and b.get("type") == "thinking"
+                    for b in (msg.get("content") or []))
+                if tt:
+                    points += 1
+                    tokens += tt
+                elif has_block:
+                    points += 1
+                    fallback += 1
+                awaiting = False
+    return {"points": points, "tokens": tokens, "fallback_points": fallback}
 
 
 def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
@@ -157,12 +229,16 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
 
 
 def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
-            include_subagents=False, force=False, humanize=None):
+            include_subagents=False, force=False, humanize=None,
+            include_think=True):
     """세션 1개 → LLM 0회 분자·분모·speedup. 반환 구조는 measure_session 동일.
 
     humanize_rw / humanize_act: 휴먼화 2축 (build_actions 참조, §40).
     humanize: 구 인터페이스 호환 — True/False/"rawrecord"를 2축으로 변환
               (지정 시 2축 인자보다 우선).
+    include_think: 전략 생각 계상 (§53, collect_strategy_thinking 참조).
+              기본 ON — 휴먼화 2축과 독립(모든 조합에 동일 가산이라 §43
+              단조성 불변). False로 구(생각 미계상) 동작.
     """
     if humanize is not None:  # 구 인터페이스 호환 (§39 이전 소비자)
         if humanize == RAW_RECORD:
@@ -187,6 +263,19 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
         total += minutes
         breakdown.append({"primitive": a["primitive"], "count": a["count"],
                           "unit": spec["unit"], "minutes": round(minutes, 2)})
+    think_info = None
+    if include_think:  # 전략 생각 (§53) — 휴먼화 축과 독립, 기본 ON
+        st = collect_strategy_thinking(jsonl_path)
+        eff_tok = st["tokens"] + st["fallback_points"] * THINK_AVG_STRAT_TOK
+        think_words = round(eff_tok * THINK_TOK2WORD, 1)
+        if think_words:
+            spec = card.get("think") or _THINK_DEFAULT_SPEC
+            minutes = think_words * spec["min_per_unit"]
+            total += minutes
+            breakdown.append({"primitive": "think", "count": think_words,
+                              "unit": spec.get("unit", "word_count"),
+                              "minutes": round(minutes, 2)})
+        think_info = st
     h_min = round(total, 2)
     return {
         "session": Path(jsonl_path).name,
@@ -194,6 +283,8 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
         "suspect_output_channel": suspect,
         "human": {"min": h_min, "method": "record-actions-code",
                   "humanize_rw": humanize_rw, "humanize_act": humanize_act,
+                  "include_think": include_think,
+                  **({"think": think_info} if think_info else {}),
                   # 구 소비자 호환 표현: 둘 다 ON=True / act만 ON=False /
                   # 둘 다 OFF="rawrecord"
                   "humanize": (True if humanize_rw and humanize_act else
@@ -228,13 +319,15 @@ def main(argv):
     paths = [a for a in argv if not a.startswith("--")]
     if not paths:
         print("usage: python record_actions_code_api.py <session.jsonl> [...] "
-              "[--norw] [--noact] [--json]   "
+              "[--norw] [--noact] [--nothink] [--json]   "
               "(--raw=--norw, --rawrecord=--norw --noact 호환)",
               file=sys.stderr)
         return 2
     rw = not ("--norw" in argv or "--raw" in argv or "--rawrecord" in argv)
     act = not ("--noact" in argv or "--rawrecord" in argv)
-    rows = measure_batch(paths, humanize_rw=rw, humanize_act=act)
+    think = "--nothink" not in argv
+    rows = measure_batch(paths, humanize_rw=rw, humanize_act=act,
+                         include_think=think)
     if "--json" in argv:
         print(json.dumps(rows, ensure_ascii=False, indent=1))
         return 0
