@@ -18,7 +18,7 @@
       verify  = 산출물 있으면 1건
       think   = 전략 생각 (§53) — 지시 직후 첫 응답의 생각 토큰 × 요율
                 (정독과 동속 0.005, §57).
-                (신 포맷 기록만 — 구 포맷은 미계상, §55)
+                (구 포맷은 토큰 수가 없어 건당 1.5분 고정, §58)
                 기본 ON, 휴먼화 축과 독립 (include_think=False로 끔).
     분모 = 공용 실측 (session_api.measure_agent_actual).
 
@@ -93,13 +93,20 @@ RAW_RECORD = "rawrecord"  # 구 인터페이스 호환용 (§40에서 2축 옵�
 # (= 전략 수립)만 분자에 계상한다. 실측(51세션): 전체 생각 토큰의 68%가
 # 지시 직후에 몰림 — 위치 선별만으로 도구 잔생각이 걸러진다.
 THINK_TOK2WORD = 0.75        # 토큰→단어 환산
-THINK_AVG_STRAT_TOK = 0      # 구 포맷(토큰 미기록) 대체 단가 — 0 = 미계상
-#                              (§55) 구 기록은 생각 블록의 존재만 남고 양이
-#                              없다. 지점당 평균으로 때우면 생각의 양이 아니라
-#                              지시 건수를 재게 되고(생각 토큰 대 지점 수
-#                              상관 0.99), 소형 세션이 실측 대비 7~27배
-#                              부풀려진다 — 모르는 값은 0으로 두고 과소를
-#                              택한다. 신 포맷(2026-08-12+) 기록만 계상.
+THINK_FALLBACK_MIN = 1.5     # 구 포맷(토큰 미기록) 생각 지점의 건당 고정 시간
+#                              (§58) 구 기록은 생각 블록의 존재만 남고 양이
+#                              없다. §55에서는 0(미계상)이었다 — 당시 폐기한
+#                              것은 "지점당 실측 평균 1,454토큰"을 붙이는
+#                              방식으로, 그 단가는 생각의 양이 아니라 지시
+#                              건수를 재게 되고(생각 토큰 대 지점 수 상관
+#                              0.99) 소형 세션을 실측의 7~27배로 부풀렸다.
+#                              여기서 쓰는 값은 실측 평균이 아니라 **실측
+#                              중앙값(1.49분)에 맞춘 보수적 하한**이다:
+#                              양을 모르는 지점에 "보통 한 턴"만 인정하고
+#                              깊은 고민의 몫은 포기한다(과소 유지).
+#                              요율(rates.json think)이 바뀌어도 건당 분은
+#                              고정 — 아래에서 분을 단어로 역환산해 쓴다.
+#                              신 포맷(2026-08-12+)은 실측 토큰 그대로.
 _THINK_DEFAULT_SPEC = {"unit": "word_count", "min_per_unit": 0.005}
 #                      # rates.json에 think 항목이 없을 때의 폴백
 #                      # (§57 분자 정독과 동속 — 200wpm 상당)
@@ -112,9 +119,9 @@ def collect_strategy_thinking(jsonl_path):
       지시 = user 메시지 중 도구 결과 회신(tool_result)·meta·사이드체인 제외.
       전략 지점 = 그 지시 직후 첫 assistant 메시지에 생각 흔적이 있는 경우.
       생각량 = usage.output_tokens_details.thinking_tokens (2026-08-12+ 기록).
-      구 포맷(토큰 수 미기록, 생각 블록만 존재)은 fallback_points로 세어
-      보고만 하고 계상하지 않는다(§55, THINK_AVG_STRAT_TOK=0) — 양을
-      모르는 생각에 평균값을 붙이면 지시 건수를 재게 되므로.
+      구 포맷(토큰 수 미기록, 생각 블록만 존재)은 fallback_points로 세고,
+      건당 THINK_FALLBACK_MIN(1.5분) 고정으로 계상한다(§58) — 실측 평균
+      (2.98분)이 아니라 중앙값(1.49분)에 맞춘 하한이다.
 
     반환: {"points": 전략 지점 수, "tokens": 토큰 실측 합,
            "fallback_points": 토큰 미기록 지점 수}
@@ -275,10 +282,13 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
     think_info = None
     if include_think:  # 전략 생각 (§53) — 휴먼화 축과 독립, 기본 ON
         st = collect_strategy_thinking(jsonl_path)
-        eff_tok = st["tokens"] + st["fallback_points"] * THINK_AVG_STRAT_TOK
-        think_words = round(eff_tok * THINK_TOK2WORD, 1)
+        spec = card.get("think") or _THINK_DEFAULT_SPEC
+        # 구 포맷 지점은 건당 고정 분(§58) — 요율에 무관하게 같은 시간이
+        # 되도록 분을 단어로 역환산해 더한다(breakdown 단위 일관성 유지).
+        fb_words = (st["fallback_points"] * THINK_FALLBACK_MIN
+                    / spec["min_per_unit"]) if st["fallback_points"] else 0.0
+        think_words = round(st["tokens"] * THINK_TOK2WORD + fb_words, 1)
         if think_words:
-            spec = card.get("think") or _THINK_DEFAULT_SPEC
             minutes = think_words * spec["min_per_unit"]
             total += minutes
             breakdown.append({"primitive": "think", "count": think_words,
