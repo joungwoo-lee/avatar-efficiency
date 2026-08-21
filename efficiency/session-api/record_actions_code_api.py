@@ -17,6 +17,7 @@
       execute = 실행 흔적 있으면 1건
       verify  = 산출물 있으면 1건
       think   = 전략 생각 (§53) — 지시 직후 첫 응답의 생각 토큰 × 요율.
+                (신 포맷 기록만 — 구 포맷은 미계상, §55)
                 기본 ON, 휴먼화 축과 독립 (include_think=False로 끔).
     분모 = 공용 실측 (session_api.measure_agent_actual).
 
@@ -91,8 +92,13 @@ RAW_RECORD = "rawrecord"  # 구 인터페이스 호환용 (§40에서 2축 옵�
 # (= 전략 수립)만 분자에 계상한다. 실측(51세션): 전체 생각 토큰의 68%가
 # 지시 직후에 몰림 — 위치 선별만으로 도구 잔생각이 걸러진다.
 THINK_TOK2WORD = 0.75        # 토큰→단어 환산
-THINK_AVG_STRAT_TOK = 1454   # 구 포맷 대체 단가 — 신 포맷 51세션 419지점
-#                              실측 평균 (2026-08-21, §53)
+THINK_AVG_STRAT_TOK = 0      # 구 포맷(토큰 미기록) 대체 단가 — 0 = 미계상
+#                              (§55) 구 기록은 생각 블록의 존재만 남고 양이
+#                              없다. 지점당 평균으로 때우면 생각의 양이 아니라
+#                              지시 건수를 재게 되고(생각 토큰 대 지점 수
+#                              상관 0.99), 소형 세션이 실측 대비 7~27배
+#                              부풀려진다 — 모르는 값은 0으로 두고 과소를
+#                              택한다. 신 포맷(2026-08-12+) 기록만 계상.
 _THINK_DEFAULT_SPEC = {"unit": "word_count", "min_per_unit": 0.0025}
 #                      # rates.json에 think 항목이 없을 때의 폴백 (400wpm 상당)
 
@@ -105,7 +111,8 @@ def collect_strategy_thinking(jsonl_path):
       전략 지점 = 그 지시 직후 첫 assistant 메시지에 생각 흔적이 있는 경우.
       생각량 = usage.output_tokens_details.thinking_tokens (2026-08-12+ 기록).
       구 포맷(토큰 수 미기록, 생각 블록만 존재)은 fallback_points로 세어
-      실측 평균 단가(THINK_AVG_STRAT_TOK)로 대체 계상한다.
+      보고만 하고 계상하지 않는다(§55, THINK_AVG_STRAT_TOK=0) — 양을
+      모르는 생각에 평균값을 붙이면 지시 건수를 재게 되므로.
 
     반환: {"points": 전략 지점 수, "tokens": 토큰 실측 합,
            "fallback_points": 토큰 미기록 지점 수}
