@@ -16,7 +16,8 @@
       search  = 검색 흔적 있으면 1건
       execute = 실행 흔적 있으면 1건
       verify  = 산출물 있으면 1건
-      think   = 전략 생각 (§53) — 지시 직후 첫 응답의 생각 토큰 × 요율.
+      think   = 전략 생각 (§53) — 지시 직후 첫 응답의 생각 토큰 × 요율
+                (정독과 동속 0.005, §57).
                 (신 포맷 기록만 — 구 포맷은 미계상, §55)
                 기본 ON, 휴먼화 축과 독립 (include_think=False로 끔).
     분모 = 공용 실측 (session_api.measure_agent_actual).
@@ -99,8 +100,9 @@ THINK_AVG_STRAT_TOK = 0      # 구 포맷(토큰 미기록) 대체 단가 — 0 
 #                              상관 0.99), 소형 세션이 실측 대비 7~27배
 #                              부풀려진다 — 모르는 값은 0으로 두고 과소를
 #                              택한다. 신 포맷(2026-08-12+) 기록만 계상.
-_THINK_DEFAULT_SPEC = {"unit": "word_count", "min_per_unit": 0.0025}
-#                      # rates.json에 think 항목이 없을 때의 폴백 (400wpm 상당)
+_THINK_DEFAULT_SPEC = {"unit": "word_count", "min_per_unit": 0.005}
+#                      # rates.json에 think 항목이 없을 때의 폴백
+#                      # (§57 분자 정독과 동속 — 200wpm 상당)
 
 
 def collect_strategy_thinking(jsonl_path):
