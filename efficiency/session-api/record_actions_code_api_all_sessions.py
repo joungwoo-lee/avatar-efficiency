@@ -13,6 +13,7 @@ LLM 0회로 측정해 마크다운 리포트를 만든다:
     python report_all_sessions.py D:\\other\\projects  # 루트 지정
 """
 import glob
+import json
 import os
 import statistics
 import sys
@@ -31,6 +32,33 @@ DEFAULT_ROOT = os.path.join(str(Path.home()), ".claude", "projects")
 ACTIVE_GRACE_SEC = 600  # 최근 10분 내 갱신된 세션 = 진행 중 — 측정 제외
 
 
+def is_ai_invoked(jsonl_path):
+    """AI(프로그램)가 SDK/헤드리스로 돌린 세션인가 (§54). 결정론.
+
+    사람이 터미널에서 연 세션은 첫 user 레코드가 entrypoint="cli"·
+    promptSource="typed"로, 프로그램이 claude CLI를 SDK로 호출해 돌린
+    세션(예: 측정기 자신의 견적 엔진 구동)은 entrypoint="sdk-cli"·
+    promptSource="sdk"로 기록된다. 후자는 사람의 업무 세션이 아니므로
+    전 세션 집계에서 제외 — 서브에이전트 제외와 같은 원리(AI가 시킨
+    일은 그걸 시킨 세션의 분모에 이미 비용으로 잡혀 있거나, 애초에
+    측정 모집단이 아니다). 필드가 없는 구 기록은 사람 세션으로 간주
+    (제외는 직접 증거가 있을 때만 — 보수적).
+    """
+    try:
+        with open(jsonl_path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                if rec.get("type") == "user":
+                    return (rec.get("entrypoint") == "sdk-cli"
+                            or rec.get("promptSource") == "sdk")
+    except OSError:
+        pass
+    return False
+
+
 def collect(root):
     import time
     files = [f for f in glob.glob(os.path.join(root, "**", "*.jsonl"),
@@ -42,6 +70,10 @@ def collect(root):
     active = [f for f in files
               if now - os.path.getmtime(f) < ACTIVE_GRACE_SEC]
     files = [f for f in files if f not in active]
+    # AI 호출 세션 제외 (§54): 프로그램이 SDK로 돌린 세션(견적 엔진 구동
+    # 등)은 사람의 업무 세션이 아니다 — 서브에이전트 제외와 같은 원리.
+    ai_invoked = [f for f in files if is_ai_invoked(f)]
+    files = [f for f in files if f not in ai_invoked]
     rows = []
     n_excl = n_err = n_excl_suspect = 0
     for f in files:
@@ -76,7 +108,8 @@ def collect(root):
                          "suspect_why": (on.get("notes") or [""])[0]})
         except Exception:
             n_err += 1
-    return rows, n_excl, n_err, n_excl_suspect, len(active)
+    return (rows, n_excl, n_err, n_excl_suspect, len(active),
+            len(ai_invoked))
 
 
 def histogram(series):
@@ -97,7 +130,7 @@ def histogram(series):
     return lines
 
 
-def render(rows, n_excl, n_err, n_excl_suspect, n_active, root):
+def render(rows, n_excl, n_err, n_excl_suspect, n_active, n_ai, root):
     n = len(rows)
     if not n:
         return f"측정 가능한 세션 없음 (제외 {n_excl}, 실패 {n_err})"
@@ -118,7 +151,7 @@ def render(rows, n_excl, n_err, n_excl_suspect, n_active, root):
         "",
         f"- 측정일: {date.today().isoformat()}  |  루트: `{root}`",
         f"- 측정 {n}세션 (초소형 제외 {n_excl}, 진행 중 제외 {n_active}, "
-        f"실패 {n_err}"
+        f"AI 호출 세션 제외 {n_ai}, 실패 {n_err}"
         + (f", **⚠ 쓰기 툴 포맷 의심 {len(suspects)}건"
            + (f"+제외분 {n_excl_suspect}건" if n_excl_suspect else "") + "**"
            if (suspects or n_excl_suspect) else "")
