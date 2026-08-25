@@ -162,9 +162,14 @@ def parse_actions(jsonl_path):
               # 그 구간에 코드 변경이 있으면 동작 확인 사건 1건 —
               # 그 시점의 테스트 상태 스냅샷을 함께 기록
               "code_check_events": [],
-              # 긴 도구 실측 대기 (§59): 건당 고정 요율(execute 0.3분)은
-              # 0.5초짜리 `git status`와 10분짜리 벤치를 같은 값으로 만든다.
-              # 문턱을 넘는 초과분만 실측 시간으로 얹는다.
+              # 긴 도구 실측 대기 — **분모에 가산하지 않는다** (§60).
+              # §59에서 "건당 0.3분 고정은 10분짜리 벤치를 18초로 친다"며
+              # 초과분을 얹었으나, 타임스탬프 실측과 대조하니 **얹기 전이 더
+              # 정확했다**: 모델/실측 0.98(얹으면 1.11), 세션별 |log오차|
+              # 0.625(얹으면 0.643), 허용범위(0.5~2.0배) 42/63(얹으면 40/63).
+              # 이유 — 0.3분 고정이 0.5초짜리 수천 건에서 과금한 몫이 드문
+              # 장시간 호출을 이미 상쇄하고 있었다. 개별 호출로는 틀리지만
+              # 총합에서는 맞는 구조. 감사용으로 집계만 남긴다.
               "long_wait_min": 0.0, "long_wait_events": 0,
               "session_id": None, "first_ts": None, "last_ts": None}
     pending_calls = {}  # tool_use id -> 시작 시각(초)
@@ -335,8 +340,6 @@ def actual_effort_minutes(counts, rates=None):
     r = rates or load_rates(DEFAULT_RATES_PATH)
     a, h = r["agent"], r["hitl"]
     machine = {
-        # 긴 도구 실측 대기 (§59) — 문턱(30초) 초과분만
-        "wait": counts.get("long_wait_min", 0.0),
         "execute": counts["tool_calls"] * a["execute"]["min_per_unit"],
         "read": counts["tool_result_words"] * a["read"]["min_per_unit"],
         # draft = 답변 + 도구 입력으로 생산된 글(파일 본문·서브에이전트
