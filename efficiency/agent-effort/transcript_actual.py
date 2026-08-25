@@ -34,6 +34,7 @@ rates.json의 agent/hitl 카드 요율을 곱한다.
 user 턴(사람 발화 아님). sidechain(서브에이전트)은 기계 동작으로 포함.
 """
 import json
+from datetime import datetime
 import re
 from pathlib import Path
 
@@ -103,6 +104,19 @@ def _content_blocks(message):
     return content if isinstance(content, list) else []
 
 
+_WAIT_THRESHOLD_SEC = 30.0   # 이 시간을 넘는 도구만 실측 초과분 가산 (§59)
+
+
+def _epoch(x):
+    """ISO 타임스탬프 -> epoch 초 (없거나 깨지면 None)."""
+    if not x:
+        return None
+    try:
+        return datetime.fromisoformat(str(x).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
 def _result_text(block):
     """tool_result 내용 텍스트 — 문자열 또는 blocks 리스트."""
     content = block.get("content")
@@ -148,7 +162,12 @@ def parse_actions(jsonl_path):
               # 그 구간에 코드 변경이 있으면 동작 확인 사건 1건 —
               # 그 시점의 테스트 상태 스냅샷을 함께 기록
               "code_check_events": [],
+              # 긴 도구 실측 대기 (§59): 건당 고정 요율(execute 0.3분)은
+              # 0.5초짜리 `git status`와 10분짜리 벤치를 같은 값으로 만든다.
+              # 문턱을 넘는 초과분만 실측 시간으로 얹는다.
+              "long_wait_min": 0.0, "long_wait_events": 0,
               "session_id": None, "first_ts": None, "last_ts": None}
+    pending_calls = {}  # tool_use id -> 시작 시각(초)
     last_answer_w = 0  # 직전 assistant 발언 단어수 (턴 마무리 = 결론 후보)
     pending_tests = {}  # 테스트 실행 tool_use id → 결과 대기
     seq = 0             # 도구 사건 순번 (§49 쓰기↔테스트 선후 판정용)
@@ -181,6 +200,7 @@ def parse_actions(jsonl_path):
             if not isinstance(rec, dict):
                 continue
             counts["session_id"] = counts["session_id"] or rec.get("sessionId")
+            rec_t = _epoch(rec.get("timestamp"))
             ts = rec.get("timestamp")
             if ts:
                 counts["first_ts"] = counts["first_ts"] or ts
@@ -200,6 +220,8 @@ def parse_actions(jsonl_path):
                         continue
                     if b.get("type") == "tool_use":
                         counts["tool_calls"] += 1
+                        if b.get("id") and rec_t:
+                            pending_calls[b["id"]] = rec_t
                         seq += 1
                         inp = b.get("input") or {}
                         if b.get("name") == "StructuredOutput":
@@ -248,6 +270,14 @@ def parse_actions(jsonl_path):
                 if b.get("type") == "tool_result":
                     counts["tool_result_words"] += _result_words(b)
                     seq += 1
+                    t0 = pending_calls.pop(b.get("tool_use_id"), None)
+                    if t0 and rec_t and 0 <= rec_t - t0 < 3600:
+                        # 문턱 초과분만 실측으로 (§59): 건당 고정 요율이
+                        # 짧은 호출을 이미 과금하므로 이중계상 방지
+                        over = (rec_t - t0) - _WAIT_THRESHOLD_SEC
+                        if over > 0:
+                            counts["long_wait_min"] += over / 60
+                            counts["long_wait_events"] += 1
                     if pending_tests.pop(b.get("tool_use_id"), None):
                         counts["last_test_seq"] = seq  # §49 테스트 결과 순번
                         out = _result_text(b)
@@ -305,6 +335,8 @@ def actual_effort_minutes(counts, rates=None):
     r = rates or load_rates(DEFAULT_RATES_PATH)
     a, h = r["agent"], r["hitl"]
     machine = {
+        # 긴 도구 실측 대기 (§59) — 문턱(30초) 초과분만
+        "wait": counts.get("long_wait_min", 0.0),
         "execute": counts["tool_calls"] * a["execute"]["min_per_unit"],
         "read": counts["tool_result_words"] * a["read"]["min_per_unit"],
         # draft = 답변 + 도구 입력으로 생산된 글(파일 본문·서브에이전트

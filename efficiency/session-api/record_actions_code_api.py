@@ -86,6 +86,41 @@ def suspect_output_channel(stats):
 
 RAW_RECORD = "rawrecord"  # 구 인터페이스 호환용 (§40에서 2축 옵션으로 재편)
 
+# 채널 결산 (§59 규칙2): 세션에서 오간 글이 **어느 축으로 갔는지** 통로별로
+# 결산한다. 구멍은 늘 "이 통로는 실행이니까/도구니까 계산에서 빼자"에서 났다
+# (셸 명령문 속 코드·실행 출력 판독·서브에이전트 전량). 통로 이름으로 면제하지
+# 않고 결산표를 세션마다 내면, 미계상 채널이 커질 때 리포트에 바로 드러난다.
+_CHANNEL_AXIS = {
+    "write_tool_words": "쓰기(draft/edit)",
+    "shell_cmd_words": "실행-구성",
+    "exec_out_words": "실행-판독",
+    "tool_result_words": "읽기(등급 분해)",
+    "user_input_words": "읽기(지시 입력)",
+    "subagent_files": "서브에이전트(전 축 편입, §59)",
+    "unrec_write_words": None,      # 미등록 쓰기 포맷 — §38 경보 대상
+    "sub_report_words": None,       # 서브에이전트 보고문 — 알려진 미계상
+    "image_blocks": None,           # 스크린샷 판독 — 미계상
+}
+_UNCOUNTED_WARN_WORDS = 2000        # 미계상 채널 경보 문턱
+
+
+def channel_audit(stats):
+    """통로별 결산 → {"axes": {...}, "uncounted": {...}, "warn": bool}."""
+    ch = dict(stats.get("channels") or {})
+    axes, unc = {}, {}
+    for k, v in ch.items():
+        if not v:
+            continue
+        axis = _CHANNEL_AXIS.get(k, None)
+        if axis:
+            axes[k] = {"words": v, "axis": axis}
+        else:
+            unc[k] = v
+    words = sum(v for k, v in unc.items() if k != "image_blocks")
+    return {"axes": axes, "uncounted": unc,
+            "uncounted_words": words,
+            "warn": words >= _UNCOUNTED_WARN_WORDS}
+
 
 # 전략 생각 계상 (§53) — 원리: 일을 아는 사람은 실무 도구 사용에 생각을
 # 쓰지 않는다(숙련 가정). 사람 고민은 문제를 어떻게 풀지 전략 짤 때 든다.
@@ -93,19 +128,19 @@ RAW_RECORD = "rawrecord"  # 구 인터페이스 호환용 (§40에서 2축 옵�
 # (= 전략 수립)만 분자에 계상한다. 실측(51세션): 전체 생각 토큰의 68%가
 # 지시 직후에 몰림 — 위치 선별만으로 도구 잔생각이 걸러진다.
 THINK_TOK2WORD = 0.75        # 토큰→단어 환산
-THINK_FALLBACK_MIN = 1.5     # 구 포맷(토큰 미기록) 생각 지점의 건당 고정 시간
-#                              (§58) 구 기록은 생각 블록의 존재만 남고 양이
-#                              없다. §55에서는 0(미계상)이었다 — 당시 폐기한
-#                              것은 "지점당 실측 평균 1,454토큰"을 붙이는
-#                              방식으로, 그 단가는 생각의 양이 아니라 지시
-#                              건수를 재게 되고(생각 토큰 대 지점 수 상관
-#                              0.99) 소형 세션을 실측의 7~27배로 부풀렸다.
-#                              여기서 쓰는 값은 실측 평균이 아니라 **실측
-#                              중앙값(1.49분)에 맞춘 보수적 하한**이다:
-#                              양을 모르는 지점에 "보통 한 턴"만 인정하고
-#                              깊은 고민의 몫은 포기한다(과소 유지).
-#                              요율(rates.json think)이 바뀌어도 건당 분은
-#                              고정 — 아래에서 분을 단어로 역환산해 쓴다.
+THINK_FALLBACK_MIN = 1.5      # 구 포맷(토큰 미기록) 전략 생각 지점의 건당 시간
+#                              (§58) 구 기록은 생각 블록의 존재만 남고 양이 없다.
+#                              양을 모르는 지점에 "보통 한 턴"만 인정하고 깊은
+#                              고민의 몫은 포기한다(과소 유지).
+#                              참고 — §60 재보정 검토: 측정기 부산물 세션
+#                              (entrypoint=sdk-cli, 지점당 4,396토큰)을 제외한
+#                              실측 442지점의 중앙값은 622토큰 = 2.33분, 평균은
+#                              973토큰 = 3.65분이다. 즉 1.5분은 그 실측 중앙값보다
+#                              **더 낮은 하한**이며, 2.33분으로 올리면 전체 배율이
+#                              5.34 → 5.41배(+1.3%)가 된다. 하한 성격을 유지하기로
+#                              하여 1.5분을 존치한다.
+#                              요율(rates.json think)이 바뀌어도 건당 분은 고정 —
+#                              아래에서 분을 단어로 역환산해 쓴다.
 #                              신 포맷(2026-08-12+)은 실측 토큰 그대로.
 _THINK_DEFAULT_SPEC = {"unit": "word_count", "min_per_unit": 0.005}
 #                      # rates.json에 think 항목이 없을 때의 폴백
@@ -113,7 +148,11 @@ _THINK_DEFAULT_SPEC = {"unit": "word_count", "min_per_unit": 0.005}
 
 
 def collect_strategy_thinking(jsonl_path):
-    """지시 직후 첫 응답의 생각(=전략 생각)만 선별 집계. 결정론, LLM 0회.
+    """지시 직후 첫 응답의 생각(=전략 생각)만 **계상**. 결정론, LLM 0회.
+
+    도구 중간 생각은 계상하지 않는다(§53 숙련자 가정) — 다만 그 크기를
+    mid_tokens로 함께 보고해 미계상 규모가 리포트에 드러나게 한다
+    (실측: 전 세션 생각 토큰의 74%가 여기 해당).
 
     선별 규칙 (§53):
       지시 = user 메시지 중 도구 결과 회신(tool_result)·meta·사이드체인 제외.
@@ -123,10 +162,13 @@ def collect_strategy_thinking(jsonl_path):
       건당 THINK_FALLBACK_MIN(1.5분) 고정으로 계상한다(§58) — 실측 평균
       (2.98분)이 아니라 중앙값(1.49분)에 맞춘 하한이다.
 
-    반환: {"points": 전략 지점 수, "tokens": 토큰 실측 합,
-           "fallback_points": 토큰 미기록 지점 수}
+    반환: {"points": 전략 지점 수, "tokens": 전략 생각 토큰,
+           "fallback_points": 토큰 미기록 전략 지점 수,
+           "mid_tokens": 도구 중간 생각 토큰, "mid_points": 그 지점 수,
+           "all_tokens": 전략+중간 합}
     """
     points = tokens = fallback = 0
+    mid_tokens = mid_points = 0
     seen = set()
     awaiting = False
     with open(jsonl_path, encoding="utf-8", errors="replace") as fh:
@@ -167,7 +209,81 @@ def collect_strategy_thinking(jsonl_path):
                     points += 1
                     fallback += 1
                 awaiting = False
-    return {"points": points, "tokens": tokens, "fallback_points": fallback}
+            elif t == "assistant":
+                # 도구 중간 생각 (§59) — 지시 직후가 아닌 모든 응답의 생각
+                msg = rec.get("message") or {}
+                mid = msg.get("id")
+                if mid in seen:
+                    continue
+                if mid:
+                    seen.add(mid)
+                det = ((msg.get("usage") or {}).get("output_tokens_details")
+                       or {})
+                tt = det.get("thinking_tokens") or 0
+                if tt:
+                    mid_points += 1
+                    mid_tokens += tt
+    return {"points": points, "tokens": tokens, "fallback_points": fallback,
+            "mid_points": mid_points, "mid_tokens": mid_tokens,
+            "all_tokens": tokens + mid_tokens}
+
+
+def write_minutes(kind_words, rates, is_edit=False):
+    """쓰기 종류별 요율 적용 (§59). 반환: (분, 단어수).
+
+    코드·문서·데이터는 사람 절차가 다르다 — 코드는 짜고, 문서는 쓰고,
+    데이터는 뽑는다. human_write_model이 없으면 구 단일 요율로 폴백.
+    """
+    total_w = sum(kind_words.values())
+    wm = rates.get("human_write_model")
+    if not wm:
+        r = rates["human"]["edit" if is_edit else "draft"]["min_per_unit"]
+        return total_w * r, total_w
+    f = wm.get("edit_factor", 0.4) if is_edit else 1.0
+    other = wm.get("other_min_per_word", 0.05)
+    minutes = sum(w * wm.get(f"{k}_min_per_word", other) * f
+                  for k, w in kind_words.items())
+    return minutes, total_w
+
+
+def exec_item(stats, rates, humanize_act=True):
+    """실행 4토막 (§59): 수단 구성 + 실측 대기 + 결과 판독 + 기계 조작.
+
+    종전은 건당 고정 2.0분이라 즉석 스크립트(건당 평균 97단어)와
+    `git status`가 같은 값이었다. 구성·대기·판독은 전부 트랜스크립트
+    실측이라 seed가 오히려 하나 줄어든다.
+    """
+    calls = stats.get("exec_calls", 0)
+    if not calls:
+        return None
+    net = min(max(1, stats.get("exec_net_calls", 0)), calls)
+    em = rates.get("human_exec_model")
+    if not em:  # 구 폴백: 건당 고정 요율
+        return {"primitive": "execute", "count": net if humanize_act else calls}
+    if humanize_act:
+        n = net
+        compose_w = stats.get("exec_compose_words", 0)
+        mech = (n * em.get("new_cmd_min", 0.25)
+                + max(0, calls - n) * em.get("repeat_cmd_min", 0.1))
+    else:  # 로레코드 — 궤적 그대로: 매 호출이 새 명령
+        n = calls
+        compose_w = stats.get("exec_compose_words_gross", 0)
+        mech = calls * em.get("new_cmd_min", 0.25)
+    rr = rates["human"]["read"]["min_per_unit"]
+    sr = (rates.get("human_reading_model") or {}).get("skim_min_per_word",
+                                                      rr / 20)
+    compose = compose_w * em.get("compose_min_per_word", 0.05)
+    wait = stats.get("exec_wait_min", 0.0)
+    read = (stats.get("exec_out_deep_words", 0) * rr
+            + stats.get("exec_out_skim_words", 0) * sr)
+    return {"primitive": "execute", "count": n, "unit": "episode",
+            "minutes": round(compose + wait + read + mech, 2),
+            "detail": {"compose_min": round(compose, 2),
+                       "wait_min": round(wait, 2),
+                       "read_min": round(read, 2),
+                       "mechanical_min": round(mech, 2),
+                       "compose_words": compose_w,
+                       "out_words": stats.get("exec_out_words", 0)}}
 
 
 def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
@@ -200,29 +316,53 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
         read_w = (stats.get("deep_words", 0)
                   + stats.get("skim_words", 0) * factor
                   + stats.get("input_words", 0))
-        draft_w = stats.get("out_draft_words", 0)
-        edit_w = stats.get("out_edit_words", 0)
+        draft_kind = dict(stats.get("out_draft_by_kind") or {})
+        edit_kind = dict(stats.get("out_edit_by_kind") or {})
+        if not draft_kind:  # 구 stats 호환
+            draft_kind = {"other": stats.get("out_draft_words", 0)}
+            edit_kind = {"other": stats.get("out_edit_words", 0)}
     else:  # rw 끔 — 읽기 전량 정독, 쓰기 번복 미소거
-        read_w = stats.get("reviewed_words", 0) + stats.get("input_words", 0)
-        draft_w = stats.get("gross_draft_words", 0)
-        edit_w = stats.get("gross_edit_words", 0)
+        # 실행 출력은 아래 exec_item이 따로 매기므로 여기서 뺀다(이중계상 방지)
+        read_w = (max(0, stats.get("reviewed_words", 0)
+                      - stats.get("exec_out_words", 0))
+                  + stats.get("input_words", 0))
+        gk = dict(stats.get("gross_write_by_kind") or {})
+        if gk:
+            gd = stats.get("gross_draft_words", 0)
+            ge = stats.get("gross_edit_words", 0)
+            tot = gd + ge
+            share = (gd / tot) if tot else 1.0
+            draft_kind = {k: v * share for k, v in gk.items()}
+            edit_kind = {k: v * (1 - share) for k, v in gk.items()}
+        else:
+            draft_kind = {"other": stats.get("gross_draft_words", 0)}
+            edit_kind = {"other": stats.get("gross_edit_words", 0)}
+    draft_w = sum(draft_kind.values())
+    edit_w = sum(edit_kind.values())
     if not (draft_w or edit_w):
-        draft_w = stats.get("answer_words", 0)  # 보고형: 대화 보고가 산출물
+        # 보고형: 대화 보고가 산출물 (문서 요율)
+        draft_kind = {"doc": stats.get("answer_words", 0)}
+        draft_w = sum(draft_kind.values())
     items = []
     if read_w:
         items.append({"primitive": "read", "count": round(read_w, 1)})
     if draft_w:
-        items.append({"primitive": "draft", "count": round(draft_w, 1)})
+        dm, dw = write_minutes(draft_kind, rates)
+        items.append({"primitive": "draft", "count": round(dw, 1),
+                      "unit": "word_count", "minutes": round(dm, 2),
+                      "detail": {k: round(v, 1)
+                                 for k, v in draft_kind.items() if v}})
     if edit_w:
-        items.append({"primitive": "edit", "count": round(edit_w, 1)})
+        emn, ew = write_minutes(edit_kind, rates, is_edit=True)
+        items.append({"primitive": "edit", "count": round(ew, 1),
+                      "unit": "word_count", "minutes": round(emn, 2),
+                      "detail": {k: round(v, 1)
+                                 for k, v in edit_kind.items() if v}})
     if raw_record:
         # 궤적 재연: 행동 횟수 = 세션 기록의 호출 수 그대로
         if stats.get("search_calls"):
             items.append({"primitive": "search",
                           "count": stats["search_calls"]})
-        if stats.get("exec_calls"):
-            items.append({"primitive": "execute",
-                          "count": stats["exec_calls"]})
     else:
         # 행동 순계 (§46): 하한 1(흔적 있으면 최소 1건) ≤ 순계 ≤ 호출 수
         # (로레코드) — 항목별 ON ≤ OFF 단조성 유지(§43 교훈)
@@ -230,10 +370,9 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
             n = max(1, stats.get("search_landing_docs", 0))
             items.append({"primitive": "search",
                           "count": min(n, stats["search_calls"])})
-        if stats.get("exec_calls"):
-            n = max(1, stats.get("exec_net_calls", 0))
-            items.append({"primitive": "execute",
-                          "count": min(n, stats["exec_calls"])})
+    ex = exec_item(stats, rates, humanize_act)   # 실행 4토막 (§59)
+    if ex:
+        items.append(ex)
     if draft_w or edit_w:
         # 마무리 확인 1건 — 두 모드 공통 (§43). 초기 §39는 "기록에 대응
         # 행동 없음"이라며 로레코드에서 verify를 뺐는데, 그 결과 도구 호출이
@@ -246,13 +385,15 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
 
 def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
             include_subagents=False, force=False, humanize=None,
-            include_think=True):
+            include_think=True, subagent_paths=None):
     """세션 1개 → LLM 0회 분자·분모·speedup. 반환 구조는 measure_session 동일.
 
     humanize_rw / humanize_act: 휴먼화 2축 (build_actions 참조, §40).
     humanize: 구 인터페이스 호환 — True/False/"rawrecord"를 2축으로 변환
               (지정 시 2축 인자보다 우선).
-    include_think: 전략 생각 계상 (§53, collect_strategy_thinking 참조).
+    subagent_paths: 분자에 넣을 서브에이전트 트랜스크립트 (기본 자동 탐색,
+              []로 주면 구 동작인 "서브에이전트 0원"이 된다 — §59 기여도 분해용).
+    include_think: 생각 계상 (§53·§59, collect_strategy_thinking 참조).
               기본 ON — 휴먼화 2축과 독립(모든 조합에 동일 가산이라 §43
               단조성 불변). False로 구(생각 미계상) 동작.
     """
@@ -262,7 +403,9 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
         else:
             humanize_rw, humanize_act = bool(humanize), True
     rates = rates or load_rates()
-    stats = collect_record_stats(jsonl_path)
+    # 분자는 서브에이전트 몫을 포함한다 (§59 규칙1: 병렬은 분모만) —
+    # subagent_paths=[]로 끄면 구 동작(전량 0원). 감사·기여도 분해용.
+    stats = collect_record_stats(jsonl_path, subagent_paths=subagent_paths)
     suspect, suspect_why = suspect_output_channel(stats)
     if is_trivial_session(stats) and not force:
         return {"session": Path(jsonl_path).name, "excluded": True,
@@ -275,10 +418,17 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
     breakdown = []
     for a in build_actions(stats, rates, humanize_rw, humanize_act):
         spec = card[a["primitive"]]
-        minutes = a["count"] * spec["min_per_unit"]
+        # 항목이 분을 직접 들고 오면 그대로 (§59 — 실행 4토막·쓰기 종류별
+        # 요율처럼 단일 요율로 환원 안 되는 계산)
+        minutes = a["minutes"] if "minutes" in a \
+            else a["count"] * spec["min_per_unit"]
         total += minutes
-        breakdown.append({"primitive": a["primitive"], "count": a["count"],
-                          "unit": spec["unit"], "minutes": round(minutes, 2)})
+        row = {"primitive": a["primitive"], "count": a["count"],
+               "unit": a.get("unit", spec["unit"]),
+               "minutes": round(minutes, 2)}
+        if a.get("detail"):
+            row["detail"] = a["detail"]
+        breakdown.append(row)
     think_info = None
     if include_think:  # 전략 생각 (§53) — 휴먼화 축과 독립, 기본 ON
         st = collect_strategy_thinking(jsonl_path)
@@ -287,6 +437,9 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
         # 되도록 분을 단어로 역환산해 더한다(breakdown 단위 일관성 유지).
         fb_words = (st["fallback_points"] * THINK_FALLBACK_MIN
                     / spec["min_per_unit"]) if st["fallback_points"] else 0.0
+        # 전략 생각(지시 직후 첫 응답)만 계상 — 도구 중간 생각은 집계만
+        # 하고 분자에 넣지 않는다(§53 숙련자 가정 유지). 미계상 크기는
+        # think.mid_tokens로 그대로 보고된다.
         think_words = round(st["tokens"] * THINK_TOK2WORD + fb_words, 1)
         if think_words:
             minutes = think_words * spec["min_per_unit"]
@@ -296,6 +449,13 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
                               "minutes": round(minutes, 2)})
         think_info = st
     h_min = round(total, 2)
+    audit = channel_audit(stats)
+    notes = [suspect_why] if suspect else []
+    if audit["warn"]:
+        notes.append(
+            "미계상 채널 " + ", ".join(f"{k} {v:,}" for k, v in
+                                   audit["uncounted"].items())
+            + " — 분자 과소 가능 (§59 채널 결산)")
     return {
         "session": Path(jsonl_path).name,
         "session_id": actual["counts"].get("session_id"),
@@ -316,7 +476,8 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
                   "subagent_files": actual["subagent_files"]},
         "speedup": speedup(h_min, actual["total_min"]),
         "speedup_vs_hitl": speedup(h_min, actual["hitl_min"]),
-        "notes": [suspect_why] if suspect else [],
+        "channel_audit": audit,
+        "notes": notes,
     }
 
 

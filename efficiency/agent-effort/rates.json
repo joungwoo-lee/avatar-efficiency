@@ -20,7 +20,8 @@
     },
     "draft": {
       "unit": "word_count",
-      "min_per_unit": 0.05
+      "min_per_unit": 0.05,
+      "_comment": "종류 미분해 폴백. 실제 계산은 human_write_model이 코드/문서/데이터로 갈라 쓴다 (§59) — 이 값은 그 모델이 없을 때만 쓰인다."
     },
     "edit": {
       "unit": "word_count",
@@ -32,7 +33,8 @@
     },
     "execute": {
       "unit": "operation_count",
-      "min_per_unit": 2.0
+      "min_per_unit": 2.0,
+      "_comment": "건당 고정 폴백. 실제 계산은 human_exec_model의 4토막(구성+대기+판독+기계조작)을 쓴다 (§59). 실측 재구성에서 이 2.0분은 4토막의 **하한**과 같은 값이었다 — 짧은 한 줄엔 맞고 즉석 스크립트엔 3~5배 모자람."
     },
     "verify": {
       "unit": "evidence_count",
@@ -41,7 +43,7 @@
     "think": {
       "unit": "word_count",
       "min_per_unit": 0.005,
-      "_comment": "전략 생각 (§53, §57에서 정독과 동속으로 조정) — 지시 직후 첫 응답의 생각 토큰(×0.75 단어 환산)에만 적용. 사람 생각 속도를 분자의 정독(human.read 0.005, 200wpm)과 같게 둔 seed. 실측(이 PC, 토큰 기록 55지점) 지점당 평균 796토큰 → 건당 2.98분, 중앙값 396토큰 → 1.49분. 구 포맷(2026-08-12 이전, 토큰 미기록) 지점은 이 요율과 무관하게 건당 1.5분 고정(§58, THINK_FALLBACK_MIN). 도구 사용 중 잔생각은 미적용(record_actions_code_api §53 선별 규칙)."
+      "_comment": "사람 숙고. §59부터 지시 직후 첫 응답뿐 아니라 **도구 중간 생각까지 전량** 계상한다 (구 규칙은 생각 토큰의 26%만 셌다). 대신 실행의 판단 몫을 기계 조작분(human_exec_model.new_cmd_min)으로 낮춰 이중계상을 막는다. 요율 0.005는 분자 정독과 동속(200wpm) seed. 구 포맷(2026-08-12 이전, 토큰 미기록) 전략 지점은 건당 1.5분 고정(§58)."
     },
     "communicate": {
       "unit": "message_count",
@@ -183,5 +185,34 @@
       "pages",
       "장"
     ]
+  },
+  "human_write_model": {
+    "_comment": "쓰기 종류별 요율 (§59). 지금까지 코드·문서·JSON 데이터를 한 요율(0.05=20wpm, Karat의 짧은 메시지 작문 실측)로 매겼는데, 실측 구성은 코드 42.5% / 문서 30% / 데이터 26%다. 코드에 20wpm을 쓰면 시간당 243줄(줄당 4.94단어 실측)이 되어 과소, 데이터에 쓰면 사람이 20만 단어 JSON을 손으로 친다는 뜻이 되어 과대. 종류별로 사람 절차가 다르므로 요율을 가른다.",
+    "code_min_per_word": 0.08,
+    "_comment_code": "시간당 152줄(0.08분/단어 x 4.94단어/줄 실측). **문헌 유도값** (§61): ① Prechelt(IEEE Computer 2000, 7개 언어 80개 구현)의 전체 작업 생산성 중앙값 22~31 non-comment LOC/시간 — 설계·작성·시험을 다 포함한 값. ② Xia et al.(IEEE TSE 2018, 전문 개발자 79명·3,244시간)의 시간 배분에서 **편집(코드 치는 행위)은 13.9~15.3%**, 이해 58%, 탐색 18~22%. ①을 ②의 편집 분율로 나누면 순수 편집 속도 144~223 LOC/h → 요율 0.054~0.084. 그 **보수적(느린) 끝인 0.08**을 쓴다. 이 나눗셈이 필요한 이유: 이해·탐색 몫은 이 측정기에서 read·think 축이 따로 받으므로, draft에 전체 작업 속도를 넣으면 이중계상이 된다. 종전 0.05(=243 LOC/h)는 Karat의 산문 타자 앵커라 코드엔 근거가 없었고, 직전 0.15(=81 LOC/h)는 내가 감으로 박은 값이라 문헌 범위 밖이었다.",
+    "doc_min_per_word": 0.05,
+    "_comment_doc": "20wpm. Karat et al. CHI'99 keyboard composition 19wpm 실측 앵커.",
+    "data_min_per_word": 0.01,
+    "_comment_data": "JSON·YAML·CSV. 사람은 데이터 파일을 손으로 치지 않고 **뽑는다** — 생성 스크립트를 짜거나 도구로 내보낸다. 단어당 타자 비용이 아니라 그 우회 절차의 등가 비용으로 둔 seed.",
+    "other_min_per_word": 0.05,
+    "edit_factor": 0.4,
+    "_comment_edit": "수정은 같은 종류 신규의 0.4배 (종전 edit 0.02 / draft 0.05 = 0.4 유지).",
+    "source_type": "literature_derived (code) + expert_seed (doc/data)",
+    "_comment_code_band": "문헌 밴드 0.054~0.084 (Prechelt 22~31 LOC/h ÷ Xia 편집분율 13.9~15.3%)",
+    "_references": [
+      "Prechelt, L. (2000). An Empirical Comparison of Seven Programming Languages. IEEE Computer 33(10), 23-29. (source text productivity medians 22-31 LOC/hour; Fig.18-19)",
+      "Xia, X., Bao, L., Lo, D., Xing, Z., Hassan, A.E., Li, S. (2018). Measuring Program Comprehension: A Large-Scale Field Study with Professionals. IEEE TSE 44(10). (79 developers, 3,244 hours: comprehension ~58%, editing 13.88-15.25%, navigation 18.38-22.45%)"
+    ]
+  },
+  "human_exec_model": {
+    "_comment": "실행 4토막 (§59). 사람은 '명령 1건'을 하지 않는다 — 수단을 짜고, 돌아가길 기다리고, 결과를 읽고, 다음을 정한다. 종전 건당 2.0분 고정은 이 넷을 뭉뚱그려 즉석 스크립트(건당 평균 97단어)와 `git status`를 같은 값으로 만들었다. 구성·대기·판독은 전부 트랜스크립트 실측이라 seed가 오히려 줄어든다.",
+    "compose_min_per_word": 0.05,
+    "_comment_compose": "명령문·즉석 스크립트를 치는 속도. 코드 요율(0.15)이 아니라 작문 요율을 쓴다 — 설계를 거치지 않고 바로 치는 글이라서.",
+    "read_deep_words": 200,
+    "_comment_read": "출력 앞 200단어는 정독(human.read), 나머지는 훑기(human_reading_model.skim) — 파일 읽기와 같은 눈금. 종전에는 실행 출력을 분자에서 전량 0원 처리했다.",
+    "new_cmd_min": 0.25,
+    "repeat_cmd_min": 0.1,
+    "_comment_mech": "기계 조작분만: 터미널 전환·엔터·결과 확인. 무엇을 실행할지 정하는 숙고는 think 축(생각 전량 계상)으로 옮겨 이중계상을 막았다. 생각이 기록되지 않은 세션(구 포맷·reasoning 미기록)은 이 몫이 얇아져 과소 방향이 된다 — 알려진 한계.",
+    "source_type": "measured+seed"
   }
 }

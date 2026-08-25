@@ -19,6 +19,7 @@
 import json
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -554,7 +555,93 @@ def replay_write_net(write_seq, failed_tool_ids=()):
     return artifact, out_draft, out_edit
 
 
-def collect_record_stats(jsonl_path, detail=False):
+_CODE_EXT = {".py", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".sh",
+             ".ps1", ".bat", ".c", ".cc", ".cpp", ".h", ".hpp", ".java",
+             ".go", ".rs", ".rb", ".php", ".sql", ".pddl", ".vhd", ".v",
+             ".sv", ".scala", ".kt", ".swift", ".lua", ".r", ".m"}
+_DATA_EXT = {".json", ".jsonl", ".yaml", ".yml", ".csv", ".tsv", ".toml",
+             ".ini", ".cfg", ".conf", ".env", ".xml", ".lock", ".properties"}
+_DOC_EXT = {".md", ".markdown", ".txt", ".rst", ".adoc", ".html", ".htm",
+            ".css", ".scss", ".tex"}
+
+
+def write_kind(fp):
+    """쓴 파일 -> "code" | "doc" | "data" | "other" (§59).
+
+    사람 절차가 종류마다 다르다: 코드는 짜고, 문서는 쓰고, 데이터는 뽑는다.
+    한 요율(draft 0.05)로 셋을 다 매기면 코드는 과소, 데이터는 과대가 된다.
+    """
+    ext = Path(str(fp)).suffix.lower()
+    if ext in _CODE_EXT:
+        return "code"
+    if ext in _DATA_EXT:
+        return "data"
+    if ext in _DOC_EXT:
+        return "doc"
+    return "other"
+
+
+def _ts(x):
+    """ISO 타임스탬프 -> epoch 초 (없거나 깨지면 None)."""
+    if not x:
+        return None
+    try:
+        return datetime.fromisoformat(str(x).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+def find_subagent_files(jsonl_path):
+    """세션의 서브에이전트 트랜스크립트 목록 ({세션}/subagents/*.jsonl)."""
+    d = Path(str(jsonl_path))
+    sub = d.with_suffix("") / "subagents"
+    return sorted(str(p) for p in sub.glob("*.jsonl")) if sub.is_dir() else []
+
+
+def _iter_session_records(jsonl_path, subagent_paths=()):
+    """메인 + 서브에이전트 기록을 **시각 순으로 병합**해 (rec, is_sub)로 흘린다.
+
+    서브에이전트 기록은 전부 isSidechain이라 지금까지 파서 첫 줄에서 버려졌다.
+    그건 **분모 규칙**(병렬이라 실소모 시간에 못 더한다)인데 분자에까지 적용돼
+    서브에이전트가 한 일 전부가 사람 몫 계산에서 사라졌다 (§59). 분자는
+    "사람이 직렬로 다 한다면"이므로 반드시 포함한다.
+
+    시각 순 병합이 필요한 이유: 쓰기 순계(replay_write_net)가 파일별 시간
+    순서열을 재생하므로, 부모와 서브가 같은 파일을 만졌을 때 순서가 어긋나면
+    중복이 샌다 (§59 규칙4 — 순계는 세션 전체에 한 번).
+    """
+    streams = [(jsonl_path, False)] + [(p, True) for p in subagent_paths]
+    merged = []
+    for path, is_sub in streams:
+        last = 0.0
+        try:
+            fh = open(path, encoding="utf-8", errors="replace")
+        except OSError:
+            if not is_sub:
+                raise            # 메인 파일이 없으면 종전대로 실패시킨다
+            continue             # 서브 파일 결손은 건너뛴다
+        with fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                t = _ts(rec.get("timestamp"))
+                if t is None:
+                    t = last
+                last = t
+                merged.append((t, len(merged), rec, is_sub))
+    merged.sort(key=lambda x: (x[0], x[1]))
+    for _t, _i, rec, is_sub in merged:
+        yield rec, is_sub
+
+
+def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
     """트랜스크립트에서 닻용 실측치 수집 (LLM 미사용, 결정론적).
 
     반환: {reviewed_words, artifact_words, input_words,
@@ -599,6 +686,13 @@ def collect_record_stats(jsonl_path, detail=False):
                              # (툴 에러)은 순계에서 제외(§48) — 쓰기 순계의
                              # "실패한 편집 제외"(§31)와 같은 규칙
     tool_report_w = 0        # StructuredOutput 보고 실측 단어수 (§33)
+    pending_exec = {}        # tool_use id → (신원, 명령 단어수, 시작 시각)
+    exec_events = []         # 실행 4토막 재료 (§59 규칙3): 명령 단어·실측
+                             # 대기·출력 단어. 지금까지 실행은 건당 고정 2분
+                             # 이라 즉석 스크립트 작성(건당 평균 97단어)과
+                             # `git status`가 같은 값이었다.
+    image_blocks = 0         # 스크린샷·차트 블록 수 (채널 결산용 — 아직 미계상)
+    sub_report_w = 0         # 서브에이전트 보고문 단어수 (채널 결산용 — 미계상)
     unrec_write = {}         # 미등록 도구명 → 입력에 실려 나간 단어수 (§38)
     turn_search_i = None     # 이 턴의 마지막 검색 시점 (신호④ — 턴 단위)
     turn_reads = []          # 이 턴의 (fp, 읽기 시점)
@@ -632,48 +726,62 @@ def collect_record_stats(jsonl_path, detail=False):
         if final_answer:
             answers.append(final_answer)
             final_answer = ""
-    with open(jsonl_path, encoding="utf-8", errors="replace") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(rec, dict) or rec.get("isMeta") \
-                    or rec.get("isSidechain") \
-                    or rec.get("isCompactSummary") \
-                    or rec.get("isVisibleInTranscriptOnly"):
-                # 제외: 병렬 서브에이전트, 문맥 압축 요약(시스템 생성 수천 단어
-                # — 사용자 입력·턴 경계로 오인 방지), 표시 전용 레코드
+    if subagent_paths is None:
+        subagent_paths = find_subagent_files(jsonl_path)
+    if True:
+        for rec, is_sub in _iter_session_records(jsonl_path, subagent_paths):
+            if rec.get("isMeta") or rec.get("isCompactSummary") \
+                    or rec.get("isVisibleInTranscriptOnly") \
+                    or (rec.get("isSidechain") and not is_sub):
+                # 제외: 문맥 압축 요약(시스템 생성 수천 단어 — 사용자 입력·턴
+                # 경계 오인 방지), 표시 전용 레코드. 서브에이전트 기록은 이제
+                # 분자에 포함한다(§59) — is_sub로 지시문·보고문만 가려낸다.
                 continue
             rtype = rec.get("type")
+            rec_t = _ts(rec.get("timestamp"))   # 실행 대기 실측용 (§59)
             content = (rec.get("message") or {}).get("content")
             blocks = ([{"type": "text", "text": content}] if isinstance(content, str)
                       else content if isinstance(content, list) else [])
             if rtype == "user":
-                if any(isinstance(b, dict) and b.get("type") == "text"
-                       and not _is_system_text(b.get("text", ""))
-                       for b in blocks):
+                if not is_sub and any(
+                        isinstance(b, dict) and b.get("type") == "text"
+                        and not _is_system_text(b.get("text", ""))
+                        for b in blocks):
                     _end_turn()  # 실제 사용자 발화 = 새 턴 시작
                 for b in blocks:
                     if not isinstance(b, dict):
                         continue
                     if b.get("type") == "text":
-                        t = b.get("text", "")
-                        if not _is_system_text(t):
+                        # 서브에이전트에게 간 지시문은 AI가 쓴 것 — 사람 지시
+                        # (input_words)로 세면 안 된다 (§59)
+                        t = "" if is_sub else b.get("text", "")
+                        if t and not _is_system_text(t):
                             input_w += len(t.split())
                     elif b.get("type") == "tool_result":
                         if b.get("is_error") and b.get("tool_use_id"):
                             failed_tool_ids.add(b["tool_use_id"])
                         rc = b.get("content")
+                        if isinstance(rc, list):
+                            image_blocks += sum(
+                                1 for c in rc if isinstance(c, dict)
+                                and c.get("type") == "image")
                         parts = ([rc] if isinstance(rc, str) else
                                  [c.get("text", "") for c in rc
                                   if isinstance(c, dict) and c.get("type") == "text"]
                                  if isinstance(rc, list) else [])
                         text = " ".join(parts)
                         reviewed += len(text.split())
+                        pe = pending_exec.pop(b.get("tool_use_id"), None)
+                        if pe:
+                            _canon, _cw, _t0 = pe
+                            _d = ((rec_t - _t0)
+                                  if (rec_t and _t0 and 0 <= rec_t - _t0 < 3600)
+                                  else 0.0)
+                            exec_events.append(
+                                {"canon": _canon, "cmd_words": _cw,
+                                 "out_words": len(text.split()),
+                                 "wait_sec": _d,
+                                 "failed": bool(b.get("is_error"))})
                         pr = pending_read.pop(b.get("tool_use_id"), None)
                         pq = (None if pr else
                               pending_query.pop(b.get("tool_use_id"), None))
@@ -723,7 +831,12 @@ def collect_record_stats(jsonl_path, detail=False):
                     if not isinstance(b, dict):
                         continue
                     if b.get("type") == "text":
-                        texts.append(b.get("text", ""))
+                        # 서브에이전트 보고문은 사람에게 간 마무리 답변이 아님
+                        # — 결산에만 올리고 분자에는 안 넣는다 (알려진 미계상)
+                        if is_sub:
+                            sub_report_w += len(b.get("text", "").split())
+                        else:
+                            texts.append(b.get("text", ""))
                     if b.get("type") != "tool_use":
                         continue
                     name = b.get("name")
@@ -747,6 +860,9 @@ def collect_record_stats(jsonl_path, detail=False):
                         else:
                             exec_calls += 1
                             exec_seq.append((canon, b.get("id")))
+                            if b.get("id"):
+                                pending_exec[b["id"]] = (
+                                    canon, len(cmd.split()), rec_t)
                     inp = b.get("input") or {}
                     if name == "StructuredOutput":
                         # 구조화 보고 채널 (§33): 워크플로 에이전트의 최종
@@ -805,6 +921,9 @@ def collect_record_stats(jsonl_path, detail=False):
                                               + " " + old_s + " " + new)
                 if texts:
                     final_answer = " ".join(texts)
+    for _canon, _cw, _t0 in pending_exec.values():
+        exec_events.append({"canon": _canon, "cmd_words": _cw,
+                            "out_words": 0, "wait_sec": 0.0, "failed": False})
     _end_turn()  # 마지막 턴 마감
 
     # 신호⑤ 준비: 턴별 마무리 답변들의 6단어 연속 조각·식별자 집합
@@ -917,6 +1036,39 @@ def collect_record_stats(jsonl_path, detail=False):
             gross_d += len(writes[-1][2].split())
         gross_e += sum(len(op[2].split()) for op in seq if op[0] == "edit")
 
+    # 쓰기 종류 분해 (§59): 코드/문서/데이터는 사람 절차가 다르다
+    draft_kind = {"code": 0, "doc": 0, "data": 0, "other": 0}
+    edit_kind = {"code": 0, "doc": 0, "data": 0, "other": 0}
+    for fp, w in out_draft.items():
+        draft_kind[write_kind(fp)] += w
+    for fp, w in out_edit.items():
+        edit_kind[write_kind(fp)] += w
+    gross_kind = {"code": 0, "doc": 0, "data": 0, "other": 0}
+    for _fp, seq in write_seq.items():
+        k = write_kind(_fp)
+        ws = [op for op in seq if op[0] == "write"]
+        if ws:
+            gross_kind[k] += len(ws[-1][2].split())
+        gross_kind[k] += sum(len(op[2].split()) for op in seq if op[0] == "edit")
+
+    # 실행 4토막 재료 (§59 규칙3)
+    ex_seen = set()
+    ex_compose_net = ex_compose_gross = ex_out = 0
+    ex_deep = ex_skim = 0
+    ex_wait = 0.0
+    for ev in exec_events:
+        ex_compose_gross += ev["cmd_words"]
+        ex_out += ev["out_words"]
+        # 출력 판독도 파일 읽기와 같은 눈금: 호출마다 앞 200단어 정독,
+        # 나머지 훑기 (호출별로 갈라야 한다 — 합계에 상한을 걸면 큰 로그
+        # 하나가 전체 상한을 먹는다)
+        ex_deep += min(ev["out_words"], _DEEP_BLOCK_WORDS)
+        ex_skim += max(0, ev["out_words"] - _DEEP_BLOCK_WORDS)
+        ex_wait += ev["wait_sec"]
+        if ev["canon"] not in ex_seen and not ev["failed"]:
+            ex_seen.add(ev["canon"])
+            ex_compose_net += ev["cmd_words"]
+
     out = {"reviewed_words": reviewed, "input_words": input_w,
            "artifact_words": sum(artifact.values()),
            # 보고 실측 — 보고형 세션의 쓰기 상한 닻 재료. 채널 2개 중 큰 쪽:
@@ -946,7 +1098,33 @@ def collect_record_stats(jsonl_path, detail=False):
            "unrec_write_tools": unrec_write,
            "unrec_write_words": sum(unrec_write.values()),
            "gross_draft_words": gross_d,
-           "gross_edit_words": gross_e}
+           "gross_edit_words": gross_e,
+           # 쓰기 종류별 순계·총량 (§59 — 요율 3분할용)
+           "out_draft_by_kind": draft_kind,
+           "out_edit_by_kind": edit_kind,
+           "gross_write_by_kind": gross_kind,
+           # 실행 4토막 재료 (§59) — 전부 트랜스크립트 실측
+           "exec_compose_words": ex_compose_net,
+           "exec_compose_words_gross": ex_compose_gross,
+           "exec_out_words": ex_out,
+           "exec_out_deep_words": ex_deep,
+           "exec_out_skim_words": ex_skim,
+           "exec_wait_min": round(ex_wait / 60, 3),
+           "subagent_files": len(subagent_paths),
+           "image_blocks": image_blocks,
+           "sub_report_words": sub_report_w,
+           # 채널 결산 (§59 규칙2) — 세션에서 나간/들어온 글이 어느 축으로
+           # 갔는지 감사용. 어느 축에도 안 잡히는 양이 크면 구멍이다.
+           "channels": {
+               "write_tool_words": gross_d + gross_e,
+               "shell_cmd_words": ex_compose_gross,
+               "exec_out_words": ex_out,
+               "tool_result_words": reviewed,
+               "user_input_words": input_w,
+               "unrec_write_words": sum(unrec_write.values()),
+               "image_blocks": image_blocks,
+               "sub_report_words": sub_report_w,
+               "subagent_files": len(subagent_paths)}}
     if detail:  # 감사·검증용: 등급별 파일 목록(+실측 단어수·기여 파일 분해)
         out["files"] = {"deep": sorted(contributed), "skim": sorted(skim),
                         "waste": sorted(waste), "internal": sorted(internal),
