@@ -40,7 +40,11 @@ r = measure("session.jsonl", humanize_rw=False)   # rw OFF · act ON
 r = measure("session.jsonl", humanize_act=False)  # rw ON · act OFF
 r = measure("session.jsonl", humanize_rw=False, humanize_act=False)  # 로레코드
 r = measure("session.jsonl", include_think=False)  # 전략 생각(§3) 미계상
+r = measure("session.jsonl", subagent_paths=[])   # 서브에이전트 0원 (구 동작, §59)
 ```
+
+반환에 `channel_audit`이 붙는다 — 통로별 결산과 미계상 양(§5). 미계상이
+문턱을 넘으면 `notes`에 자백이 실린다.
 
 전략 생각(think, §3)은 **기본 ON**이며 휴먼화 2축과 독립 — 위 4조합
 모두에 동일하게 가산된다(끄려면 `include_think=False` / CLI `--nothink`).
