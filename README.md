@@ -11,9 +11,9 @@ Windows 로그인 ID로 **아바타 선별** → 미처리 transcript를 골라 
 ## 구성
 
 ```
-efficiency/                 AI 효율(speedup) 측정 서브시스템 — 분자(human-effort)·
+efficiency-calculator/      AI 효율(speedup) 측정 서브시스템 — 분자(human-effort)·
                             분모(agent-effort) 부품 + 용도별 API(counterfactual-api=
-                            아바타 사전 / session-api=세션 사후). efficiency/README.md 참조
+                            아바타 사전 / session-api=세션 사후). efficiency-calculator/README.md 참조
 config.json                 스위퍼 설정 (경로·스로틀·모델). AE_* env로 오버라이드
 avatars.sample.json         외부 모듈 계약 샘플 (loginId·역할/업무 script·비중 w·수작업 앵커)
 sweeper/sweep.js            메인: 락 → 스로틀 → 스캔 → 매칭+η → outbox → 송출

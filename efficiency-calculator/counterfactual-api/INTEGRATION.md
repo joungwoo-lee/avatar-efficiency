@@ -12,7 +12,7 @@
 > 같은 행동×단가 체계라 speedup 배율이 해석 가능.
 > **이 어댑터는 구 계약 전용이다** — 다른 방법론 조합(P50/P80 분포 등)이
 > 필요하면 같은 폴더의 `avatar_api.py`(estimate_avatar, 사전), 사후(세션)는
-> `efficiency/session-api`(req_actions_api / record_actions_api)를 쓸 것.
+> `efficiency-calculator/session-api`(req_actions_api / record_actions_api)를 쓸 것.
 > `estimate_task` 시그니처·출력 키·수치 타입은 integ-spec §2/§6에 100% 맞춰져 있어
 > `analysis_cf.py`/`server.py`/`app.js` 무수정 drop-in 교체 가능.
 > human 경로에는 기준노동("생성형 AI만 배제, 일반 도구 전부 사용, 최단 경로")
