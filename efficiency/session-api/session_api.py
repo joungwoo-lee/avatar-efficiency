@@ -63,28 +63,28 @@ class JsonRetryLLM:
         raise last
 
 
-# 초소형 세션 제외 기준 (§64): **AI가 실제로 움직인 시간이 이 밑이면 제외.**
-# 측정 가치 없는 핑퐁·잡담 세션이며, 측정하면 완료조건 고정비로 5~7배
-# 역부풀림이 실측 확인됐다.
+# 초소형 세션 제외 기준 (§64): **세션 러닝타임이 이 밑이면 제외.**
+# 첫 기록부터 마지막 기록까지가 5분 안이면 측정 가치 없는 핑퐁·잡담 세션이며,
+# 측정하면 완료조건 고정비로 5~7배 역부풀림이 실측 확인됐다.
 #
 # 종전(§9)은 단어수 기준(검토·입력 100단어 미만 그리고 산출물 50단어 미만)
-# 이었다. 단어수는 "얼마나 큰 일이었나"의 대리지표일 뿐인데, AI 시간이
-# 실측으로 잡히게 된 뒤로는(§62) 직접 재는 값을 쓰는 편이 낫다.
-TRIVIAL_AI_MIN = 5.0
+# 이었다. 단어수는 "얼마나 큰 일이었나"의 대리지표일 뿐이라, 기록에 그대로
+# 있는 시간으로 바꿨다.
+TRIVIAL_SPAN_MIN = 5.0
 # 구 기준 — 타임스탬프가 없어 AI 시간을 못 재는 기록의 폴백
 TRIVIAL_READ_WORDS = 100
 TRIVIAL_ARTIFACT_WORDS = 50
 
 
-def is_trivial_session(record_stats, ai_min=None):
+def is_trivial_session(record_stats, span_min=None):
     """초소형(잡담·핑퐁) 세션 여부 — LLM 미사용 실측 판정 (§64).
 
-    ai_min: 그 세션의 AI 실행 시간(분, 턴 실측). 주어지면 이것만으로
-            판정한다 — TRIVIAL_AI_MIN 이하면 제외.
-            None(구 호출부·타임스탬프 없는 기록)이면 종전 단어수 기준.
+    span_min: 세션 러닝타임(분, 첫 기록~마지막 기록). 주어지면 이것만으로
+              판정한다 — TRIVIAL_SPAN_MIN 이하면 제외.
+              None(구 호출부·타임스탬프 없는 기록)이면 종전 단어수 기준.
     """
-    if ai_min is not None:
-        return ai_min <= TRIVIAL_AI_MIN
+    if span_min is not None:
+        return span_min <= TRIVIAL_SPAN_MIN
     read_total = (record_stats.get("reviewed_words", 0)
                   + record_stats.get("input_words", 0))
     return (read_total < TRIVIAL_READ_WORDS
@@ -137,11 +137,12 @@ def measure_session(llm, jsonl_path, human="req-actions", calls="single",
 
     stats = collect_record_stats(jsonl_path)
     actual_pre = measure_agent_actual(jsonl_path, rates, include_subagents)
-    if is_trivial_session(stats, actual_pre["machine_min"]) and not force:
+    _span = actual_pre["counts"].get("session_span_min") or None
+    if is_trivial_session(stats, _span) and not force:
         return {"session": Path(jsonl_path).name,
                 "excluded": True,
-                "reason": (f"초소형 세션 — AI 실행 {actual_pre['machine_min']:.1f}분 "
-                           f"(기준 {TRIVIAL_AI_MIN}분 이하), "
+                "reason": (f"초소형 세션 — 러닝타임 {_span or 0:.1f}분 "
+                           f"(기준 {TRIVIAL_SPAN_MIN}분 이하), "
                            f"검토·입력 {stats['reviewed_words'] + stats['input_words']}단어, "
                            f"산출물 {stats['artifact_words']}단어 (기준 미달). "
                            "측정 시 역부풀림 확인돼 제외. force=True로 강제 측정 가능"),

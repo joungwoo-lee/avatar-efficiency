@@ -182,6 +182,9 @@ def parse_actions(jsonl_path):
               #  진짜 도구 실행 10분짜리들이 같이 날아간다.)
               # AI가 끝낸 뒤 다음 사람 발화까지는 사람 시간이라 제외.
               "ai_wall_min": 0.0, "ai_turns": 0,
+              # 세션 러닝타임 (§64): 첫 기록 ~ 마지막 기록. 초소형 세션
+              # 제외 판정에 쓴다 — 5분 안에 끝난 세션은 측정 가치가 없다.
+              "session_span_min": 0.0,
               "session_id": None, "first_ts": None, "last_ts": None}
     pending_calls = {}  # tool_use id -> 시작 시각(초)
     turn_start = None   # 이 턴을 연 사람 발화 시각 (§62)
@@ -364,6 +367,9 @@ def parse_actions(jsonl_path):
         counts["conclusion_words"] += last_answer_w
         counts["conclusion_word_list"].append(last_answer_w)
     _flush_check_event()  # 세션 끝 = 마지막 확인 시점 (§50)
+    f0 = _epoch(counts.get("first_ts")); f1 = _epoch(counts.get("last_ts"))
+    if f0 and f1 and f1 >= f0:
+        counts["session_span_min"] = (f1 - f0) / 60      # §64
     return counts
 
 

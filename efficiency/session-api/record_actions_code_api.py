@@ -407,12 +407,13 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
     # subagent_paths=[]로 끄면 구 동작(전량 0원). 감사·기여도 분해용.
     stats = collect_record_stats(jsonl_path, subagent_paths=subagent_paths)
     suspect, suspect_why = suspect_output_channel(stats)
-    # §64 초소형 제외: AI가 실제로 움직인 시간 5분 이하면 측정 안 함
+    # §64 초소형 제외: 세션 러닝타임(첫~마지막 기록)이 5분 이하면 측정 안 함
     actual = measure_agent_actual(jsonl_path, rates, include_subagents)
-    if is_trivial_session(stats, actual["machine_min"]) and not force:
+    span = actual["counts"].get("session_span_min") or None
+    if is_trivial_session(stats, span) and not force:
         return {"session": Path(jsonl_path).name, "excluded": True,
-                "reason": (f"초소형 세션 — AI 실행 "
-                           f"{actual['machine_min']:.1f}분 (기준 5분 이하)"),
+                "reason": (f"초소형 세션 — 러닝타임 "
+                           f"{span or 0:.1f}분 (기준 5분 이하)"),
                 "record_stats": stats,
                 "suspect_output_channel": suspect,
                 **({"suspect_reason": suspect_why} if suspect else {})}
