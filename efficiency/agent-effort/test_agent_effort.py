@@ -375,9 +375,9 @@ class TestTranscriptActual(unittest.TestCase):
             c = parse_actions(p)
             span = c["session_span_min"]
             self.assertGreater(span, 14000)        # 약 10일
-            # 간격 상한 15분 → 도착 간격 10일이 15분으로 잘린다
-            # 총 AI 시간 = 1분(지시→첫 응답) + 15분(상한) + 2분 = 18분
-            self.assertLess(c["ai_wall_min"], 20)
+            # 간격 상한 10분 → 도착 간격 10일이 10분으로 잘린다
+            # 총 AI 시간 = 1분(지시→첫 응답) + 10분(상한) + 2분 = 13분
+            self.assertLess(c["ai_wall_min"], 15)
             # 불변식: AI 시간은 세션 러닝타임을 넘을 수 없다
             self.assertLessEqual(c["ai_wall_min"], span)
         finally:
