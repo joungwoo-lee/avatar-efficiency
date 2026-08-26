@@ -421,9 +421,9 @@ def actual_effort_minutes(counts, rates=None):
         #   산출물: 내용 전량 읽기 대신 ① 그 구간에 코드 변경이 있으면
         #   동작 확인 1회(확인 시점의 테스트 상태로 강등 — 통과면 "결과
         #   서명" 0.3까지, 구간 내 테스트 이후 수정 파일은 검증 분율에서
-        #   제외 §49) ② 변경된 규모(코드·문서 단어)에 비례하는 확인 —
-        #   읽기가 아니다(§61): 수정량이 많으면 돌려보고 대조할 것도 많다
-        #   ③ 문서·기타
+        #   제외 §49) ② 변경 규모(코드·문서 단어)에 비례하는 확인 — 읽기가
+        #   아니다(§61): 수정량이 많으면 돌려보고 대조할 것도 많다. 코드와
+        #   문서는 요율이 다르다(§63) ③ 문서·기타
         #   파일은 파일당 표본 확인. 구 문서 전량 정독(0.008/단어)·§49
         #   에피소드+추가파일 과금은 폐지.
         run_rate = rm["code_run_min_per_file"]
@@ -454,14 +454,17 @@ def actual_effort_minutes(counts, rates=None):
                 automation_saved += run_rate - rate
             check_min += rate
         automation_saved = round(automation_saved, 2)
-        # 변경 규모 비례 확인 요율 (§61) — 키 이름의 skim은 이력상 잔재이고
-        # 코드를 읽는 속도가 아니다. 대화 훑기(report_skim)와 값이 같은 것도
-        # 우연 — 그쪽은 사람이 눈으로 지나가는 글, 이쪽은 산출물 규모가
-        # 키우는 확인 부담이다.
-        skim_rate = rm["code_skim_min_per_word"]
+        # 변경 규모 비례 확인 요율 (§61·§63) — 키 이름의 skim은 이력상
+        # 잔재이고 읽는 속도가 아니다. 산출물 규모가 키우는 확인 부담이며,
+        # 코드와 문서를 나눈다: 같은 0.002가 문서에선 분당 500단어(훑기,
+        # 말 됨)지만 코드에선 시간당 6,073줄(말 안 됨)이 되기 때문.
+        # 문서는 code_run(동작 확인)이 안 붙으므로 이 항이 확인의 전부다.
+        code_rate = rm["code_skim_min_per_word"]
+        doc_rate = rm.get("doc_skim_min_per_word", code_rate)
         review_min = (
             check_min
-            + (sum(code_files.values()) + sum(doc_files.values())) * skim_rate
+            + sum(code_files.values()) * code_rate
+            + sum(doc_files.values()) * doc_rate
             + (len(doc_files) + len(other_files))
             * rm["other_check_min_per_file"]
             + concl * rm["report_deep_min_per_word"]

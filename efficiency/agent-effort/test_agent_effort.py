@@ -92,10 +92,12 @@ class TestTranscriptActual(unittest.TestCase):
                 f.write(json.dumps(ln, ensure_ascii=False) + "\n")
         try:
             m = actual_effort_minutes(parse_actions(p))
-            # §50 턴 확인: 동작 확인 1회 2.0 + 내용물 훑기 (500+250)×0.002
-            #      + 문서·기타 파일당 표본 확인 2×0.5
-            #      + 결론 100×0.008 + 진행 100×0.002 = 2+1.5+1+0.8+0.2 = 5.5
-            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 5.5,
+            # §50 턴 확인 + §63 코드/문서 요율 분리:
+            #   동작 확인 1회 2.0 + 코드 500×0.005 + 문서 250×0.0025
+            #   + 문서·기타 파일당 표본 확인 2×0.5
+            #   + 결론 100×0.008 + 진행 100×0.002
+            #   = 2 + 2.5 + 0.625 + 1 + 0.8 + 0.2 = 7.125
+            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 7.125,
                                    places=2)
             # §52 기계 draft = (답변 200 + 파일 본문 500+250+1)×0.002
             #                = 1.902, execute 3×0.3 → machine 2.80
@@ -183,8 +185,9 @@ class TestTranscriptActual(unittest.TestCase):
                 f.write(json.dumps(ln, ensure_ascii=False) + "\n")
         try:
             m = actual_effort_minutes(parse_actions(p))
-            # 검토 = 확인 시점(세션 끝) 1회 2.0 + 70단어×0.002 = 2.14
-            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 2.14,
+            # 검토 = 확인 시점(세션 끝) 1회 2.0 + 코드 70단어×0.005 = 2.35
+            # (§63 코드 요율 0.002 → 0.005)
+            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 2.35,
                                    places=2)
         finally:
             os.unlink(p)
@@ -216,8 +219,8 @@ class TestTranscriptActual(unittest.TestCase):
             c = parse_actions(p)
             self.assertEqual(len(c["code_check_events"]), 2)  # 턴 + 세션 끝
             m = actual_effort_minutes(c)
-            # 검토 = 동작 확인 2회×2.0 + 20단어×0.002 = 4.04
-            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 4.04,
+            # 검토 = 동작 확인 2회×2.0 + 코드 20단어×0.005 = 4.10 (§63)
+            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 4.10,
                                    places=2)
         finally:
             os.unlink(p)
