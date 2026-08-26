@@ -42,15 +42,20 @@ class MockLLM:
 
 
 def _make_jsonl(dirpath):
+    # 타임스탬프는 §64 초소형 게이트(AI 실행 5분 이하 제외)를 넘기기 위해
+    # 필요하다 — AI 구간이 지시(00:00)부터 마지막 응답(00:08)까지 8분.
+    T = "2026-08-20T09:%02d:00.000Z"
     lines = [
-        {"type": "user", "sessionId": "s-1",
+        {"type": "user", "sessionId": "s-1", "timestamp": T % 0,
          "message": {"role": "user", "content": "경쟁사 5곳 조사해서 보고서 써줘"}},
-        {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "assistant", "timestamp": T % 1,
+         "message": {"role": "assistant", "content": [
             {"type": "text", "text": "조사하겠습니다 " * 20},
             {"type": "tool_use", "name": "WebSearch", "input": {}}]}},
-        {"type": "user", "message": {"role": "user", "content": [
+        {"type": "user", "timestamp": T % 4, "message": {"role": "user", "content": [
             {"type": "tool_result", "content": "결과 " * 200}]}},
-        {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "assistant", "timestamp": T % 8,
+         "message": {"role": "assistant", "content": [
             {"type": "text", "text": "보고서 완성했습니다 " * 30}]}},
     ]
     p = os.path.join(dirpath, "sess.jsonl")
@@ -117,7 +122,9 @@ class TestSessionApi(unittest.TestCase):
             a2 = measure_agent_actual(p)
         self.assertEqual(a1["total_min"], a2["total_min"])
         # 수기검산: 기계 = execute 1×0.3 + read 200×0.0005 + draft 80×0.002 = 0.56
-        self.assertAlmostEqual(a1["machine_min"], 0.56, places=2)
+        # §62 기계시간 = 턴 실측: 지시(09:00) → 마지막 AI 기록(09:08) = 8분
+        # (구 요율 계산이면 0.56이었다 — 타임스탬프가 있으면 실측 우선)
+        self.assertAlmostEqual(a1["machine_min"], 8.0, places=2)
 
     def test_batch_isolates_failures(self):
         with tempfile.TemporaryDirectory() as d:
@@ -207,9 +214,10 @@ class TestSessionApi(unittest.TestCase):
             with open(p, "w", encoding="utf-8") as f:
                 for ln in lines:
                     f.write(json.dumps(ln, ensure_ascii=False) + "\n")
-            base = measure(p)
-            raw = measure(p, humanize_act=False, humanize_rw=False)
-            legacy = measure(p, humanize="rawrecord")  # 구 인터페이스 호환
+            # §64 게이트 우회 (합성 픽스처는 AI 실행 0분)
+            base = measure(p, force=True)
+            raw = measure(p, humanize_act=False, humanize_rw=False, force=True)
+            legacy = measure(p, humanize="rawrecord", force=True)  # 구 인터페이스
         bd_base = {b["primitive"]: b["count"] for b in base["human"]["breakdown"]}
         bd_raw = {b["primitive"]: b["count"] for b in raw["human"]["breakdown"]}
         self.assertEqual(bd_base["execute"], 1)   # 순계: 같은 명령 6회 = 신원 1건
@@ -246,8 +254,10 @@ class TestSessionApi(unittest.TestCase):
             with open(p, "w", encoding="utf-8") as f:
                 for ln in lines:
                     f.write(json.dumps(ln, ensure_ascii=False) + "\n")
-            base = measure(p)
-            raw = measure(p, humanize_rw=False, humanize_act=False)
+            # §64 게이트는 이 테스트 대상이 아니다 — 합성 픽스처는 AI 실행
+            # 시간이 5분 이하라 제외되므로 force로 우회
+            base = measure(p, force=True)
+            raw = measure(p, humanize_rw=False, humanize_act=False, force=True)
         bd_base = {b["primitive"]: b["count"] for b in base["human"]["breakdown"]}
         bd_raw = {b["primitive"]: b["count"] for b in raw["human"]["breakdown"]}
         self.assertEqual(bd_base["execute"], 2)   # 신원 2개(pytest, git diff)
@@ -363,9 +373,9 @@ class TestSessionApi(unittest.TestCase):
                     for ln in lines:
                         f.write(json.dumps(ln, ensure_ascii=False) + "\n")
                 paths[name] = p
-            r_w = measure(paths["w.jsonl"])
-            r_o = measure(paths["o.jsonl"])
-            normal = measure(_make_jsonl(d))
+            r_w = measure(paths["w.jsonl"], force=True)
+            r_o = measure(paths["o.jsonl"], force=True)
+            normal = measure(_make_jsonl(d), force=True)
         self.assertTrue(r_w["suspect_output_channel"])
         self.assertIn("쓰기 툴 포맷 미등록 의심", r_w["notes"][0])
         self.assertIn("mcp__jira__add_comment", r_w["notes"][0])  # 도구명 명시
