@@ -5,14 +5,17 @@
 - hitl(사람 몫)은 wall-clock이 아니라 **단서 × 요율**로 추정한다 — 사람 노동은
   트랜스크립트에 단서(지시 건수·AI 출력 분량)로만 남고, 산출물 검토·후작업은
   세션 종료 후 몰아서 할 수 있어 세션 시간 측정으로는 잡히지 않는다.
-- AI 몫은 실제 소모 시간 기준 — 병렬 실행(서브에이전트)은 메인 타임라인에
-  이미 흐른 시간이므로 별도 가산하지 않는다(합산은 session_api에서 옵션).
+- AI 몫은 **타임스탬프 실측** (§62): 사람 발화 → 그 턴의 마지막 AI 기록까지를
+  턴마다 재서 합산. 빼는 것 없음(도구가 10분 돌았으면 10분). AI가 끝낸 뒤
+  다음 발화까지는 사람 시간이라 제외. 병렬 실행(서브에이전트)은 메인
+  타임라인에 이미 흐른 시간이므로 별도 가산하지 않는다.
 
 LLM을 쓰지 않는다 — 트랜스크립트에 기록된 동작을 결정론적으로 세고
 rates.json의 agent/hitl 카드 요율을 곱한다.
 
 동작 → 요율 매핑 (rates.json):
-  기계(machine):
+  기계(machine): **실측**(ai_wall_min). 아래 요율 계산은 타임스탬프가 없는
+  구 기록의 폴백이자 대조용(breakdown.machine_rate_estimate):
     execute  = tool_use 블록 수            × agent.execute (tool_call_count)
     read     = tool_result 내용 단어수      × agent.read    (word_count)
     draft    = (assistant 텍스트 + 파일 본문·서브에이전트 지시문 등
@@ -172,8 +175,17 @@ def parse_actions(jsonl_path):
               # 장시간 호출을 이미 상쇄하고 있었다. 개별 호출로는 틀리지만
               # 총합에서는 맞는 구조. 감사용으로 집계만 남긴다.
               "long_wait_min": 0.0, "long_wait_events": 0,
+              # AI 동작 시간 실측 (§62): 사람 발화 시각 → 그 턴의 마지막 AI
+              # 기록 시각. 턴마다 재서 합산한다. 빼는 것 없음 — 도구가 10분
+              # 돌았으면 10분, 중간에 멈춰 승인을 기다렸어도 그대로 센다.
+              # (실측: 그 대기가 전체의 2.9%. 잘라내려 하면 타임아웃까지 간
+              #  진짜 도구 실행 10분짜리들이 같이 날아간다.)
+              # AI가 끝낸 뒤 다음 사람 발화까지는 사람 시간이라 제외.
+              "ai_wall_min": 0.0, "ai_turns": 0,
               "session_id": None, "first_ts": None, "last_ts": None}
     pending_calls = {}  # tool_use id -> 시작 시각(초)
+    turn_start = None   # 이 턴을 연 사람 발화 시각 (§62)
+    turn_last_ai = None # 이 턴의 마지막 AI 기록 시각
     last_answer_w = 0  # 직전 assistant 발언 단어수 (턴 마무리 = 결론 후보)
     pending_tests = {}  # 테스트 실행 tool_use id → 결과 대기
     seq = 0             # 도구 사건 순번 (§49 쓰기↔테스트 선후 판정용)
@@ -220,6 +232,8 @@ def parse_actions(jsonl_path):
             blocks = _content_blocks(rec.get("message"))
 
             if rtype == "assistant":
+                if turn_start is not None and rec_t:
+                    turn_last_ai = rec_t          # §62 AI 기록
                 ans_w = 0
                 for b in blocks:
                     if not isinstance(b, dict):
@@ -267,6 +281,20 @@ def parse_actions(jsonl_path):
                     last_answer_w = ans_w
                 continue
 
+            # §62 AI 구간 경계: tool_result가 아닌 user 레코드는 무엇이든
+            # AI를 깨운 입력이다(사람 발화·배경작업 알림·시스템 주입·중단).
+            # 그 직전까지 AI는 놀고 있었으므로 여기서 구간을 끊는다 — 안 끊으면
+            # 알림이 몇 시간 뒤에 와도 그 대기가 AI 시간에 들어간다.
+            if not any(isinstance(b, dict) and b.get("type") == "tool_result"
+                       for b in blocks):
+                if turn_start is not None and turn_last_ai is not None:
+                    counts["ai_wall_min"] += max(
+                        0.0, turn_last_ai - turn_start) / 60
+                    counts["ai_turns"] += 1
+                if rec_t:
+                    turn_start = rec_t
+                turn_last_ai = None
+
             # user 턴: 사람 발화 vs tool_result 구분.
             # 시스템 주입 블록(<system-reminder> 등)은 사람 지시가 아님 — 제외
             human_text = ""
@@ -274,6 +302,8 @@ def parse_actions(jsonl_path):
                 if not isinstance(b, dict):
                     continue
                 if b.get("type") == "tool_result":
+                    if turn_start is not None and rec_t:
+                        turn_last_ai = rec_t      # §62 AI 기록(도구 결과)
                     counts["tool_result_words"] += _result_words(b)
                     seq += 1
                     t0 = pending_calls.pop(b.get("tool_use_id"), None)
@@ -327,6 +357,9 @@ def parse_actions(jsonl_path):
                             counts["conclusion_word_list"].append(last_answer_w)
                         last_answer_w = 0
                         _flush_check_event()
+    if turn_start is not None and turn_last_ai is not None:  # §62 마지막 턴
+        counts["ai_wall_min"] += max(0.0, turn_last_ai - turn_start) / 60
+        counts["ai_turns"] += 1
     if last_answer_w:  # 마지막 턴 결론
         counts["conclusion_words"] += last_answer_w
         counts["conclusion_word_list"].append(last_answer_w)
@@ -340,7 +373,10 @@ def actual_effort_minutes(counts, rates=None):
     """
     r = rates or load_rates(DEFAULT_RATES_PATH)
     a, h = r["agent"], r["hitl"]
-    machine = {
+    # AI 몫은 **실측 우선** (§62). 요율 계산은 실측 대비 1.29배 과대였고
+    # 세션별로 1.25~3.94배로 흩어졌다. 타임스탬프가 없는 구 기록에서만
+    # 요율 계산으로 폴백한다.
+    rate_machine = {
         "execute": counts["tool_calls"] * a["execute"]["min_per_unit"],
         "read": counts["tool_result_words"] * a["read"]["min_per_unit"],
         # draft = 답변 + 도구 입력으로 생산된 글(파일 본문·서브에이전트
@@ -351,6 +387,9 @@ def actual_effort_minutes(counts, rates=None):
                   + counts.get("tool_input_draft_words", 0))
                  * a["draft"]["min_per_unit"],
     }
+    wall = counts.get("ai_wall_min", 0.0)
+    # 타임스탬프가 없는 구 기록만 요율 계산으로 폴백
+    machine = {"measured": wall} if wall > 0 else dict(rate_machine)
     im = r.get("hitl_instruct_model")
     if im:  # 실측 보정 모델: base + per_word×min(단어수, cap) — 붙여넣기 과금 방지
         wl = counts.get("instruction_word_list") or              [0] * counts["user_instructions"]
@@ -443,7 +482,11 @@ def actual_effort_minutes(counts, rates=None):
         "total_min": round(machine_min + hitl_min, 2),
         "automation_saved_min": automation_saved,  # 자동 검증이 없앤 사람 노동
         "breakdown": {
-            "machine": {k: round(v, 2) for k, v in machine.items()},
+            "machine": {k: (round(v, 2) if isinstance(v, (int, float)) else v)
+                        for k, v in machine.items()},
+            # 참고: 구 요율 계산값 (§62 이전 방식) — 실측과 대조용
+            "machine_rate_estimate": {k: round(v, 2)
+                                      for k, v in rate_machine.items()},
             "hitl": {k: round(v, 2) for k, v in hitl.items()},
         },
         "counts": counts,
