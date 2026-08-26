@@ -42,8 +42,8 @@ class MockLLM:
 
 
 def _make_jsonl(dirpath):
-    # 타임스탬프는 §64 초소형 게이트(AI 실행 5분 이하 제외)를 넘기기 위해
-    # 필요하다 — AI 구간이 지시(00:00)부터 마지막 응답(00:08)까지 8분.
+    # 타임스탬프는 §64 초소형 게이트(세션 러닝타임 5분 이하 제외)를 넘기기
+    # 위해 필요하다 — 첫 기록(09:00)부터 마지막(09:08)까지 8분.
     T = "2026-08-20T09:%02d:00.000Z"
     lines = [
         {"type": "user", "sessionId": "s-1", "timestamp": T % 0,
@@ -214,7 +214,7 @@ class TestSessionApi(unittest.TestCase):
             with open(p, "w", encoding="utf-8") as f:
                 for ln in lines:
                     f.write(json.dumps(ln, ensure_ascii=False) + "\n")
-            # §64 게이트 우회 (합성 픽스처는 AI 실행 0분)
+            # §64 게이트 우회 (합성 픽스처는 타임스탬프 없음)
             base = measure(p, force=True)
             raw = measure(p, humanize_act=False, humanize_rw=False, force=True)
             legacy = measure(p, humanize="rawrecord", force=True)  # 구 인터페이스
@@ -254,8 +254,8 @@ class TestSessionApi(unittest.TestCase):
             with open(p, "w", encoding="utf-8") as f:
                 for ln in lines:
                     f.write(json.dumps(ln, ensure_ascii=False) + "\n")
-            # §64 게이트는 이 테스트 대상이 아니다 — 합성 픽스처는 AI 실행
-            # 시간이 5분 이하라 제외되므로 force로 우회
+            # §64 게이트는 이 테스트 대상이 아니다 — 합성 픽스처는 러닝타임이
+            # 5분 이하라 제외되므로 force로 우회
             base = measure(p, force=True)
             raw = measure(p, humanize_rw=False, humanize_act=False, force=True)
         bd_base = {b["primitive"]: b["count"] for b in base["human"]["breakdown"]}
