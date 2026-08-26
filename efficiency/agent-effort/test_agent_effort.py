@@ -344,6 +344,46 @@ class TestTranscriptActual(unittest.TestCase):
             os.unlink(p)
 
 
+    def test_ai_wall_never_exceeds_span(self):
+        import json, tempfile, os
+        from transcript_actual import parse_actions
+        # §65: 방치 구간이 AI 시간으로 흡수되면 안 된다.
+        # 실제 보고 사례 — 9.1일 열린 세션에서 ai_wall_min이 8.3일로 잡혔다.
+        # 턴 끝 도장 없이 며칠 뒤 tool_result가 도착한 경우.
+        T = "2026-08-%02dT09:%02d:00.000Z"
+        lines = [
+            {"type": "user", "timestamp": T % (3, 0),
+             "message": {"role": "user", "content": "긴 작업 시켜둔다 " * 20}},
+            {"type": "assistant", "timestamp": T % (3, 1),
+             "message": {"role": "assistant", "content": [
+                 {"type": "tool_use", "id": "t1", "name": "Bash",
+                  "input": {"command": "long-running"}}]}},
+            # 10일 뒤에 결과가 도착 — 그 사이는 방치다
+            {"type": "user", "timestamp": T % (13, 1),
+             "message": {"role": "user", "content": [
+                 {"type": "tool_result", "tool_use_id": "t1",
+                  "content": "done " * 30}]}},
+            {"type": "assistant", "timestamp": T % (13, 3),
+             "message": {"role": "assistant", "content": [
+                 {"type": "text", "text": "끝났습니다 " * 20}]}},
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(json.dumps(ln, ensure_ascii=False) + chr(10))
+        try:
+            c = parse_actions(p)
+            span = c["session_span_min"]
+            self.assertGreater(span, 14000)        # 약 10일
+            # 간격 상한 15분 → 도착 간격 10일이 15분으로 잘린다
+            # 총 AI 시간 = 1분(지시→첫 응답) + 15분(상한) + 2분 = 18분
+            self.assertLess(c["ai_wall_min"], 20)
+            # 불변식: AI 시간은 세션 러닝타임을 넘을 수 없다
+            self.assertLessEqual(c["ai_wall_min"], span)
+        finally:
+            os.unlink(p)
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")

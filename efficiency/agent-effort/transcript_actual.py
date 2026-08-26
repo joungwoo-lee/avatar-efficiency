@@ -5,10 +5,12 @@
 - hitl(사람 몫)은 wall-clock이 아니라 **단서 × 요율**로 추정한다 — 사람 노동은
   트랜스크립트에 단서(지시 건수·AI 출력 분량)로만 남고, 산출물 검토·후작업은
   세션 종료 후 몰아서 할 수 있어 세션 시간 측정으로는 잡히지 않는다.
-- AI 몫은 **타임스탬프 실측** (§62): 사람 발화 → 그 턴의 마지막 AI 기록까지를
-  턴마다 재서 합산. 빼는 것 없음(도구가 10분 돌았으면 10분). AI가 끝낸 뒤
-  다음 발화까지는 사람 시간이라 제외. 병렬 실행(서브에이전트)은 메인
-  타임라인에 이미 흐른 시간이므로 별도 가산하지 않는다.
+- AI 몫은 **타임스탬프 실측** (§62·§65): 턴을 연 입력 → 그 턴의 AI 기록들
+  사이 간격을 합산하되, **간격 하나가 15분을 넘으면 그 초과분은 방치로 보고
+  버린다**(§65). 도구 실행 간격은 최대 10분(타임아웃)이라 하나도 안 잘리고,
+  며칠 벌어진 방치만 걸러진다. AI가 끝낸 뒤 다음 입력까지는 사람 시간이라
+  제외. 병렬 실행(서브에이전트)은 메인 타임라인에 이미 흐른 시간이므로
+  별도 가산하지 않는다.
 
 LLM을 쓰지 않는다 — 트랜스크립트에 기록된 동작을 결정론적으로 세고
 rates.json의 agent/hitl 카드 요율을 곱한다.
@@ -110,6 +112,22 @@ def _content_blocks(message):
 
 _WAIT_THRESHOLD_SEC = 30.0   # 이 시간을 넘는 도구만 실측 초과분 가산 (§59)
 
+# AI 시간 실측의 **간격 상한** (§65). 턴 안에서 기록 사이가 이보다 벌어지면
+# 그 초과분은 AI가 일한 시간이 아니라 방치로 본다.
+#
+# 왜 필요한가 — §62는 상한 없이 "턴 시작 → 그 턴 마지막 AI 기록"을 통째로
+# 셌다. 이 PC 기록에서는 방치가 전부 턴 끝 도장(system 레코드) 뒤에 있어
+# 문제가 없었지만, **그 도장 없이 며칠 벌어진 턴**이 실제로 보고됐다:
+# 9.1일 열려 있던 세션에서 ai_wall_min이 12,013분(8.3일)으로 잡혔다.
+# 세션이 며칠 방치되다 나중에 tool_result가 도착한 경우다.
+#
+# 값 15분의 근거 — 이 PC 실측에서 **도구 실행 간격의 최대가 10.0분**
+# (Bash 타임아웃)이고, 15분 상한을 걸어도 도구 실행은 **1분도 안 잘린다**.
+# 반면 그 외 간격은 최대 78.8시간이고 상한으로 29,704분이 잘려나간다 —
+# 전부 방치다. 사내 환경에서 도구 타임아웃이 더 길 수 있어 10분이 아니라
+# 15분으로 여유를 뒀다.
+_AI_GAP_CAP_SEC = 900.0
+
 
 def _epoch(x):
     """ISO 타임스탬프 -> epoch 초 (없거나 깨지면 None)."""
@@ -187,8 +205,8 @@ def parse_actions(jsonl_path):
               "session_span_min": 0.0,
               "session_id": None, "first_ts": None, "last_ts": None}
     pending_calls = {}  # tool_use id -> 시작 시각(초)
-    turn_start = None   # 이 턴을 연 사람 발화 시각 (§62)
-    turn_last_ai = None # 이 턴의 마지막 AI 기록 시각
+    turn_start = None   # 이 턴을 연 입력 시각 (§62)
+    turn_prev = None    # 이 턴에서 마지막으로 시간을 센 지점 (§65)
     last_answer_w = 0  # 직전 assistant 발언 단어수 (턴 마무리 = 결론 후보)
     pending_tests = {}  # 테스트 실행 tool_use id → 결과 대기
     seq = 0             # 도구 사건 순번 (§49 쓰기↔테스트 선후 판정용)
@@ -235,8 +253,11 @@ def parse_actions(jsonl_path):
             blocks = _content_blocks(rec.get("message"))
 
             if rtype == "assistant":
-                if turn_start is not None and rec_t:
-                    turn_last_ai = rec_t          # §62 AI 기록
+                if turn_start is not None and rec_t and turn_prev:
+                    # §65 간격마다 상한 적용 — 방치는 안 센다
+                    counts["ai_wall_min"] += min(max(0.0, rec_t - turn_prev),
+                                                 _AI_GAP_CAP_SEC) / 60
+                    turn_prev = rec_t
                 ans_w = 0
                 for b in blocks:
                     if not isinstance(b, dict):
@@ -290,13 +311,14 @@ def parse_actions(jsonl_path):
             # 알림이 몇 시간 뒤에 와도 그 대기가 AI 시간에 들어간다.
             if not any(isinstance(b, dict) and b.get("type") == "tool_result"
                        for b in blocks):
-                if turn_start is not None and turn_last_ai is not None:
-                    counts["ai_wall_min"] += max(
-                        0.0, turn_last_ai - turn_start) / 60
+                if turn_start is not None and turn_prev is not None \
+                        and turn_prev > turn_start:
                     counts["ai_turns"] += 1
                 if rec_t:
                     turn_start = rec_t
-                turn_last_ai = None
+                    turn_prev = rec_t
+                else:
+                    turn_start = turn_prev = None
 
             # user 턴: 사람 발화 vs tool_result 구분.
             # 시스템 주입 블록(<system-reminder> 등)은 사람 지시가 아님 — 제외
@@ -305,8 +327,11 @@ def parse_actions(jsonl_path):
                 if not isinstance(b, dict):
                     continue
                 if b.get("type") == "tool_result":
-                    if turn_start is not None and rec_t:
-                        turn_last_ai = rec_t      # §62 AI 기록(도구 결과)
+                    if turn_start is not None and rec_t and turn_prev:
+                        counts["ai_wall_min"] += min(
+                            max(0.0, rec_t - turn_prev),
+                            _AI_GAP_CAP_SEC) / 60          # §65
+                        turn_prev = rec_t
                     counts["tool_result_words"] += _result_words(b)
                     seq += 1
                     t0 = pending_calls.pop(b.get("tool_use_id"), None)
@@ -360,8 +385,8 @@ def parse_actions(jsonl_path):
                             counts["conclusion_word_list"].append(last_answer_w)
                         last_answer_w = 0
                         _flush_check_event()
-    if turn_start is not None and turn_last_ai is not None:  # §62 마지막 턴
-        counts["ai_wall_min"] += max(0.0, turn_last_ai - turn_start) / 60
+    if turn_start is not None and turn_prev is not None \
+            and turn_prev > turn_start:                      # §62 마지막 턴
         counts["ai_turns"] += 1
     if last_answer_w:  # 마지막 턴 결론
         counts["conclusion_words"] += last_answer_w
