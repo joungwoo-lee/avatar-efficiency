@@ -6,3 +6,7 @@ dist/
 *.lock
 __pycache__/
 *.pyc
+
+# diff-effort: 측정 결과는 저장소·기간마다 다르다. 커밋하면 남의 계수가
+# 자동 적용된다 — 각자 measure_ratios.py 로 재서 만든다.
+efficiency-calculator/diff-effort/ratios.json

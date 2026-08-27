@@ -17,32 +17,34 @@
 
 전 인원 합산도 같은 세 식을 합계끼리 나눠 따로 찍는다.
 
-보정 두 축 (둘 다 기본 꺼짐 — 켤 때만 적용하고 가정을 리포트에 찍는다):
-    --mix CODE,DOC,DATA    구성비 -> 실효 요율 배수. 전부 코드 요율로
-                           치면 문서·데이터를 과대 계상한다. 넣을 값은
-                           measure_ratios.py 로 자기 저장소에서 잰다
-                           (라인 기준). README 가 예시로 드는
-                           0.44/0.315/0.244 는 Claude Code 세션
-                           트랜스크립트의 Write/Edit 단어를 집계한
-                           실측이라 단어 기준 — 그대로 베끼지 말 것.
-    --comment-ratio R      주석·빈 줄 비율
-    --generated-ratio R    자동생성물 비율
-                           둘을 곱해 유효 라인 비율을 만든다. 요율이
-                           non-comment LOC 기준이라 필요한 보정이다.
+보정 계수는 **ratios.json 에서 읽는다.** measure_ratios.py 로 대상
+저장소를 한 번 재면 그 파일이 생기고, 이 스크립트가 자동으로 집어
+쓴다. 손으로 플래그를 옮길 필요가 없다.
 
-경고: 보정을 안 켜면 절대 시간이 크게 과대다. 또 사람 단위 총합에
-교체 쌍 제거를 걸면 삭제 몫이 흡수돼 사라진다(커밋 단위 분해가 정석).
-README.md §3.5·§4 를 읽고 쓸 것.
+    python measure_ratios.py <저장소>     # ratios.json 생성
+    python csv_report.py usage.csv        # 자동으로 읽어 보정 적용
 
-    python csv_report.py usage.csv
-    python csv_report.py usage.csv --mix 0.44,0.315,0.244
-    python csv_report.py usage.csv --mix 0.44,0.315,0.244 \
-        --comment-ratio 0.25 --generated-ratio 0.10
+    python csv_report.py usage.csv --config other/ratios.json
+    python csv_report.py usage.csv --no-config        # 보정 없이 (과대)
     python csv_report.py usage.csv --band slow --sort x_user --out r.csv
+
+계수 세 개가 하는 일:
+    mix (코드/문서/데이터 구성비)  전부 코드 요율로 치면 문서·데이터를
+                                   과대 계상한다 -> 실효 요율 배수
+    comment_ratio, generated_ratio 주석·빈 줄·자동생성물을 걷어낸다.
+                                   요율이 non-comment LOC 기준이라 필요.
+
+플래그로 직접 줄 수도 있고(--mix/--comment-ratio/--generated-ratio),
+그 경우 설정 파일보다 우선한다.
+
+경고: 보정 없이 돌리면 절대 시간이 크게 과대다(대략 2배). 또 사람 단위
+총합에 교체 쌍 제거를 걸면 삭제 몫이 흡수돼 사라진다(커밋 단위 분해가
+정석). README.md §0·§3.5·§4 를 읽고 쓸 것.
 """
 import argparse
 import csv
 import json
+import os
 import sys
 
 from diff_effort import (BANDS, DEFAULT_BAND, KINDS, diff_effort,
@@ -57,6 +59,34 @@ FIELDS = ("employee_id", "lines_added", "lines_removed",
 
 SORT_KEYS = ("effort_min", "x_total", "x_user", "min_per_usd",
              "lines_added", "employee_id")
+
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_CONFIG = os.path.join(_HERE, "ratios.json")
+
+
+def find_config(explicit=None):
+    """설정 파일 경로를 정한다 — 명시 > 현재 폴더 > 스크립트 폴더."""
+    if explicit:
+        if not os.path.exists(explicit):
+            raise ValueError("설정 파일이 없다: %s" % explicit)
+        return explicit
+    for cand in (os.path.join(os.getcwd(), "ratios.json"), DEFAULT_CONFIG):
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+def load_config(path):
+    """ratios.json -> (mix_parts, comment_ratio, generated_ratio, cfg)."""
+    with open(path, encoding="utf-8") as f:
+        cfg = json.load(f)
+    m = cfg.get("mix") or {}
+    parts = [float(m.get(k, 0.0)) for k in KINDS]
+    if sum(parts) <= 0:
+        raise ValueError("설정의 mix 합이 0이다: %s" % path)
+    return (parts, float(cfg.get("comment_ratio", 0.0)),
+            float(cfg.get("generated_ratio", 0.0)), cfg)
 
 
 def _num(row, key, default=0.0):
@@ -155,10 +185,25 @@ def _f(v, spec="%.1f"):
     return "-" if v is None else spec % v
 
 
-def print_assumptions(band, mix, eff_ratio, mix_parts, comment_r, gen_r):
+def print_assumptions(band, mix, eff_ratio, mix_parts, comment_r, gen_r,
+                      cfg_path=None, cfg=None):
     """무엇을 가정하고 계산했는지 먼저 밝힌다 — 안 켜면 안 켰다고 찍는다."""
     r = rates(band)
     print("[가정]")
+    if cfg_path:
+        print("  설정          %s" % cfg_path)
+        meas = (cfg or {}).get("measured") or {}
+        if meas:
+            repos = ", ".join(meas.get("repos") or []) or "(미기록)"
+            span = " ~ ".join(x for x in (meas.get("since"),
+                                          meas.get("until")) if x)
+            print("                잰 대상: %s / %s"
+                  % (repos, span or "전체 기간"))
+            if meas.get("at"):
+                print("                잰 시각: %s (기준: %s)"
+                      % (meas["at"], meas.get("basis", "-")))
+    else:
+        print("  설정          없음 — measure_ratios.py 로 먼저 재라")
     print("  밴드          %s — 작성 %.3f분/줄 (%.1f줄/h), "
           "삭제 %.3f분/줄 (%.0f줄/h)"
           % (band, r["new_min_per_line"], r["loc_per_hour"],
@@ -251,13 +296,17 @@ def _main():
     p.add_argument("csv_path", help="입력 CSV 경로")
     p.add_argument("--band", choices=BANDS, default=DEFAULT_BAND,
                    help="생산성 밴드 (기본 mid)")
+    p.add_argument("--config", default=None,
+                   help="보정 계수 파일 (기본: ./ratios.json 또는 "
+                        "스크립트 폴더의 ratios.json 자동 사용)")
+    p.add_argument("--no-config", action="store_true",
+                   help="설정 파일을 무시하고 보정 없이 돌린다 (과대)")
     p.add_argument("--mix", default=None, metavar="CODE,DOC,DATA",
-                   help="구성비 (measure_ratios.py 로 실측해 넣는다). "
-                        "생략하면 전부 코드 요율")
-    p.add_argument("--comment-ratio", type=float, default=0.0,
-                   help="주석·빈 줄 비율 (예: 0.25). 기본 0 = 미보정")
-    p.add_argument("--generated-ratio", type=float, default=0.0,
-                   help="자동생성물 비율 (예: 0.10). 기본 0 = 미보정")
+                   help="구성비를 직접 지정 (설정 파일보다 우선)")
+    p.add_argument("--comment-ratio", type=float, default=None,
+                   help="주석·빈 줄 비율 직접 지정 (설정보다 우선)")
+    p.add_argument("--generated-ratio", type=float, default=None,
+                   help="자동생성물 비율 직접 지정 (설정보다 우선)")
     p.add_argument("--sort", choices=SORT_KEYS, default="effort_min",
                    help="정렬 키 (기본 effort_min 내림차순)")
     p.add_argument("--asc", action="store_true", help="오름차순으로")
@@ -273,15 +322,27 @@ def _main():
         pass
 
     mix_parts = None
+    comment_r = 0.0
+    gen_r = 0.0
+    cfg = None
+    cfg_path = None
     try:
+        if not a.no_config:
+            cfg_path = find_config(a.config)
+            if cfg_path:
+                mix_parts, comment_r, gen_r, cfg = load_config(cfg_path)
+        # 플래그는 설정 파일보다 우선
         if a.mix:
             mix_parts = [float(x) for x in a.mix.split(",")]
             if len(mix_parts) != len(KINDS):
                 raise ValueError("--mix 는 CODE,DOC,DATA 세 값이어야 한다")
-            mix = mix_factor(*mix_parts)
-        else:
-            mix = None
-        er = effective_ratio(a.comment_ratio, a.generated_ratio)
+        if a.comment_ratio is not None:
+            comment_r = a.comment_ratio
+        if a.generated_ratio is not None:
+            gen_r = a.generated_ratio
+
+        mix = mix_factor(*mix_parts) if mix_parts else None
+        er = effective_ratio(comment_r, gen_r)
         rows = analyze_csv(a.csv_path, a.band, mix, er, a.encoding)
     except (OSError, ValueError) as e:
         sys.stderr.write("오류: %s\n" % e)
@@ -299,18 +360,22 @@ def _main():
     if a.json:
         print(json.dumps({
             "band": a.band,
+            "config_path": cfg_path,
+            "config": cfg,
             "mix": mix if mix is not None else 1.0,
             "mix_parts": mix_parts,
             "eff_ratio": er,
-            "comment_ratio": a.comment_ratio,
-            "generated_ratio": a.generated_ratio,
+            "comment_ratio": comment_r,
+            "generated_ratio": gen_r,
             "rows": rows, "total": tot}, ensure_ascii=False, indent=2))
     else:
         print_assumptions(a.band, mix if mix is not None else 1.0, er,
-                          mix_parts, a.comment_ratio, a.generated_ratio)
+                          mix_parts, comment_r, gen_r, cfg_path, cfg)
         print_table(rows, tot)
-        print()
-        print("주의: 보정을 안 켜면 절대 시간이 크게 과대다 (README §3.5·§4).")
+        if not mix_parts and not (comment_r or gen_r):
+            print()
+            print("주의: 보정 없이 돌렸다 — 절대 시간이 대략 2배 과대다.")
+            print("      measure_ratios.py <저장소> 로 먼저 재라 (README §0).")
         if a.out:
             print("\n저장: %s" % a.out)
     return 0

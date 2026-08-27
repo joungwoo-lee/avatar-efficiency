@@ -7,7 +7,7 @@
 
 ## 0. 실행 절차 (이대로 하면 된다)
 
-**Claude 에게 시킬 때는 이 절 하나만 읽히면 된다. 아래 순서대로 실행할 것.**
+**Claude 에게 시킬 때는 이 절 하나만 읽히면 된다. 순서대로 실행할 것.**
 
 ### 0-1. 보정 계수 재기 — 대상 저장소에서 한 번만
 
@@ -17,38 +17,37 @@ python measure_ratios.py <대상저장소경로>
 ```
 
 여러 저장소면 경로를 나열한다: `python measure_ratios.py repoA repoB`
+기간을 좁히려면 `--since 2025-01-01 --until 2025-12-31`.
 
-출력 맨 아래 `[그대로 붙여 쓸 플래그]` 줄을 복사한다. 이런 모양이다:
-
-```
---mix 0.506,0.443,0.051 --comment-ratio 0.239 --generated-ratio 0.002
-```
+결과가 **`ratios.json` 으로 저장된다**(이 폴더). 아무것도 복사하지 않는다.
 
 ### 0-2. CSV 돌리기
 
 ```
-python csv_report.py <사용량CSV경로> --mix 0.506,0.443,0.051 --comment-ratio 0.239 --generated-ratio 0.002
+python csv_report.py <사용량CSV경로>
 ```
 
-0-1 에서 복사한 플래그를 그대로 뒤에 붙인다. 끝이다.
-사람별 표와 전 인원 합산 3지표가 나온다.
+`ratios.json` 을 자동으로 읽어 보정을 적용한다. 끝이다.
+사람별 표와 전 인원 합산 3지표가 나온다. 출력 맨 위 `[가정]` 블록에
+어떤 설정 파일을, 어느 저장소·기간에서 잰 것으로 썼는지 찍힌다.
 
-CSV 로 저장하려면 `--out report.csv`, JSON 이면 `--json` 을 더 붙인다.
+옵션: `--out report.csv` (CSV 저장) · `--json` · `--band slow`
+(느린 밴드) · `--sort x_user` (정렬) · `--config <경로>` (다른 설정 파일)
 
 ### 판단이 필요한 경우
 
 | 상황 | 어떻게 |
 |---|---|
-| 대상 저장소에 접근이 안 된다 | 0-1 을 건너뛰고 0-2 를 플래그 없이 실행. **절대 시간은 믿지 말고 사람 간 순위만 읽는다** (보정 없으면 2배쯤 과대) |
+| 대상 저장소에 접근이 안 된다 | 0-1 을 건너뛰고 0-2 만 실행. `ratios.json` 이 없으면 보정 없이 돌고 "보정 없이 돌렸다" 경고가 찍힌다. **절대 시간은 믿지 말고 사람 간 순위만 읽는다** (보정 없으면 2배쯤 과대) |
 | CSV 에 필수 컬럼이 없다 | 스크립트가 없는 컬럼 이름을 찍고 멈춘다. 그 컬럼을 채워 오거나 작업 불가를 보고한다 |
-| 결과 폭을 같이 보고해야 한다 | `--band fast` 와 `--band slow` 로 한 번씩 더 돌린다 (±20%) |
-| 다른 사람의 계수를 재사용하고 싶다 | 하지 마라. 저장소·기간마다 다르다. 0-1 을 다시 돌린다 |
+| 결과 폭도 보고해야 한다 | `--band fast` 와 `--band slow` 로 한 번씩 더 돌린다 (±20%) |
+| `ratios.json` 이 이미 있는데 다른 저장소를 잰다 | 0-1 을 다시 돌리면 덮어쓴다. 남기려면 `--out other.json` 으로 쓰고 0-2 에서 `--config other.json` |
+| 남이 만든 `ratios.json` 을 쓰고 싶다 | 하지 마라. 저장소·기간마다 다르다. 그래서 이 파일은 git 에 올라가지 않는다 |
 
 ### 보고할 때 반드시 같이 적을 것
 
-- 출력 맨 위 `[가정]` 블록 전체 (밴드·구성비·유효 라인 비율)
-- 0-1 을 어느 저장소·어느 기간으로 쟀는지
-- 보정을 안 켰다면 **"보정 미적용, 절대값 과대"** 라고 명시
+- 출력 맨 위 `[가정]` 블록 전체 (설정 파일 경로·잰 대상·밴드·구성비·유효 라인 비율)
+- 보정 없이 돌렸다면 **"보정 미적용, 절대값 과대"** 라고 명시
 
 ### 필수 CSV 컬럼
 
@@ -272,12 +271,14 @@ effective_ratio(0.25, 0.10) = 0.675
 ### 2.7 계수는 어디서 얻나 — `measure_ratios.py`
 
 기본값을 안 박는다고 했으니 **잴 도구를 같이 둔다.** 세 계수를 저장소에서
-실측해 그대로 붙여 쓸 플래그 한 줄로 뱉는다.
+실측해 `ratios.json` 에 써 둔다. `csv_report.py` 가 그 파일을 자동으로
+읽으므로 사람이 값을 옮길 일이 없다.
 
 ```
 python measure_ratios.py /path/to/repo
 python measure_ratios.py repo1 repo2 --since 2025-01-01
-python measure_ratios.py /path/to/repo --author someone@corp.com --json
+python measure_ratios.py /path/to/repo --author someone@corp.com
+python measure_ratios.py /path/to/repo --out other.json   # 다른 경로에
 ```
 
 무엇을 어디서 재는지:
@@ -294,19 +295,47 @@ python measure_ratios.py /path/to/repo --author someone@corp.com --json
 이 저장소에서 실제로 돌린 결과:
 
 ```
-[구성비] diff 라인 38974줄 기준 (자동생성물 제외)
-  코드       19712줄   50.6%
-  문서       17259줄   44.3%
+[구성비] diff 라인 39595줄 기준 (자동생성물 제외)
+  코드       20175줄   50.9%
+  문서       17417줄   44.0%
   데이터      2003줄    5.1%
   (기타 3153줄은 구성비에서 제외 — 확장자 미분류)
 
-[자동생성물] 전체 diff 42210줄 중 83줄 = 0.2%
+[자동생성물] 전체 diff 42831줄 중 83줄 = 0.2%
 
-[주석·빈 줄] 코드 12348줄 기준 23.9%  (출처: builtin)
+[주석·빈 줄] 코드 12856줄 기준 23.8%  (출처: builtin)
 
-[그대로 붙여 쓸 플래그]
-  --mix 0.506,0.443,0.051 --comment-ratio 0.239 --generated-ratio 0.002
+[저장] .../diff-effort/ratios.json
+  csv_report.py 가 이 파일을 자동으로 읽는다. 실행:
+    python csv_report.py <사용량CSV경로>
 ```
+
+저장 파일은 수치만이 아니라 **언제·어느 저장소·어느 기간을 어떤 기준
+(diff 라인)으로 쟀는지**를 같이 담는다:
+
+```json
+{
+  "_schema": "diff-effort/ratios@1",
+  "mix": { "code": 0.5095, "doc": 0.4399, "data": 0.0506 },
+  "comment_ratio": 0.2384,
+  "generated_ratio": 0.0019,
+  "measured": {
+    "at": "2026-08-27T16:02:36+09:00",
+    "repos": ["C:\\Users\\joung\\avatar-efficiency"],
+    "since": null, "until": null, "author": null,
+    "basis": "diff lines (git log --numstat)",
+    "diff_lines_by_kind": { "code": 20175, "doc": 17417,
+                            "data": 2003, "other": 3153 },
+    "comment_source": "builtin"
+  }
+}
+```
+
+리포트의 `[가정]` 블록이 이 기록을 그대로 찍으므로, 결과만 봐도 어떤
+조건으로 잰 계수인지 알 수 있다.
+
+`ratios.json` 은 `.gitignore` 에 들어 있다 — 커밋해 두면 남의 저장소에서
+잰 계수가 다른 사람 실행에 자동 적용되기 때문이다. 각자 재서 만든다.
 
 **이 숫자를 그대로 베끼지 마라.** 저장소·기간마다 다르다 — 이 저장소는
 문서가 44%나 되는 특이한 구성이다. 자기 데이터에서 재고, 리포트에 어떤
@@ -352,8 +381,8 @@ python csv_report.py usage.csv --json
 
 보정 옵션은 §2.5·§2.6 의 두 계수를 켜는 것이다. 안 켜면 1.0 으로
 동작하고, 켜든 안 켜든 무엇을 가정했는지 리포트 맨 위에 찍힌다.
-**넣을 값은 `measure_ratios.py` 로 잰다 (§2.7)** — 저장소를 훑어 이
-플래그 한 줄을 그대로 뱉는다.
+**넣을 값은 `measure_ratios.py` 로 잰다 (§2.7)** — 저장소를 훑어
+`ratios.json` 에 써 두고, 이 스크립트가 그 파일을 자동으로 읽는다.
 
 필수 컬럼: `employee_id` · `lines_added` · `lines_removed` ·
 `cli_active_sec` · `user_active_sec` · `total_cost`. (없으면 어떤 게

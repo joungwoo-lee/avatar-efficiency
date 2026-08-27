@@ -5,7 +5,8 @@ import os
 import tempfile
 import unittest
 
-from csv_report import analyze_csv, analyze_row, sort_rows, totals
+from csv_report import (analyze_csv, analyze_row, find_config,
+                        load_config, sort_rows, totals)
 from diff_effort import effective_ratio, mix_factor
 
 HEADER = ("employee_id,total_cost,lines_added,lines_removed,"
@@ -123,6 +124,39 @@ class TestTotalsAndSort(unittest.TestCase):
     def test_sort_by_id(self):
         r = sort_rows(list(self.rows), "employee_id", asc=True)
         self.assertEqual(r[0]["employee_id"], "jane.doe")
+
+
+class TestConfig(unittest.TestCase):
+    def _cfg(self, text):
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        with io.open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return path
+
+    def test_load(self):
+        p = self._cfg('{"mix":{"code":0.5,"doc":0.4,"data":0.1},'
+                      '"comment_ratio":0.2,"generated_ratio":0.05}')
+        try:
+            parts, c, g, cfg = load_config(p)
+            self.assertEqual(parts, [0.5, 0.4, 0.1])
+            self.assertAlmostEqual(c, 0.2)
+            self.assertAlmostEqual(g, 0.05)
+            self.assertIn("mix", cfg)
+        finally:
+            os.unlink(p)
+
+    def test_zero_mix_rejected(self):
+        p = self._cfg('{"mix":{"code":0,"doc":0,"data":0}}')
+        try:
+            with self.assertRaises(ValueError):
+                load_config(p)
+        finally:
+            os.unlink(p)
+
+    def test_missing_explicit_config_raises(self):
+        with self.assertRaises(ValueError):
+            find_config(os.path.join(tempfile.gettempdir(), "nope-xyz.json"))
 
 
 if __name__ == "__main__":

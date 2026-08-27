@@ -20,16 +20,22 @@ csv_report.py 의 보정 계수는 기본이 꺼져 있다. 추정치를 기본�
 
     python measure_ratios.py /path/to/repo
     python measure_ratios.py repo1 repo2 --since 2025-01-01
-    python measure_ratios.py /path/to/repo --author someone@corp.com --json
+    python measure_ratios.py /path/to/repo --author someone@corp.com
 
-출력 맨 아래에 그대로 복사해 붙일 플래그 한 줄이 나온다.
+결과는 **ratios.json 으로 저장된다**(기본: 이 폴더). csv_report.py 가
+그 파일을 자동으로 읽으므로 플래그를 손으로 옮길 필요가 없다.
+--out 으로 다른 경로에 쓸 수 있고, --no-save 로 저장을 끌 수 있다.
 """
 import argparse
+import datetime
 import json
 import os
 import re
 import subprocess
 import sys
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_CONFIG = os.path.join(_HERE, "ratios.json")
 
 # ../human-effort/requirement-actions/requirement_actions.py 의 write_kind 와
 # 같은 분류다. 그 모듈은 폴더명에 하이픈이 있어 import 가 안 되므로 옮겨 적었다.
@@ -286,6 +292,45 @@ def measure(repos, since=None, until=None, author=None, use_cloc=True):
     }
 
 
+def to_config(m, args_ns):
+    """측정 결과 -> csv_report.py 가 읽는 설정 dict.
+
+    수치만이 아니라 **무엇을 언제 어디서 쟀는지**를 같이 적는다.
+    이 파일 하나로 리포트의 [가정] 블록이 재현돼야 한다.
+    """
+    mix = m["mix"] or {"code": 1.0, "doc": 0.0, "data": 0.0}
+    return {
+        "_schema": "diff-effort/ratios@1",
+        "_note": "measure_ratios.py 가 만든다. 손으로 고치지 말고 다시 재라.",
+        "mix": {"code": round(mix["code"], 4),
+                "doc": round(mix["doc"], 4),
+                "data": round(mix["data"], 4)},
+        "comment_ratio": round(m["comment_ratio"], 4),
+        "generated_ratio": round(m["generated_ratio"], 4),
+        "measured": {
+            "at": datetime.datetime.now().astimezone().isoformat(
+                timespec="seconds"),
+            "repos": [os.path.abspath(r) for r in m["repos"]],
+            "since": args_ns.since,
+            "until": args_ns.until,
+            "author": args_ns.author,
+            "basis": "diff lines (git log --numstat)",
+            "diff_lines_total": m["diff_lines_total"],
+            "diff_lines_by_kind": m["diff_lines_by_kind"],
+            "generated_lines": m["generated_lines"],
+            "comment_lines_scanned": m["comment_lines_scanned"],
+            "comment_source": m["comment_source"],
+        },
+    }
+
+
+def save_config(cfg, path):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+        f.write(chr(10))
+    return path
+
+
 def print_report(m):
     print("[구성비] diff 라인 %d줄 기준 (자동생성물 제외)"
           % (m["diff_lines_by_kind"]["code"] + m["diff_lines_by_kind"]["doc"]
@@ -311,18 +356,8 @@ def print_report(m):
     if m["comment_source"] == "builtin":
         print("  내장 근사 계수기다. cloc 을 설치하면 더 정확한 값을 쓴다.")
     print()
-    print("[그대로 붙여 쓸 플래그]")
-    if m["mix"]:
-        print("  --mix %.3f,%.3f,%.3f --comment-ratio %.3f "
-              "--generated-ratio %.3f"
-              % (m["mix"]["code"], m["mix"]["doc"], m["mix"]["data"],
-                 m["comment_ratio"], m["generated_ratio"]))
-    else:
-        print("  --comment-ratio %.3f --generated-ratio %.3f"
-              % (m["comment_ratio"], m["generated_ratio"]))
-    print()
     print("주의: 이 값은 잰 저장소·기간의 것이다. 다른 조직·기간에 쓰려면")
-    print("      거기서 다시 재라. 리포트에 어떤 조건으로 쟀는지 남길 것.")
+    print("      거기서 다시 재라. 조건은 저장 파일에 같이 기록된다.")
 
 
 def _main():
@@ -334,6 +369,10 @@ def _main():
     p.add_argument("--author", default=None, help="git log --author 로 좁히기")
     p.add_argument("--no-cloc", action="store_true",
                    help="cloc 이 있어도 내장 계수기를 쓴다")
+    p.add_argument("--out", default=DEFAULT_CONFIG,
+                   help="설정 저장 경로 (기본: 이 폴더의 ratios.json)")
+    p.add_argument("--no-save", action="store_true",
+                   help="파일로 저장하지 않는다")
     p.add_argument("--json", action="store_true", help="JSON 으로 출력")
     a = p.parse_args()
 
@@ -348,10 +387,28 @@ def _main():
         sys.stderr.write("오류: %s\n" % e)
         return 2
 
+    cfg = to_config(m, a)
+    saved = None
+    if not a.no_save:
+        try:
+            saved = save_config(cfg, a.out)
+        except OSError as e:
+            sys.stderr.write("설정 저장 실패: %s" % e + chr(10))
+            return 2
+
     if a.json:
-        print(json.dumps(m, ensure_ascii=False, indent=2))
+        print(json.dumps({"config": cfg, "detail": m, "saved_to": saved},
+                         ensure_ascii=False, indent=2))
     else:
         print_report(m)
+        if saved:
+            print()
+            print("[저장] %s" % saved)
+            print("  csv_report.py 가 이 파일을 자동으로 읽는다. 실행:")
+            print("    python csv_report.py <사용량CSV경로>")
+        else:
+            print()
+            print("[저장 안 함] --no-save 로 껐다.")
     return 0
 
 
