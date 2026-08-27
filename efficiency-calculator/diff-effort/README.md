@@ -1,21 +1,74 @@
 # diff-effort — 코드 라인 변경수 → 사람 노동 환산
 
 `diff` 의 추가/삭제 라인 수만 가지고 "사람이 직접 짰다면 몇 분"을
-환산하는 독립 모듈. 세션 트랜스크립트가 없을 때 쓴다.
+환산한다. 세션 트랜스크립트가 없을 때 쓴다.
+
+---
+
+## 0. 실행 절차 (이대로 하면 된다)
+
+**Claude 에게 시킬 때는 이 절 하나만 읽히면 된다. 아래 순서대로 실행할 것.**
+
+### 0-1. 보정 계수 재기 — 대상 저장소에서 한 번만
 
 ```
-python diff_effort.py 320 180
-python diff_effort.py 20 400 --all-bands
-python diff_effort.py 179887 25046 --mix 0.44,0.315,0.244     --comment-ratio 0.25 --generated-ratio 0.10
+cd efficiency-calculator/diff-effort
+python measure_ratios.py <대상저장소경로>
 ```
+
+여러 저장소면 경로를 나열한다: `python measure_ratios.py repoA repoB`
+
+출력 맨 아래 `[그대로 붙여 쓸 플래그]` 줄을 복사한다. 이런 모양이다:
+
+```
+--mix 0.506,0.443,0.051 --comment-ratio 0.239 --generated-ratio 0.002
+```
+
+### 0-2. CSV 돌리기
+
+```
+python csv_report.py <사용량CSV경로> --mix 0.506,0.443,0.051 --comment-ratio 0.239 --generated-ratio 0.002
+```
+
+0-1 에서 복사한 플래그를 그대로 뒤에 붙인다. 끝이다.
+사람별 표와 전 인원 합산 3지표가 나온다.
+
+CSV 로 저장하려면 `--out report.csv`, JSON 이면 `--json` 을 더 붙인다.
+
+### 판단이 필요한 경우
+
+| 상황 | 어떻게 |
+|---|---|
+| 대상 저장소에 접근이 안 된다 | 0-1 을 건너뛰고 0-2 를 플래그 없이 실행. **절대 시간은 믿지 말고 사람 간 순위만 읽는다** (보정 없으면 2배쯤 과대) |
+| CSV 에 필수 컬럼이 없다 | 스크립트가 없는 컬럼 이름을 찍고 멈춘다. 그 컬럼을 채워 오거나 작업 불가를 보고한다 |
+| 결과 폭을 같이 보고해야 한다 | `--band fast` 와 `--band slow` 로 한 번씩 더 돌린다 (±20%) |
+| 다른 사람의 계수를 재사용하고 싶다 | 하지 마라. 저장소·기간마다 다르다. 0-1 을 다시 돌린다 |
+
+### 보고할 때 반드시 같이 적을 것
+
+- 출력 맨 위 `[가정]` 블록 전체 (밴드·구성비·유효 라인 비율)
+- 0-1 을 어느 저장소·어느 기간으로 쟀는지
+- 보정을 안 켰다면 **"보정 미적용, 절대값 과대"** 라고 명시
+
+### 필수 CSV 컬럼
+
+`employee_id` · `lines_added` · `lines_removed` · `cli_active_sec` ·
+`user_active_sec` · `total_cost`
+
+### 파이썬에서 직접 부를 때
 
 ```python
 from diff_effort import diff_effort, mix_factor, effective_ratio
-diff_effort(320, 180)["minutes"]                              # 724.5
+
+diff_effort(320, 180)["minutes"]                                # 724.5
 diff_effort(320, 180,
-            mix=mix_factor(0.44, 0.315, 0.244),               # 0.668
-            eff_ratio=effective_ratio(0.25, 0.10))["minutes"]  # 326.7
+            mix=mix_factor(0.44, 0.315, 0.244),
+            eff_ratio=effective_ratio(0.25, 0.10))["minutes"]   # 326.7
 ```
+
+---
+
+아래는 왜 이 숫자인지에 대한 근거다. 실행만 하면 되면 여기서 멈춰도 된다.
 
 ## 1. 수식
 
