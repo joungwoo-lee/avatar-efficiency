@@ -32,7 +32,8 @@ for _p in (_ROOT / "human-effort" / "requirement-based",
            _ROOT / "human-effort" / "shared",
            _ROOT / "human-effort" / "record-actions",
            _ROOT / "human-effort" / "requirement-actions",
-           _ROOT / "agent-effort"):
+           _ROOT / "agent-effort",
+           _ROOT / "trajectory-cost"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
