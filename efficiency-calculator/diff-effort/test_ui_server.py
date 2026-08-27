@@ -206,7 +206,7 @@ class TestReport(ServerCase):
         self.assertEqual(g["tiny"], [])
 
     def test_gates_flag_implausibly_small_human_time(self):
-        """CC 시간의 10% 미만이면 계측 누락으로 잡고, 까닭·대책도 같이 준다."""
+        """CC 시간의 15% 미만이면 계측 누락으로 잡고, 까닭·대책도 같이 준다."""
         p = _write(os.path.join(self.tmp, "hitl-tiny.csv"), HEADER +
                    "a,10,1000,100,100000,100\n"        # 0.1%
                    "b,10,1000,100,100000,5000\n"       # 5%  — 10% 미만
@@ -217,11 +217,12 @@ class TestReport(ServerCase):
         self.assertEqual(sorted(g["tiny"]), ["a", "b"])
         self.assertEqual(g["min_share"], UI.HITL_MIN_SHARE)
         self.assertIn("타임스탬프", g["why"])
-        self.assertIn("session-api", g["remedy"])
+        self.assertIn("세션 분석", g["remedy"])
+        self.assertNotIn("req_actions_api", g["remedy"])   # 명령어는 안 넣는다
 
-    def test_threshold_is_ten_percent(self):
-        self.assertEqual(UI.HITL_MIN_SHARE, 0.10)
-        self.assertEqual(self.get("/api/meta")["hitl_min_share"], 0.10)
+    def test_threshold_is_fifteen_percent(self):
+        self.assertEqual(UI.HITL_MIN_SHARE, 0.15)
+        self.assertEqual(self.get("/api/meta")["hitl_min_share"], 0.15)
 
     def test_gates_pass_when_both_measured(self):
         p = _write(os.path.join(self.tmp, "hitl-ok.csv"), HEADER +
@@ -461,6 +462,63 @@ class TestServerMode(ServerCase):
                                   {"csv_text": "employee_id,lines_added\na,1\n"})
         self.assertEqual(code, 400)
         self.assertIn("lines_removed", err)
+
+    def _download(self, fields, form=True):
+        if form:
+            data = urlencode(fields).encode("utf-8")
+            ctype = "application/x-www-form-urlencoded"
+        else:
+            data = json.dumps(fields).encode("utf-8")
+            ctype = "application/json"
+        req = Request(self.url("/api/download"), method="POST", data=data,
+                      headers={"Content-Type": ctype})
+        with urlopen(req) as r:
+            return r, r.read().decode("utf-8-sig")
+
+    def test_download_returns_the_report_as_a_file(self):
+        r, text = self._download({"csv_text": SAMPLE,
+                                  "filename": "usage_report.csv"})
+        self.assertEqual(r.status, 200)
+        self.assertIn("text/csv", r.headers["Content-Type"])
+        self.assertEqual(r.headers["Content-Disposition"],
+                         'attachment; filename="usage_report.csv"')
+        lines = text.strip().splitlines()
+        self.assertTrue(lines[0].startswith("employee_id,"))
+        self.assertEqual(len(lines), 4)              # 머리 + 2명 + 합계
+        self.assertIn("TOTAL(n=2)", lines[-1])
+        # 화면에 뜬 값과 같은 파일이어야 한다 (BOM 은 위에서 벗겨 읽었다)
+        self.assertEqual(text, self.post(
+            "/api/report", {"csv_text": SAMPLE})["csv_text"])
+
+    def test_download_honours_sort_and_band(self):
+        _, text = self._download({"csv_text": SAMPLE, "sort": "employee_id",
+                                  "asc": "1"})
+        body = text.strip().splitlines()[1:3]
+        self.assertTrue(body[0].startswith("jane.doe"))
+        _, fast = self._download({"csv_text": SAMPLE, "band": "fast"})
+        self.assertNotEqual(fast, text)
+
+    def test_download_filename_is_sanitised(self):
+        r, _ = self._download({"csv_text": SAMPLE,
+                               "filename": '../../etc/pa"ss'})
+        self.assertEqual(r.headers["Content-Disposition"],
+                         'attachment; filename="pass.csv"')
+
+    def test_download_accepts_json_too(self):
+        r, text = self._download({"csv_text": SAMPLE}, form=False)
+        self.assertEqual(r.status, 200)
+        self.assertIn("employee_id", text)
+
+    def test_download_refuses_a_path(self):
+        req = Request(self.url("/api/download"), method="POST",
+                      data=urlencode({"csv_path": self.csv}).encode("utf-8"),
+                      headers={"Content-Type":
+                               "application/x-www-form-urlencoded"})
+        try:
+            with urlopen(req):
+                self.fail("경로는 거절해야 한다")
+        except HTTPError as e:
+            self.assertEqual(e.code, 400)
 
 
 class TestSuggestOut(unittest.TestCase):

@@ -231,17 +231,16 @@ def server_assumptions(band, mix, eff_ratio, mix_parts, comment_r, gen_r, pub):
 #                x_user·x_total 의 분모다. 안 재면 효율을 못 낸다.
 
 # 사람 개입시간이 CC 세션시간의 이 비율보다 작으면 계측 누락으로 본다.
-HITL_MIN_SHARE = 0.10
+HITL_MIN_SHARE = 0.15
 HITL_MIN_SEC = 60.0
 
 # 개입시간이 과소하게 찍히는 까닭과 제대로 재는 법. 경고에 같이 실어 보낸다.
 HITL_WHY = ("사람이 일을 안 한 게 아니라 타임스탬프에 안 잡힌 것이다 — "
             "확인해야 할 사람 노동을 세션이 끝난 뒤 몰아서 했거나, "
             "AI 를 돌려놓고 그게 도는 동안 다른 자리에서 했기 때문이다.")
-HITL_REMEDY = ("세션 트랜스크립트가 있으면 efficiency-calculator/session-api "
-               "의 세션 분석으로 다시 잴 수 있다 — 지시·검토·중단 단서에서 "
-               "사람 개입시간(hitl)을 뽑는다: "
-               "python req_actions_api.py session.jsonl")
+HITL_REMEDY = ("이 시간은 efficiency calculator 의 세션 분석으로 다시 잴 수 "
+               "있다 — 세션 기록에 남은 지시·검토·중단 흔적에서 사람이 쓴 "
+               "시간을 뽑아낸다.")
 
 # 구성비를 대상 세션의 저장소에서 못 잴 때의 차선책.
 MIX_PROXY_GUIDE = ("대상 세션의 저장소를 못 재면, 성격이 비슷한 예시 "
@@ -445,9 +444,19 @@ def suggest_out(csv_path):
 
 # ---------------------------------------------------------------- HTTP
 
-# 서버 모드에서 열어두는 것 — 이 둘뿐이다.
+# 서버 모드에서 열어두는 것 — 이것뿐이다.
 SERVER_GET = ("/", "/index.html", "/ui.html", "/api/meta", "/api/ratios")
-SERVER_POST = ("/api/report",)
+SERVER_POST = ("/api/report", "/api/download")
+
+
+def safe_filename(name, default="report.csv"):
+    """내려받을 파일 이름 — 경로 조각과 헤더를 깰 문자를 걷어낸다."""
+    name = os.path.basename((name or "").strip().replace("\\", "/"))
+    name = "".join(c for c in name if c.isalnum() or c in " ._-()[]")
+    name = name.strip(" .") or default
+    if not name.lower().endswith(".csv"):
+        name += ".csv"
+    return name[:120]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -552,6 +561,37 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:                              # noqa: BLE001
             return self._err(e, 500)
 
+    def _download(self, raw):
+        """리포트 CSV 를 **파일로** 내려준다.
+
+        폼 전송(application/x-www-form-urlencoded)도 받는다 — 브라우저가
+        스스로 내려받게 하려면 폼 POST 가 가장 확실하기 때문이다. 본문은
+        /api/report 와 같은 계산을 다시 돌려 만든다(값이 갈릴 일이 없다).
+        """
+        ctype = (self.headers.get("Content-Type") or "").lower()
+        text = raw.decode("utf-8", "replace")
+        if "application/json" in ctype:
+            body = json.loads(text or "{}")
+        else:
+            q = parse_qs(text, keep_blank_values=True)
+            body = dict((k, v[0]) for k, v in q.items())
+            body["asc"] = body.get("asc") in ("1", "true", "on", "True")
+        name = safe_filename(body.get("filename"))
+        res = do_report(body, self.mode, self.fixed_config)
+        csv_out = res.get("csv_text") or CR.csv_text(res["rows"], res["total"])
+        data = ("﻿" + csv_out).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Disposition",
+                         'attachment; filename="%s"' % name)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except OSError:
+            pass
+
     def do_POST(self):
         p = urlparse(self.path).path
         if self.mode == "server" and p not in SERVER_POST:
@@ -567,7 +607,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._drain(n)
                 raise ValueError("요청이 너무 크다 (상한 %dMB)"
                                  % (MAX_UPLOAD // (1024 * 1024)))
-            body = json.loads(self.rfile.read(n) or b"{}")
+            raw = self.rfile.read(n) or b"{}"
+            if p == "/api/download":
+                return self._download(raw)
+            body = json.loads(raw)
             if p == "/api/report":
                 return self._json(do_report(body, self.mode,
                                             self.fixed_config))
