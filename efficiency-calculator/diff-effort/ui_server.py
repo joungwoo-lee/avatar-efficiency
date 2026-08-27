@@ -122,6 +122,13 @@ def do_measure(body):
     m = MR.measure(repos, ns.since, ns.until, ns.author,
                    not body.get("no_cloc"))
     cfg = MR.to_config(m, ns)
+    if body.get("proxy"):
+        # 대상 세션의 저장소가 아니라 예시 프로젝트로 잰 값이다. 파일에
+        # 박아둬야 나중에 이 리포트를 실측으로 오해하지 않는다.
+        cfg["proxy"] = True
+        cfg["measured"]["proxy_note"] = (
+            (body.get("proxy_note") or "").strip()
+            or "대상 세션의 저장소가 아닌 예시 프로젝트로 잰 개략 추정값")
     saved = None
     if not body.get("no_save"):
         saved = MR.save_config(cfg, os.path.abspath(out))
@@ -151,22 +158,49 @@ def read_ratios(path=None):
 #   (2) 사람 개입시간(user_active_sec)  사람이 실제로 붙어 있던 시간.
 #                x_user·x_total 의 분모다. 안 재면 효율을 못 낸다.
 
-# 사람 개입시간이 CC 세션시간의 이 비율보다 작으면 계측 누락을 의심한다.
-# 사람이 한 번도 안 보고 통과시켰다는 뜻이 되기 때문이다.
-HITL_MIN_SHARE = 0.02
+# 사람 개입시간이 CC 세션시간의 이 비율보다 작으면 계측 누락으로 본다.
+HITL_MIN_SHARE = 0.10
 HITL_MIN_SEC = 60.0
 
+# 개입시간이 과소하게 찍히는 까닭과 제대로 재는 법. 경고에 같이 실어 보낸다.
+HITL_WHY = ("사람이 일을 안 한 게 아니라 타임스탬프에 안 잡힌 것이다 — "
+            "확인해야 할 사람 노동을 세션이 끝난 뒤 몰아서 했거나, "
+            "AI 를 돌려놓고 그게 도는 동안 다른 자리에서 했기 때문이다.")
+HITL_REMEDY = ("세션 트랜스크립트가 있으면 efficiency-calculator/session-api "
+               "의 세션 분석으로 다시 잴 수 있다 — 지시·검토·중단 단서에서 "
+               "사람 개입시간(hitl)을 뽑는다: "
+               "python req_actions_api.py session.jsonl")
 
-def mix_status(mix_parts, source):
-    """구성비 실측 상태 -> UI 가 그릴 dict."""
+# 구성비를 대상 세션의 저장소에서 못 잴 때의 차선책.
+MIX_PROXY_GUIDE = ("대상 세션의 저장소를 못 재면, 성격이 비슷한 예시 "
+                   "프로젝트를 대신 재서 개략 추정값을 얻어라 — 1 칸에서 "
+                   "'예시 프로젝트로 대신 잼' 을 켜고 재면 된다. "
+                   "그렇게 얻은 값은 추정이지 실측이 아니다.")
+
+
+def mix_status(mix_parts, source, proxy=False):
+    """구성비 상태 -> UI 가 그릴 dict.
+
+    level 은 셋이다. measured(대상에서 실측) · proxy(예시 프로젝트로 대신
+    잰 추정) · none(아예 없음). proxy 를 measured 와 같은 초록으로 두면
+    추정값을 실측으로 오해한다 — 그래서 따로 가른다.
+    """
     if not mix_parts:
-        return {"ok": False, "source": "none",
+        return {"ok": False, "level": "none", "source": "none",
                 "detail": "구성비 미측정 — 전부 코드 요율로 쳤다. "
-                          "effort 가 부풀려진다(문서·데이터가 코드값)."}
+                          "effort 가 부풀려진다(문서·데이터가 코드값).",
+                "guide": MIX_PROXY_GUIDE}
     tot = sum(mix_parts) or 1.0
-    return {"ok": True, "source": source,
-            "detail": "코드 %.1f%% / 문서 %.1f%% / 데이터 %.1f%%"
-                      % tuple(p / tot * 100 for p in mix_parts)}
+    share = "코드 %.1f%% / 문서 %.1f%% / 데이터 %.1f%%" \
+        % tuple(p / tot * 100 for p in mix_parts)
+    if proxy:
+        return {"ok": False, "level": "proxy", "source": source,
+                "detail": share + " — 예시 프로젝트로 대신 잰 값이다. "
+                                  "개략 추정이지 이 세션의 실측이 아니다.",
+                "guide": "보고할 때 '대리 측정(추정)' 이라고 반드시 밝혀라. "
+                         "대상 저장소를 쓸 수 있게 되면 다시 재라."}
+    return {"ok": True, "level": "measured", "source": source,
+            "detail": share, "guide": ""}
 
 
 def hitl_status(rows):
@@ -187,22 +221,24 @@ def hitl_status(rows):
     ok = not missing and not tiny
     if missing and len(missing) == n:
         detail = ("사람 개입시간이 전원 0 이다 — 효율(x_user·x_total)을 "
-                  "낼 수 없다. 사람이 붙어 있던 시간을 재서 채워라.")
+                  "낼 수 없다.")
     elif missing or tiny:
         bits = []
         if missing:
             bits.append("0 인 사람 %d명 (%s)"
                         % (len(missing), ", ".join(missing[:5])))
         if tiny:
-            bits.append("CC 시간의 %.0f%% 미만이라 계측 누락이 의심되는 "
-                        "사람 %d명 (%s)"
+            bits.append("CC 시간의 %.0f%% 미만이라 계측 누락인 사람 %d명 (%s)"
                         % (HITL_MIN_SHARE * 100, len(tiny),
                            ", ".join(tiny[:5])))
         detail = " · ".join(bits) + " — 그 사람들의 효율값은 못 믿는다."
     else:
         detail = "전원 사람 개입시간이 들어 있다 (%d명)." % n
     return {"ok": ok, "missing": missing, "tiny": tiny, "count": n,
-            "detail": detail}
+            "detail": detail,
+            "why": "" if ok else HITL_WHY,
+            "remedy": "" if ok else HITL_REMEDY,
+            "min_share": HITL_MIN_SHARE, "min_sec": HITL_MIN_SEC}
 
 
 def do_report(body):
@@ -258,7 +294,8 @@ def do_report(body):
         _LAST["rows"] = rows
         _LAST["total"] = tot
         _LAST["csv_path"] = csv_path
-    gates = {"mix": mix_status(mix_parts, mix_source),
+    proxy = bool((cfg or {}).get("proxy")) and mix_source == "config"
+    gates = {"mix": mix_status(mix_parts, mix_source, proxy),
              "hitl": hitl_status(rows)}
     return {"rows": rows, "total": tot, "fields": list(CR.FIELDS),
             "assumptions": buf.getvalue().strip(),
@@ -356,6 +393,9 @@ class Handler(BaseHTTPRequestHandler):
                     "default_config": CR.DEFAULT_CONFIG,
                     "hitl_min_share": HITL_MIN_SHARE,
                     "hitl_min_sec": HITL_MIN_SEC,
+                    "hitl_why": HITL_WHY,
+                    "hitl_remedy": HITL_REMEDY,
+                    "mix_proxy_guide": MIX_PROXY_GUIDE,
                     "home": os.path.expanduser("~")})
             if p == "/api/suggest-out":
                 return self._json(

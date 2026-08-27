@@ -191,6 +191,7 @@ class TestReport(ServerCase):
                                        "no_config": True,
                                        "mix": "0.5,0.4,0.1"})
         self.assertTrue(ok["gates"]["mix"]["ok"])
+        self.assertEqual(ok["gates"]["mix"]["level"], "measured")
         self.assertEqual(ok["gates"]["mix"]["source"], "inline")
 
     def test_gates_flag_zero_human_time(self):
@@ -205,14 +206,22 @@ class TestReport(ServerCase):
         self.assertEqual(g["tiny"], [])
 
     def test_gates_flag_implausibly_small_human_time(self):
-        """CC 시간에 견줘 너무 작은 개입시간도 계측 누락으로 잡는다."""
+        """CC 시간의 10% 미만이면 계측 누락으로 잡고, 까닭·대책도 같이 준다."""
         p = _write(os.path.join(self.tmp, "hitl-tiny.csv"), HEADER +
-                   "a,10,1000,100,100000,100\n"
-                   "b,10,1000,100,100000,40000\n")
+                   "a,10,1000,100,100000,100\n"        # 0.1%
+                   "b,10,1000,100,100000,5000\n"       # 5%  — 10% 미만
+                   "c,10,1000,100,100000,40000\n")     # 40%
         g = self.post("/api/report", {"csv_path": p, "no_config": True,
                                       "mix": "0.5,0.4,0.1"})["gates"]["hitl"]
         self.assertFalse(g["ok"])
-        self.assertEqual(g["tiny"], ["a"])
+        self.assertEqual(sorted(g["tiny"]), ["a", "b"])
+        self.assertEqual(g["min_share"], UI.HITL_MIN_SHARE)
+        self.assertIn("타임스탬프", g["why"])
+        self.assertIn("session-api", g["remedy"])
+
+    def test_threshold_is_ten_percent(self):
+        self.assertEqual(UI.HITL_MIN_SHARE, 0.10)
+        self.assertEqual(self.get("/api/meta")["hitl_min_share"], 0.10)
 
     def test_gates_pass_when_both_measured(self):
         p = _write(os.path.join(self.tmp, "hitl-ok.csv"), HEADER +
@@ -299,6 +308,42 @@ class TestMeasure(ServerCase):
                                             "config": out})
             self.assertFalse(res["uncorrected"])
             self.assertEqual(res["config_path"], out)
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_proxy_measure_is_marked_as_estimate(self):
+        """예시 프로젝트로 대신 재면 실측이 아니라고 파일·리포트에 박힌다."""
+        repo = self._git_repo()
+        out = os.path.join(self.tmp, "ratios-proxy.json")
+        try:
+            r = self.post("/api/measure", {"repos": [repo], "out": out,
+                                           "no_cloc": True, "proxy": True,
+                                           "proxy_note": "비슷한 사내 서비스"})
+            self.assertTrue(r["config"]["proxy"])
+            self.assertEqual(r["config"]["measured"]["proxy_note"],
+                             "비슷한 사내 서비스")
+            res = self.post("/api/report", {"csv_path": self.csv,
+                                            "config": out})
+            g = res["gates"]["mix"]
+            self.assertEqual(g["level"], "proxy")
+            self.assertFalse(g["ok"])            # 추정은 실측이 아니다
+            self.assertFalse(res["trustworthy"])
+            self.assertIn("추정", g["detail"])
+            self.assertIn("대리 측정(추정)", res["assumptions"])
+        finally:
+            shutil.rmtree(repo, ignore_errors=True)
+
+    def test_plain_measure_is_not_proxy(self):
+        repo = self._git_repo()
+        out = os.path.join(self.tmp, "ratios-real.json")
+        try:
+            r = self.post("/api/measure", {"repos": [repo], "out": out,
+                                           "no_cloc": True})
+            self.assertNotIn("proxy", r["config"])
+            g = self.post("/api/report", {"csv_path": self.csv,
+                                          "config": out})["gates"]["mix"]
+            self.assertEqual(g["level"], "measured")
+            self.assertTrue(g["ok"])
         finally:
             shutil.rmtree(repo, ignore_errors=True)
 

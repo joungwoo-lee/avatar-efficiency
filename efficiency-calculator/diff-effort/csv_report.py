@@ -202,6 +202,10 @@ def print_assumptions(band, mix, eff_ratio, mix_parts, comment_r, gen_r,
             if meas.get("at"):
                 print("                잰 시각: %s (기준: %s)"
                       % (meas["at"], meas.get("basis", "-")))
+            if (cfg or {}).get("proxy"):
+                # 예시 프로젝트로 대신 잰 값이다. 실측으로 읽히면 안 된다.
+                print("                ※ 대리 측정(추정) — %s"
+                      % meas.get("proxy_note", "대상 세션의 저장소가 아니다"))
     else:
         print("  설정          없음 — measure_ratios.py 로 먼저 재라")
     print("  밴드          %s — 작성 %.3f분/줄 (%.1f줄/h), "
