@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>diff-effort</title>
+<style>
+:root{
+  --bg:#f6f7f9; --card:#fff; --ink:#16181d; --dim:#6b7280; --line:#e3e6ea;
+  --accent:#2f5bd7; --accent-ink:#fff; --warn:#8a5300; --warn-bg:#fff6e0;
+  --err:#a11; --err-bg:#fdecec; --ok:#0a6b3d; --ok-bg:#e8f6ee;
+  --mono:'Cascadia Mono',Consolas,'D2Coding','Malgun Gothic',monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#14161a; --card:#1c1f25; --ink:#e8eaee; --dim:#9aa3b0; --line:#2b3038;
+  --accent:#6f96ff; --accent-ink:#0b0d10; --warn:#ffcf7a; --warn-bg:#3a2f14;
+  --err:#ff9a9a; --err-bg:#3a1c1c; --ok:#8ee0b4; --ok-bg:#153428;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:14px/1.55 -apple-system,'Segoe UI','Malgun Gothic',sans-serif}
+header{padding:18px 22px 6px}
+h1{font-size:18px;margin:0}
+header p{margin:4px 0 0;color:var(--dim);font-size:12.5px}
+main{padding:12px 22px 60px;max-width:1180px}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;
+  padding:14px 16px;margin:12px 0}
+h2{font-size:14px;margin:0 0 10px;display:flex;align-items:center;gap:8px}
+h2 .n{background:var(--accent);color:var(--accent-ink);border-radius:50%;
+  width:20px;height:20px;display:grid;place-items:center;font-size:12px}
+h3{font-size:12.5px;color:var(--dim);margin:14px 0 6px;font-weight:600}
+button{font:inherit;padding:6px 12px;border:1px solid var(--line);
+  background:var(--card);color:var(--ink);border-radius:7px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);color:var(--accent-ink);
+  border-color:var(--accent);font-weight:600}
+button:disabled{opacity:.5;cursor:not-allowed}
+input,select{font:inherit;padding:6px 8px;border:1px solid var(--line);
+  border-radius:7px;background:var(--bg);color:var(--ink)}
+input[type=text]{font-family:var(--mono);font-size:12.5px}
+label{font-size:12.5px;color:var(--dim)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}
+.grow{flex:1;min-width:220px}
+.browser{border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.crumbs{display:flex;gap:6px;align-items:center;padding:6px 8px;
+  background:var(--bg);border-bottom:1px solid var(--line);
+  font-family:var(--mono);font-size:12px;flex-wrap:wrap}
+.crumbs input{flex:1;min-width:180px}
+.list{max-height:230px;overflow:auto}
+.item{display:flex;align-items:center;gap:8px;padding:5px 10px;cursor:pointer;
+  border-bottom:1px solid var(--line);font-family:var(--mono);font-size:12.5px}
+.item:last-child{border-bottom:none}
+.item:hover{background:var(--bg)}
+.item .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tag{font-size:10.5px;padding:1px 6px;border-radius:999px;
+  background:var(--ok-bg);color:var(--ok);font-family:inherit}
+.picked{list-style:none;padding:0;margin:8px 0 0}
+.picked li{display:flex;align-items:center;gap:8px;padding:5px 8px;
+  border:1px solid var(--line);border-radius:7px;margin-bottom:6px;
+  font-family:var(--mono);font-size:12.5px}
+.picked li span{flex:1;overflow-wrap:anywhere}
+.empty{color:var(--dim);font-size:12.5px;padding:6px 2px}
+pre{font-family:var(--mono);font-size:12px;background:var(--bg);
+  border:1px solid var(--line);border-radius:8px;padding:10px;
+  overflow:auto;margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.cards{display:flex;gap:10px;flex-wrap:wrap;margin:2px 0 10px}
+.kpi{border:1px solid var(--line);border-radius:9px;padding:9px 13px;
+  min-width:120px;background:var(--bg)}
+.kpi b{display:block;font-size:19px;font-variant-numeric:tabular-nums}
+.kpi small{color:var(--dim);font-size:11.5px}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:12.5px}
+th,td{padding:6px 10px;text-align:right;white-space:nowrap;
+  border-bottom:1px solid var(--line)}
+th{background:var(--bg);color:var(--dim);font-weight:600;position:sticky;top:0}
+th:first-child,td:first-child{text-align:left}
+tr.total td{font-weight:700;background:var(--bg)}
+.msg{padding:8px 11px;border-radius:8px;font-size:12.5px;margin:8px 0;
+  display:none;overflow-wrap:anywhere}
+.msg.on{display:block}
+.msg.err{background:var(--err-bg);color:var(--err)}
+.msg.warn{background:var(--warn-bg);color:var(--warn)}
+.msg.ok{background:var(--ok-bg);color:var(--ok)}
+.hint{color:var(--dim);font-size:12px;margin:6px 0 0}
+.spin{display:none;width:13px;height:13px;border:2px solid var(--line);
+  border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite}
+.spin.on{display:inline-block}
+@keyframes sp{to{transform:rotate(360deg)}}
+details summary{cursor:pointer;color:var(--dim);font-size:12.5px;margin-top:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>diff-effort — 코드 변경 라인 → 사람 노동 환산</h1>
+  <p>저장소에서 보정 비율을 재고(1), 사용량 CSV 를 넣으면(3) 사람별 노동 시간과 효율 지표를 낸다(4).</p>
+</header>
+<main>
+
+<!-- 1 -->
+<section>
+  <h2><span class="n">1</span> 비율 잴 대상 저장소</h2>
+  <div class="browser">
+    <div class="crumbs">
+      <button id="repoUp">↑ 상위</button>
+      <input type="text" id="repoPath" placeholder="경로를 직접 입력하고 Enter">
+      <button id="repoGo">이동</button>
+      <button id="repoAddCur" class="primary">현재 폴더 담기</button>
+    </div>
+    <div class="list" id="repoList"></div>
+  </div>
+  <ul class="picked" id="repoPicked"></ul>
+  <div class="empty" id="repoEmpty">아직 고른 저장소가 없다. 위에서 <b>git</b> 표시가 붙은 폴더를 누르면 담긴다.</div>
+  <div class="row">
+    <label>기간 <input type="text" id="since" size="11" placeholder="2025-01-01"></label>
+    <label>~ <input type="text" id="until" size="11" placeholder="2025-12-31"></label>
+    <label>저자 <input type="text" id="author" size="18" placeholder="me@corp.com"></label>
+    <label><input type="checkbox" id="noCloc"> cloc 무시(내장 계수기)</label>
+  </div>
+  <div class="row">
+    <button class="primary" id="btnMeasure">비율 재기 → ratios.json 저장</button>
+    <span class="spin" id="spinMeasure"></span>
+    <span class="hint" id="measureHint">저장소당 몇 초 걸린다.</span>
+  </div>
+  <div class="msg err" id="measureErr"></div>
+</section>
+
+<!-- 2 -->
+<section>
+  <h2><span class="n">2</span> 측정된 비율 <button id="btnReload" style="margin-left:auto">새로고침</button></h2>
+  <div id="ratioBox"></div>
+  <div class="msg warn" id="ratioWarn"></div>
+  <details id="ratioDetails" hidden>
+    <summary>측정 원문 / ratios.json 전체</summary>
+    <pre id="ratioRaw"></pre>
+  </details>
+</section>
+
+<!-- 3 -->
+<section>
+  <h2><span class="n">3</span> 입력 CSV</h2>
+  <div class="browser">
+    <div class="crumbs">
+      <button id="csvUp">↑ 상위</button>
+      <input type="text" id="csvPath" placeholder="폴더 경로 또는 CSV 파일 경로를 직접 입력하고 Enter">
+      <button id="csvGo">이동</button>
+    </div>
+    <div class="list" id="csvList"></div>
+  </div>
+  <div class="row">
+    <label class="grow">고른 CSV<br><input type="text" id="csvPicked" class="grow" style="width:100%" placeholder="아직 안 골랐다"></label>
+  </div>
+  <div class="hint">필수 컬럼: <span id="reqCols"></span></div>
+  <div class="row">
+    <label>밴드 <select id="band"></select></label>
+    <label>정렬 <select id="sort"></select></label>
+    <label><input type="checkbox" id="asc"> 오름차순</label>
+    <label><input type="checkbox" id="noConfig"> 보정 없이(과대)</label>
+  </div>
+  <div class="row">
+    <button class="primary" id="btnReport">리포트 돌리기</button>
+    <span class="spin" id="spinReport"></span>
+  </div>
+  <div class="msg err" id="reportErr"></div>
+</section>
+
+<!-- 4 -->
+<section>
+  <h2><span class="n">4</span> 출력</h2>
+  <div class="msg warn" id="outWarn"></div>
+  <div id="outEmpty" class="empty">아직 결과가 없다. 3 에서 CSV 를 고르고 <b>리포트 돌리기</b>.</div>
+  <div id="outBox" hidden>
+    <div class="cards" id="kpis"></div>
+    <div class="tablewrap"><table id="outTable"></table></div>
+    <h3>[가정] · [전체 합산] — 보고할 때 이 블록을 같이 붙일 것</h3>
+    <pre id="assump"></pre>
+    <h3>리포트 CSV 저장</h3>
+    <div class="row">
+      <input type="text" id="outPath" class="grow" style="width:100%">
+    </div>
+    <div class="row">
+      <button class="primary" id="btnSave">이 경로로 저장</button>
+      <span class="spin" id="spinSave"></span>
+    </div>
+    <div class="msg ok" id="saveOk"></div>
+    <div class="msg err" id="saveErr"></div>
+  </div>
+</section>
+
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function msg(el, text, cls) {
+  el.className = 'msg ' + (cls || 'err') + (text ? ' on' : '');
+  el.textContent = text || '';
+}
+function busy(spin, btn, on) {
+  spin.classList.toggle('on', on);
+  btn.disabled = on;
+}
+async function api(path, body) {
+  const opt = body ? {method: 'POST', headers: {'Content-Type': 'application/json'},
+                      body: JSON.stringify(body)} : {};
+  const r = await fetch(path, opt);
+  const j = await r.json();
+  if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+
+let META = {};
+let CUR = {repo: '', csv: ''};
+const REPOS = [];
+
+/* ---------------------------------------------------------- 폴더 탐색기 */
+function renderBrowser(listEl, pathEl, data, kind, onDir, onFile) {
+  pathEl.value = data.path || '';
+  listEl.innerHTML = '';
+  const add = (label, tag, click, title) => {
+    const d = document.createElement('div');
+    d.className = 'item';
+    d.title = title || label;
+    d.innerHTML = '<span class="nm">' + esc(label) + '</span>' +
+                  (tag ? '<span class="tag">' + esc(tag) + '</span>' : '');
+    d.onclick = click;
+    listEl.appendChild(d);
+  };
+  if (data.up !== null && data.up !== undefined)
+    add('..', '', () => onDir(data.up));
+  data.dirs.forEach(d => add(d.name + '/', d.repo ? 'git' : '',
+    () => (d.repo && kind === 'dir') ? onFile(d.path) : onDir(d.path), d.path));
+  (data.files || []).forEach(f => add(f.name,
+    (f.size / 1024).toFixed(1) + ' KB', () => onFile(f.path), f.path));
+  if (!listEl.children.length)
+    listEl.innerHTML = '<div class="empty" style="padding:10px">비었다.</div>';
+}
+
+async function goRepo(p) {
+  try {
+    const d = await api('/api/browse?kind=dir&path=' + encodeURIComponent(p || ''));
+    CUR.repo = d.path;
+    $('repoAddCur').disabled = !d.is_repo;
+    $('repoAddCur').textContent = d.is_repo ? '현재 폴더 담기 (git)' : '현재 폴더는 git 아님';
+    renderBrowser($('repoList'), $('repoPath'), d, 'dir', goRepo, addRepo);
+    msg($('measureErr'), '');
+  } catch (e) { msg($('measureErr'), e.message); }
+}
+
+function addRepo(p) {
+  if (REPOS.includes(p)) return;
+  REPOS.push(p);
+  drawRepos();
+}
+function drawRepos() {
+  const ul = $('repoPicked');
+  ul.innerHTML = '';
+  REPOS.forEach((p, i) => {
+    const li = document.createElement('li');
+    li.innerHTML = '<span>' + esc(p) + '</span>';
+    const b = document.createElement('button');
+    b.textContent = '빼기';
+    b.onclick = () => { REPOS.splice(i, 1); drawRepos(); };
+    li.appendChild(b);
+    ul.appendChild(li);
+  });
+  $('repoEmpty').style.display = REPOS.length ? 'none' : '';
+}
+
+async function goCsv(p) {
+  try {
+    const d = await api('/api/browse?kind=csv&path=' + encodeURIComponent(p || ''));
+    CUR.csv = d.path;
+    renderBrowser($('csvList'), $('csvPath'), d, 'csv', goCsv, pickCsv);
+    msg($('reportErr'), '');
+  } catch (e) { msg($('reportErr'), e.message); }
+}
+async function pickCsv(p) {
+  $('csvPicked').value = p;
+  try { $('outPath').value = (await api('/api/suggest-out?csv_path=' +
+        encodeURIComponent(p))).out; } catch (e) {}
+}
+
+/* ---------------------------------------------------------- 2. 비율 표시 */
+function pct(x) { return (x * 100).toFixed(1) + '%'; }
+
+function drawRatios(r) {
+  const box = $('ratioBox');
+  if (!r.config) {
+    box.innerHTML = '';
+    msg($('ratioWarn'), 'ratios.json 이 없다 — 보정 없이 돌면 절대 시간이 대략 2배 과대다. ' +
+        '위 1 에서 저장소를 골라 재라. 저장소 접근이 안 되면 사람 간 순위만 읽을 것.', 'warn');
+    $('ratioDetails').hidden = true;
+    return;
+  }
+  const c = r.config, m = c.measured || {}, mix = c.mix || {};
+  msg($('ratioWarn'), '');
+  box.innerHTML =
+    '<div class="cards">' +
+    kpi(pct(mix.code), '코드 비중') +
+    kpi(pct(mix.doc), '문서 비중') +
+    kpi(pct(mix.data), '데이터 비중') +
+    kpi(pct(c.comment_ratio), '주석·빈 줄') +
+    kpi(pct(c.generated_ratio), '자동생성물') +
+    '</div>' +
+    '<div class="hint">설정 파일 <b>' + esc(r.path) + '</b><br>' +
+    '잰 대상 ' + esc((m.repos || []).join(', ') || '(미기록)') +
+    ' / 기간 ' + esc([m.since, m.until].filter(Boolean).join(' ~ ') || '전체') +
+    ' / 잰 시각 ' + esc(m.at || '-') +
+    '<br>기준 ' + esc(m.basis || '-') +
+    ' · diff ' + (m.diff_lines_total || 0).toLocaleString() + '줄' +
+    ' · 주석 스캔 ' + (m.comment_lines_scanned || 0).toLocaleString() + '줄' +
+    ' (' + esc(m.comment_source || '-') + ')</div>';
+  $('ratioDetails').hidden = false;
+  $('ratioRaw').textContent = (window.__measureText ? window.__measureText + '\n\n' : '') +
+    JSON.stringify(c, null, 2);
+}
+function kpi(v, label) {
+  return '<div class="kpi"><b>' + esc(v) + '</b><small>' + esc(label) + '</small></div>';
+}
+async function reloadRatios() {
+  try { drawRatios(await api('/api/ratios')); }
+  catch (e) { msg($('ratioWarn'), e.message, 'err'); }
+}
+
+/* ---------------------------------------------------------- 4. 결과 표시 */
+const LABEL = {
+  employee_id: '사람', lines_added: '추가', lines_removed: '삭제',
+  effort_min: '사람노동(분)', effort_hours: '시간', cli_active_sec: 'CC초',
+  user_active_sec: '사용자초', total_cost: '비용($)',
+  x_total: 'x_total', x_user: 'x_user', min_per_usd: '분/$'
+};
+function cell(k, v) {
+  if (v === null || v === undefined || v === '') return '-';
+  if (k === 'employee_id') return esc(v);
+  if (k === 'total_cost') return Number(v).toFixed(2);
+  if (k === 'lines_added' || k === 'lines_removed' ||
+      k === 'cli_active_sec' || k === 'user_active_sec')
+    return Number(v).toLocaleString();
+  return Number(v).toFixed(k === 'effort_hours' ? 2 : (k === 'effort_min' ? 1 : 2));
+}
+function drawReport(res) {
+  $('outEmpty').hidden = true;
+  $('outBox').hidden = false;
+  const F = res.fields, t = res.total;
+  let h = '<thead><tr>' + F.map(k => '<th>' + esc(LABEL[k] || k) + '</th>').join('') +
+          '</tr></thead><tbody>';
+  res.rows.forEach(r => {
+    h += '<tr>' + F.map(k => '<td>' + cell(k, r[k]) + '</td>').join('') + '</tr>';
+  });
+  if (t) h += '<tr class="total">' + F.map(k => '<td>' + cell(k, t[k]) + '</td>').join('') + '</tr>';
+  $('outTable').innerHTML = h + '</tbody>';
+
+  $('kpis').innerHTML = t ? (
+    kpi(Number(t.effort_hours).toFixed(1) + ' h', '사람노동 합') +
+    kpi(t.x_total === null ? '-' : Number(t.x_total).toFixed(2) + '배', '사람노동 / (CC+사용자)시간') +
+    kpi(t.x_user === null ? '-' : Number(t.x_user).toFixed(2) + '배', '사람노동 / 사용자시간') +
+    kpi(t.min_per_usd === null ? '-' : Number(t.min_per_usd).toFixed(1), '분 / $') +
+    kpi(res.rows.length + '명', '인원')
+  ) : '';
+
+  $('assump').textContent = res.assumptions;
+  if (!$('outPath').value) $('outPath').value = res.out_suggest;
+  msg($('outWarn'), res.uncorrected
+    ? '보정 미적용, 절대값 과대 — 절대 시간은 믿지 말고 사람 간 순위만 읽어라. 1 에서 비율을 재면 사라진다.'
+    : '', 'warn');
+  msg($('saveOk'), ''); msg($('saveErr'), '');
+}
+
+/* ---------------------------------------------------------- 배선 */
+$('repoUp').onclick = () => goRepo(CUR.repo ? (CUR.repo + '/..') : '');
+$('repoGo').onclick = () => goRepo($('repoPath').value.trim());
+$('repoPath').onkeydown = (e) => { if (e.key === 'Enter') goRepo($('repoPath').value.trim()); };
+$('repoAddCur').onclick = () => addRepo(CUR.repo);
+
+$('csvUp').onclick = () => goCsv(CUR.csv ? (CUR.csv + '/..') : '');
+$('csvGo').onclick = () => {
+  const v = $('csvPath').value.trim();
+  if (/\.csv$/i.test(v)) { pickCsv(v); goCsv(v.replace(/[\\/][^\\/]*$/, '')); }
+  else goCsv(v);
+};
+$('csvPath').onkeydown = (e) => { if (e.key === 'Enter') $('csvGo').click(); };
+$('btnReload').onclick = reloadRatios;
+
+$('btnMeasure').onclick = async () => {
+  msg($('measureErr'), '');
+  if (!REPOS.length) return msg($('measureErr'), '저장소를 하나 이상 골라라');
+  busy($('spinMeasure'), $('btnMeasure'), true);
+  $('measureHint').textContent = '재는 중… ' + REPOS.length + '개 저장소';
+  try {
+    const r = await api('/api/measure', {
+      repos: REPOS, since: $('since').value.trim(), until: $('until').value.trim(),
+      author: $('author').value.trim(), no_cloc: $('noCloc').checked});
+    window.__measureText = r.text;
+    $('measureHint').textContent = '저장: ' + r.saved_to;
+    await reloadRatios();
+  } catch (e) { msg($('measureErr'), e.message); $('measureHint').textContent = ''; }
+  busy($('spinMeasure'), $('btnMeasure'), false);
+};
+
+$('btnReport').onclick = async () => {
+  msg($('reportErr'), '');
+  const p = $('csvPicked').value.trim();
+  if (!p) return msg($('reportErr'), 'CSV 를 골라라');
+  busy($('spinReport'), $('btnReport'), true);
+  try {
+    drawReport(await api('/api/report', {
+      csv_path: p, band: $('band').value, sort: $('sort').value,
+      asc: $('asc').checked, no_config: $('noConfig').checked}));
+  } catch (e) { msg($('reportErr'), e.message); }
+  busy($('spinReport'), $('btnReport'), false);
+};
+
+$('btnSave').onclick = async () => {
+  msg($('saveOk'), ''); msg($('saveErr'), '');
+  busy($('spinSave'), $('btnSave'), true);
+  try {
+    const r = await api('/api/save', {out: $('outPath').value.trim()});
+    msg($('saveOk'), '저장했다: ' + r.saved_to + '  (' + r.rows + '명 + 합계)', 'ok');
+  } catch (e) { msg($('saveErr'), e.message); }
+  busy($('spinSave'), $('btnSave'), false);
+};
+
+(async function init() {
+  META = await api('/api/meta');
+  $('reqCols').textContent = META.required.join(' · ');
+  META.bands.forEach(b => $('band').add(new Option(b, b, b === META.default_band,
+                                                   b === META.default_band)));
+  META.sort_keys.forEach(s => $('sort').add(new Option(s, s)));
+  await goRepo(META.home);
+  await goCsv(META.here);
+  await reloadRatios();
+})();
+</script>
+</body>
+</html>
