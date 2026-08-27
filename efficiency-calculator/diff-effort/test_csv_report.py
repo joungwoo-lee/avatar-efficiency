@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from csv_report import analyze_csv, analyze_row, sort_rows, totals
+from diff_effort import effective_ratio, mix_factor
 
 HEADER = ("employee_id,total_cost,lines_added,lines_removed,"
           "cli_active_sec,user_active_sec\n")
@@ -89,6 +90,14 @@ class TestAnalyzeCsv(unittest.TestCase):
         mid = analyze_csv(self.path, "mid")[0]["effort_min"]
         slow = analyze_csv(self.path, "slow")[0]["effort_min"]
         self.assertGreater(slow, mid)
+
+    def test_mix_and_eff_ratio_reduce(self):
+        base = analyze_csv(self.path)[0]["effort_min"]
+        mix = mix_factor(0.44, 0.315, 0.244)
+        er = effective_ratio(0.25, 0.10)
+        got = analyze_csv(self.path, "mid", mix, er)[0]["effort_min"]
+        # 추가만 있는 행이라 두 계수가 그대로 곱해진다
+        self.assertAlmostEqual(got, base * mix * er, places=0)
 
 
 class TestTotalsAndSort(unittest.TestCase):

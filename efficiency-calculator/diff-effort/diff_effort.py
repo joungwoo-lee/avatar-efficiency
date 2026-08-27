@@ -4,9 +4,15 @@
 세션 기록 없이 **diff 라인 수만** 있을 때 쓰는 독립 환산기다.
 근거·유도는 README.md 참조.
 
-    분 = 추가줄 × W_new
-       + 순삭제(부분) × W_del
-       + 삭제(파일 통째) × W_scrap
+    유효추가 = 추가줄 × 유효라인비율
+    유효삭제 = max(0, 삭제줄 × 유효라인비율 − 유효추가)      # 교체 쌍 제거
+
+    분 = (유효추가 × W_new + 유효삭제 × W_del) × 구성비 계수
+
+  W_new  전체 작업 생산성 (Prechelt) — 밴드 22~31 줄/시간
+  W_del  삭제 판단 = 인스펙션 속도 (Fagan 계열) — 200 줄/시간
+  구성비 계수  코드/문서/데이터 비율에서 나오는 실효 요율 배수
+  유효라인비율 주석·빈 줄·자동생성물을 걷어낸 비율
 
 이 모듈은 자기완결이다 — ../agent-effort/rates.json 을 읽지 않고
 자체 상수를 쓴다. 세션 기반 측정기(../session-api)와 요율 체계가
@@ -21,11 +27,15 @@ import json
 # 전체 작업 생산성 (Prechelt 2000, non-comment LOC/시간). 밴드 22~31.
 _LOC_PER_HOUR = {"fast": 31.0, "mid": 26.5, "slow": 22.0}
 
-# 이해(comprehension) 시간 분율 (Xia et al. 2018, ~58%).
-_COMPREHENSION_SHARE = 0.58
+# 삭제 판단 속도 (줄/시간). 코드 인스펙션·리뷰 속도 앵커 — README §2.2.
+# 밴드(작성 생산성)와 무관한 별도 상수다: 지우는 일은 짜는 일이 아니라
+# 읽고 판단하는 일이라 작성 속도와 같이 움직일 이유가 없다.
+_DELETE_LOC_PER_HOUR = 200.0
 
-# 파일 통째 폐기 — 읽지 않고 버린다. 훑기 수준 seed (분/줄).
-_SCRAP_MIN_PER_LINE = 0.025
+# 종류별 요율 배수 — ../agent-effort/rates.json human_write_model 의
+# 코드 0.08 / 문서 0.05 / 데이터 0.01 비율을 그대로 승계 (README §2.6).
+KIND_FACTOR = {"code": 1.0, "doc": 0.625, "data": 0.125}
+KINDS = ("code", "doc", "data")
 
 BANDS = ("fast", "mid", "slow")
 DEFAULT_BAND = "mid"
@@ -34,9 +44,8 @@ DEFAULT_BAND = "mid"
 def rates(band=DEFAULT_BAND):
     """밴드별 줄당 요율 (분/줄).
 
-    W_new   = 60 / (전체 작업 줄/시간)
-    W_del   = 60 / (전체 작업 줄/시간 ÷ 이해 분율)
-    W_scrap = 고정 seed
+    W_new = 60 / (전체 작업 줄/시간)
+    W_del = 60 / (삭제 판단 줄/시간)   — 밴드와 무관한 고정 앵커
     """
     if band not in _LOC_PER_HOUR:
         raise ValueError("band must be one of %s" % (BANDS,))
@@ -45,65 +54,106 @@ def rates(band=DEFAULT_BAND):
         "band": band,
         "loc_per_hour": loc_h,
         "new_min_per_line": 60.0 / loc_h,
-        "delete_min_per_line": 60.0 / (loc_h / _COMPREHENSION_SHARE),
-        "scrap_min_per_line": _SCRAP_MIN_PER_LINE,
+        "delete_loc_per_hour": _DELETE_LOC_PER_HOUR,
+        "delete_min_per_line": 60.0 / _DELETE_LOC_PER_HOUR,
     }
 
 
-def diff_effort(added, deleted, file_deleted_lines=0, band=DEFAULT_BAND):
+def mix_factor(code=1.0, doc=0.0, data=0.0):
+    """코드/문서/데이터 구성비 -> 실효 요율 배수.
+
+    비율은 합이 1이 아니어도 된다 — 내부에서 정규화한다.
+    (0.44, 0.315, 0.244) -> 0.667
+
+    가정: 종류별 상대 비용(코드 1 : 문서 0.625 : 데이터 0.125)은
+    타이핑 축에서 잰 비율인데, 전체 작업 축으로 옮겨도 같다고 본다.
+    문서·데이터의 '전체 작업 생산성' 문헌이 없어서 쓰는 가정이다.
+    """
+    w = {"code": float(code), "doc": float(doc), "data": float(data)}
+    for k, v in w.items():
+        if v < 0:
+            raise ValueError("구성비는 음수일 수 없다: %s=%s" % (k, v))
+    total = sum(w.values())
+    if total <= 0:
+        raise ValueError("구성비 합이 0이다")
+    return sum(w[k] / total * KIND_FACTOR[k] for k in KINDS)
+
+
+def effective_ratio(comment_ratio=0.0, generated_ratio=0.0):
+    """주석·빈 줄 비율, 자동생성물 비율 -> 유효 라인 비율.
+
+    Prechelt 의 요율은 non-comment LOC 기준이므로, 원시 diff 라인 수를
+    그 기준으로 되돌리는 계수다. 두 비율은 서로 다른 축이라 곱한다
+    (생성 파일 안의 주석을 두 번 빼는 오차는 있으나 방향이 안전하다).
+
+    (0.25, 0.10) -> 0.675
+    """
+    for name, v in (("comment_ratio", comment_ratio),
+                    ("generated_ratio", generated_ratio)):
+        if not 0.0 <= float(v) < 1.0:
+            raise ValueError("%s 는 0 이상 1 미만이어야 한다: %s" % (name, v))
+    return (1.0 - float(comment_ratio)) * (1.0 - float(generated_ratio))
+
+
+def diff_effort(added, deleted, band=DEFAULT_BAND, mix=None, eff_ratio=1.0):
     """추가/삭제 라인 수 → 사람 노동(분).
 
-    added               추가 라인 수 (주석·빈 줄 제외 권장)
-    deleted             삭제 라인 수 (file_deleted_lines 포함한 전체)
-    file_deleted_lines  그중 '파일이 통째로 사라진' 삭제 라인 수
-    band                "fast" | "mid" | "slow"
+    added      추가 라인 수 (원시값 그대로 넣고 eff_ratio 로 보정)
+    deleted    삭제 라인 수
+    band       "fast" | "mid" | "slow"
+    mix        구성비 계수 (mix_factor 결과) 또는 None(=1.0, 전부 코드)
+    eff_ratio  유효 라인 비율 (effective_ratio 결과) 또는 1.0(미보정)
 
-    순삭제 = max(0, 부분삭제 − 추가). git diff 는 한 줄을 고치면
+    순삭제 = max(0, 유효삭제 − 유효추가). git diff 는 한 줄을 고치면
     +1/−1 쌍으로 잡으므로 그 쌍을 빼야 타이핑을 두 번 세지 않는다.
-    파일 통째 삭제는 대응하는 추가가 없으므로 쌍 제거에서 제외한다.
+
+    파일 통째 삭제는 별도로 다루지 않는다 — 집계 데이터에 그 구분이
+    잡히지 않고, 삭제 요율 자체가 판단 비용 수준으로 내려와 있어
+    따로 뺄 실익이 없다.
     """
     added = int(added)
     deleted = int(deleted)
-    file_deleted_lines = int(file_deleted_lines)
-    if added < 0 or deleted < 0 or file_deleted_lines < 0:
+    if added < 0 or deleted < 0:
         raise ValueError("라인 수는 음수일 수 없다")
-    if file_deleted_lines > deleted:
-        raise ValueError("file_deleted_lines 는 deleted 를 넘을 수 없다")
+    mix = 1.0 if mix is None else float(mix)
+    eff_ratio = float(eff_ratio)
+    if mix <= 0:
+        raise ValueError("mix 는 양수여야 한다")
+    if not 0.0 < eff_ratio <= 1.0:
+        raise ValueError("eff_ratio 는 0 초과 1 이하여야 한다")
 
     r = rates(band)
-    partial_deleted = deleted - file_deleted_lines
-    net_deleted = max(0, partial_deleted - added)
-    replaced = partial_deleted - net_deleted
+    eff_added = added * eff_ratio
+    eff_deleted = deleted * eff_ratio
+    net_deleted = max(0.0, eff_deleted - eff_added)
+    replaced = eff_deleted - net_deleted
 
-    write_min = added * r["new_min_per_line"]
-    delete_min = net_deleted * r["delete_min_per_line"]
-    scrap_min = file_deleted_lines * r["scrap_min_per_line"]
-    total = write_min + delete_min + scrap_min
+    write_min = eff_added * r["new_min_per_line"] * mix
+    delete_min = net_deleted * r["delete_min_per_line"] * mix
+    total = write_min + delete_min
 
     return {
         "minutes": round(total, 1),
         "hours": round(total / 60.0, 2),
         "band": band,
-        "input": {"added": added, "deleted": deleted,
-                  "file_deleted_lines": file_deleted_lines},
+        "mix": round(mix, 4),
+        "eff_ratio": round(eff_ratio, 4),
+        "input": {"added": added, "deleted": deleted},
         "breakdown": {
-            "write": {"lines": added,
-                      "min_per_line": round(r["new_min_per_line"], 3),
+            "write": {"lines": round(eff_added, 1),
+                      "min_per_line": round(r["new_min_per_line"] * mix, 4),
                       "minutes": round(write_min, 1)},
-            "delete": {"lines": net_deleted,
-                       "min_per_line": round(r["delete_min_per_line"], 3),
+            "delete": {"lines": round(net_deleted, 1),
+                       "min_per_line": round(r["delete_min_per_line"] * mix, 4),
                        "minutes": round(delete_min, 1)},
-            "scrap": {"lines": file_deleted_lines,
-                      "min_per_line": r["scrap_min_per_line"],
-                      "minutes": round(scrap_min, 1)},
         },
-        "replaced_pairs": replaced,
+        "replaced_pairs": round(replaced, 1),
     }
 
 
-def diff_effort_band(added, deleted, file_deleted_lines=0):
+def diff_effort_band(added, deleted, mix=None, eff_ratio=1.0):
     """밴드 3종을 한 번에 — 대표값 하나만 내지 말고 폭을 같이 보라 (README §4)."""
-    out = {b: diff_effort(added, deleted, file_deleted_lines, b) for b in BANDS}
+    out = {b: diff_effort(added, deleted, b, mix, eff_ratio) for b in BANDS}
     return {
         "mid_minutes": out["mid"]["minutes"],
         "range_minutes": [out["fast"]["minutes"], out["slow"]["minutes"]],
@@ -118,19 +168,31 @@ def _main():
         description="코드 라인 변경수 → 사람 노동(분) 환산")
     p.add_argument("added", type=int, help="추가 라인 수")
     p.add_argument("deleted", type=int, help="삭제 라인 수")
-    p.add_argument("--file-deleted", type=int, default=0,
-                   help="삭제 라인 중 파일이 통째로 사라진 몫 (기본 0)")
     p.add_argument("--band", choices=BANDS, default=DEFAULT_BAND,
                    help="생산성 밴드 (기본 mid)")
+    p.add_argument("--mix", default=None, metavar="CODE,DOC,DATA",
+                   help="구성비 (예: 0.44,0.315,0.244). 생략하면 전부 코드")
+    p.add_argument("--comment-ratio", type=float, default=0.0,
+                   help="주석·빈 줄 비율 (예: 0.25). 기본 0 = 미보정")
+    p.add_argument("--generated-ratio", type=float, default=0.0,
+                   help="자동생성물 비율 (예: 0.10). 기본 0 = 미보정")
     p.add_argument("--all-bands", action="store_true",
                    help="fast/mid/slow 3종을 함께 출력")
     p.add_argument("--json", action="store_true", help="JSON 으로 출력")
     a = p.parse_args()
 
+    mix = None
+    if a.mix:
+        parts = [float(x) for x in a.mix.split(",")]
+        if len(parts) != 3:
+            p.error("--mix 는 CODE,DOC,DATA 세 값이어야 한다")
+        mix = mix_factor(*parts)
+    er = effective_ratio(a.comment_ratio, a.generated_ratio)
+
     if a.all_bands:
-        res = diff_effort_band(a.added, a.deleted, a.file_deleted)
+        res = diff_effort_band(a.added, a.deleted, mix, er)
     else:
-        res = diff_effort(a.added, a.deleted, a.file_deleted, a.band)
+        res = diff_effort(a.added, a.deleted, a.band, mix, er)
 
     if a.json:
         print(json.dumps(res, ensure_ascii=False, indent=2))
@@ -145,18 +207,16 @@ def _main():
         return
 
     b = res["breakdown"]
-    print("사람 노동 %.1f분 (%.2f시간)  [band=%s]"
-          % (res["minutes"], res["hours"], res["band"]))
-    print("  작성   %6d줄 x %.3f = %8.1f분" %
+    print("사람 노동 %.1f분 (%.2f시간)  [band=%s, mix=%.4f, eff_ratio=%.4f]"
+          % (res["minutes"], res["hours"], res["band"],
+             res["mix"], res["eff_ratio"]))
+    print("  작성  %10.1f줄 x %.4f = %10.1f분" %
           (b["write"]["lines"], b["write"]["min_per_line"],
            b["write"]["minutes"]))
-    print("  삭제   %6d줄 x %.3f = %8.1f분" %
+    print("  삭제  %10.1f줄 x %.4f = %10.1f분" %
           (b["delete"]["lines"], b["delete"]["min_per_line"],
            b["delete"]["minutes"]))
-    print("  폐기   %6d줄 x %.3f = %8.1f분" %
-          (b["scrap"]["lines"], b["scrap"]["min_per_line"],
-           b["scrap"]["minutes"]))
-    print("  (교체 쌍 %d줄은 중복 제거됨)" % res["replaced_pairs"])
+    print("  (교체 쌍 %.1f줄은 중복 제거됨)" % res["replaced_pairs"])
 
 
 if __name__ == "__main__":
