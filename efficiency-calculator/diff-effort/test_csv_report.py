@@ -33,13 +33,12 @@ class TestAnalyzeRow(unittest.TestCase):
                "lines_removed": "25046", "cli_active_sec": "842715",
                "user_active_sec": "37005", "total_cost": "10638.70"}
         r = analyze_row(row)
-        self.assertAlmostEqual(r["effort_min"], (179887 - 25046) * 60 / 26.5,
-                               places=1)
-        m = r["effort_min"]
-        self.assertAlmostEqual(r["x_user"], m / (37005 / 60.0), places=3)
-        self.assertAlmostEqual(r["x_total"], m / ((842715 + 37005) / 60.0),
-                               places=3)
-        self.assertAlmostEqual(r["min_per_usd"], m / 10638.70, places=3)
+        self.assertAlmostEqual(r["effort_min"], 407291.3, places=1)
+        # x_user = 407291.3 / (37005/60)
+        self.assertAlmostEqual(r["x_user"], 407291.3 / (37005 / 60.0), places=3)
+        self.assertAlmostEqual(r["x_total"],
+                               407291.3 / ((842715 + 37005) / 60.0), places=3)
+        self.assertAlmostEqual(r["min_per_usd"], 407291.3 / 10638.70, places=3)
 
     def test_zero_denominators_are_none(self):
         row = {"employee_id": "z", "lines_added": "0", "lines_removed": "0",

@@ -5,13 +5,9 @@
 근거·유도는 README.md 참조.
 
     유효추가 = 추가줄 × 유효라인비율
-    유효삭제 = 삭제줄 × 유효라인비율
+    유효삭제 = max(0, 삭제줄 × 유효라인비율 − 유효추가)      # 교체 쌍 제거
 
-    살아남음 = max(0, 유효추가 − 유효삭제)     # 결말에 남은 것 = 작성 노동
-    순삭제   = max(0, 유효삭제 − 유효추가)     # 순수하게 사라진 것
-    번복     = min(유효추가, 유효삭제)         # 썼다 지운 왕복 → 0
-
-    분 = (살아남음 × W_new + 순삭제 × W_del) × 구성비 계수
+    분 = (유효추가 × W_new + 유효삭제 × W_del) × 구성비 계수
 
   W_new  전체 작업 생산성 (Prechelt) — 밴드 22~31 줄/시간
   W_del  삭제 판단 = 인스펙션 속도 (Fagan 계열) — 200 줄/시간
@@ -119,10 +115,8 @@ def diff_effort(added, deleted, band=DEFAULT_BAND, mix=None, eff_ratio=1.0):
     mix        구성비 계수 (mix_factor 결과) 또는 None(=1.0, 전부 코드)
     eff_ratio  유효 라인 비율 (effective_ratio 결과) 또는 1.0(미보정)
 
-    번복 소거(순계): 세션 측정기의 humanize_rw 와 같은 원리로 "결말에
-    살아남은 것만 노동"으로 본다 — 썼다 지운 왕복은 0 이다. 따라서
-    작성 몫은 추가 전량이 아니라 max(0, 추가 − 삭제) 다. 자세한 근거는
-    README §2.3.
+    순삭제 = max(0, 유효삭제 − 유효추가). git diff 는 한 줄을 고치면
+    +1/−1 쌍으로 잡으므로 그 쌍을 빼야 타이핑을 두 번 세지 않는다.
 
     파일 통째 삭제는 별도로 다루지 않는다 — 집계 데이터에 그 구분이
     잡히지 않고, 삭제 요율 자체가 판단 비용 수준으로 내려와 있어
@@ -142,11 +136,10 @@ def diff_effort(added, deleted, band=DEFAULT_BAND, mix=None, eff_ratio=1.0):
     r = rates(band)
     eff_added = added * eff_ratio
     eff_deleted = deleted * eff_ratio
-    survived = max(0.0, eff_added - eff_deleted)
     net_deleted = max(0.0, eff_deleted - eff_added)
-    churn = min(eff_added, eff_deleted)
+    replaced = eff_deleted - net_deleted
 
-    write_min = survived * r["new_min_per_line"] * mix
+    write_min = eff_added * r["new_min_per_line"] * mix
     delete_min = net_deleted * r["delete_min_per_line"] * mix
     total = write_min + delete_min
 
@@ -158,14 +151,14 @@ def diff_effort(added, deleted, band=DEFAULT_BAND, mix=None, eff_ratio=1.0):
         "eff_ratio": round(eff_ratio, 4),
         "input": {"added": added, "deleted": deleted},
         "breakdown": {
-            "write": {"lines": round(survived, 1),
+            "write": {"lines": round(eff_added, 1),
                       "min_per_line": round(r["new_min_per_line"] * mix, 4),
                       "minutes": round(write_min, 1)},
             "delete": {"lines": round(net_deleted, 1),
                        "min_per_line": round(r["delete_min_per_line"] * mix, 4),
                        "minutes": round(delete_min, 1)},
         },
-        "churn_lines": round(churn, 1),
+        "replaced_pairs": round(replaced, 1),
     }
 
 
@@ -235,7 +228,7 @@ def _main():
     print("  삭제  %10.1f줄 x %.4f = %10.1f분" %
           (b["delete"]["lines"], b["delete"]["min_per_line"],
            b["delete"]["minutes"]))
-    print("  (번복 %.1f줄은 소거 — 썼다 지운 왕복)" % res["churn_lines"])
+    print("  (교체 쌍 %.1f줄은 중복 제거됨)" % res["replaced_pairs"])
 
 
 if __name__ == "__main__":
