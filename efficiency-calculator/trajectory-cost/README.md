@@ -42,14 +42,7 @@ session-api 밖에서 쓸 때만 경로 한 줄이 더 필요하다:
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "trajectory-cost"))
 ```
 
-복붙용 예시 모음은 `example_usage.py` — 그대로 실행되고, 각 함수 안 `# ---- 복붙 시작/끝 ----`
-사이가 가져다 쓸 코드다 (달러만 받기 / measure() 결과에 붙이기 / 분해 / 프로젝트 일괄 /
-온프렘 지정 / 세션 없을 때 안전 호출).
-
-```bash
-python example_usage.py                      # 최근 세션 자동 선택
-python example_usage.py <세션ID 또는 .jsonl>
-```
+복붙용 최소 예시: `example_usage.py` (`python example_usage.py <세션ID 또는 .jsonl>`)
 
 ## 파이썬 API 전체
 
