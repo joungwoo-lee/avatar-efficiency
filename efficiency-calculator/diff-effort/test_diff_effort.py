@@ -72,19 +72,29 @@ class TestDiffEffort(unittest.TestCase):
         r = diff_effort(100, 0)
         self.assertAlmostEqual(r["minutes"], 226.4, places=1)
 
-    def test_replacement_pairs_removed(self):
-        # +320/-180 → 순삭제 0, 교체 쌍 180
+    def test_churn_removed(self):
+        # +320/-180 → 살아남음 140, 순삭제 0, 번복 180 소거
         r = diff_effort(320, 180)
+        self.assertAlmostEqual(r["breakdown"]["write"]["lines"], 140,
+                               places=1)
         self.assertEqual(r["breakdown"]["delete"]["lines"], 0)
-        self.assertAlmostEqual(r["replaced_pairs"], 180, places=1)
-        self.assertAlmostEqual(r["minutes"], 724.5, places=1)
+        self.assertAlmostEqual(r["churn_lines"], 180, places=1)
+        self.assertAlmostEqual(r["minutes"], 140 * 60 / 26.5, places=1)
+
+    def test_write_and_delete_are_exclusive(self):
+        # 둘 중 하나는 항상 0 — 같은 줄을 두 요율로 세지 않는다
+        for a, d in ((100, 0), (0, 100), (50, 50), (300, 120), (20, 400)):
+            r = diff_effort(a, d)
+            self.assertEqual(
+                min(r["breakdown"]["write"]["lines"],
+                    r["breakdown"]["delete"]["lines"]), 0, (a, d))
 
     def test_net_deletion_charged(self):
-        # +20/-400 → 순삭제 380 x 0.30
+        # +20/-400 → 살아남음 0, 순삭제 380 x 0.30
         r = diff_effort(20, 400)
         self.assertAlmostEqual(r["breakdown"]["delete"]["lines"], 380,
                                places=1)
-        self.assertAlmostEqual(r["minutes"], 45.3 + 114.0, places=1)
+        self.assertAlmostEqual(r["minutes"], 114.0, places=1)
 
     def test_mix_scales_both_terms(self):
         base = diff_effort(1000, 2000)["minutes"]
