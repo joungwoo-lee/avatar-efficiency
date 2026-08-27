@@ -180,6 +180,49 @@ class TestReport(ServerCase):
         self.assertLess(res["total"]["effort_min"],
                         plain["total"]["effort_min"])
 
+    def test_gates_flag_missing_mix(self):
+        """구성비를 안 재면 전제 ① 이 빨간불이어야 한다."""
+        res = self.post("/api/report", {"csv_path": self.csv,
+                                        "no_config": True})
+        self.assertFalse(res["gates"]["mix"]["ok"])
+        self.assertFalse(res["trustworthy"])
+        self.assertIn("미측정", res["gates"]["mix"]["detail"])
+        ok = self.post("/api/report", {"csv_path": self.csv,
+                                       "no_config": True,
+                                       "mix": "0.5,0.4,0.1"})
+        self.assertTrue(ok["gates"]["mix"]["ok"])
+        self.assertEqual(ok["gates"]["mix"]["source"], "inline")
+
+    def test_gates_flag_zero_human_time(self):
+        """사람 개입시간이 0 인 사람은 전제 ② 결함으로 잡힌다."""
+        p = _write(os.path.join(self.tmp, "hitl0.csv"), HEADER +
+                   "a,10,1000,100,50000,0\n"
+                   "b,10,1000,100,50000,40000\n")
+        g = self.post("/api/report", {"csv_path": p, "no_config": True,
+                                      "mix": "0.5,0.4,0.1"})["gates"]["hitl"]
+        self.assertFalse(g["ok"])
+        self.assertEqual(g["missing"], ["a"])
+        self.assertEqual(g["tiny"], [])
+
+    def test_gates_flag_implausibly_small_human_time(self):
+        """CC 시간에 견줘 너무 작은 개입시간도 계측 누락으로 잡는다."""
+        p = _write(os.path.join(self.tmp, "hitl-tiny.csv"), HEADER +
+                   "a,10,1000,100,100000,100\n"
+                   "b,10,1000,100,100000,40000\n")
+        g = self.post("/api/report", {"csv_path": p, "no_config": True,
+                                      "mix": "0.5,0.4,0.1"})["gates"]["hitl"]
+        self.assertFalse(g["ok"])
+        self.assertEqual(g["tiny"], ["a"])
+
+    def test_gates_pass_when_both_measured(self):
+        p = _write(os.path.join(self.tmp, "hitl-ok.csv"), HEADER +
+                   "a,10,1000,100,50000,20000\n")
+        res = self.post("/api/report", {"csv_path": p, "no_config": True,
+                                        "mix": "0.5,0.4,0.1"})
+        self.assertTrue(res["gates"]["hitl"]["ok"])
+        self.assertTrue(res["gates"]["mix"]["ok"])
+        self.assertTrue(res["trustworthy"])
+
     def test_missing_columns_are_named(self):
         bad = _write(os.path.join(self.tmp, "bad.csv"),
                      "employee_id,lines_added\na,1\n")

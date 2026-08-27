@@ -141,6 +141,70 @@ def read_ratios(path=None):
         return {"path": p, "config": json.load(f)}
 
 
+# ------------------------------------------------------- 전제 두 개 점검
+#
+# 이 계산은 실측 두 개에 기댄다. 둘 중 하나라도 없으면 나온 숫자는
+# 노동시간도 효율도 아니다. UI 가 그걸 눈에 보이게 하려고 상태를 낸다.
+#
+#   (1) 구성비   코드/문서/데이터 비율. 전부 코드 요율로 치면 문서·데이터
+#                가 코드만큼 비싸져 effort 자체가 부풀려진다.
+#   (2) 사람 개입시간(user_active_sec)  사람이 실제로 붙어 있던 시간.
+#                x_user·x_total 의 분모다. 안 재면 효율을 못 낸다.
+
+# 사람 개입시간이 CC 세션시간의 이 비율보다 작으면 계측 누락을 의심한다.
+# 사람이 한 번도 안 보고 통과시켰다는 뜻이 되기 때문이다.
+HITL_MIN_SHARE = 0.02
+HITL_MIN_SEC = 60.0
+
+
+def mix_status(mix_parts, source):
+    """구성비 실측 상태 -> UI 가 그릴 dict."""
+    if not mix_parts:
+        return {"ok": False, "source": "none",
+                "detail": "구성비 미측정 — 전부 코드 요율로 쳤다. "
+                          "effort 가 부풀려진다(문서·데이터가 코드값)."}
+    tot = sum(mix_parts) or 1.0
+    return {"ok": True, "source": source,
+            "detail": "코드 %.1f%% / 문서 %.1f%% / 데이터 %.1f%%"
+                      % tuple(p / tot * 100 for p in mix_parts)}
+
+
+def hitl_status(rows):
+    """사람 개입시간 실측 상태 -> UI 가 그릴 dict.
+
+    분모가 0 인 사람은 효율을 아예 못 낸다(x_user 가 '-' 로 빠진다).
+    분모가 있어도 CC 시간에 견줘 터무니없이 작으면 계측 누락을 의심한다 —
+    사람이 그 시간에 그 결과물을 다 봤다는 게 성립하지 않기 때문이다.
+    """
+    missing, tiny = [], []
+    for r in rows:
+        u = r["user_active_sec"]
+        if not u or u <= 0:
+            missing.append(r["employee_id"])
+        elif u < HITL_MIN_SEC or u < r["cli_active_sec"] * HITL_MIN_SHARE:
+            tiny.append(r["employee_id"])
+    n = len(rows)
+    ok = not missing and not tiny
+    if missing and len(missing) == n:
+        detail = ("사람 개입시간이 전원 0 이다 — 효율(x_user·x_total)을 "
+                  "낼 수 없다. 사람이 붙어 있던 시간을 재서 채워라.")
+    elif missing or tiny:
+        bits = []
+        if missing:
+            bits.append("0 인 사람 %d명 (%s)"
+                        % (len(missing), ", ".join(missing[:5])))
+        if tiny:
+            bits.append("CC 시간의 %.0f%% 미만이라 계측 누락이 의심되는 "
+                        "사람 %d명 (%s)"
+                        % (HITL_MIN_SHARE * 100, len(tiny),
+                           ", ".join(tiny[:5])))
+        detail = " · ".join(bits) + " — 그 사람들의 효율값은 못 믿는다."
+    else:
+        detail = "전원 사람 개입시간이 들어 있다 (%d명)." % n
+    return {"ok": ok, "missing": missing, "tiny": tiny, "count": n,
+            "detail": detail}
+
+
 def do_report(body):
     """사용량 CSV -> 사람별 지표 + 전체 합산 + [가정] 블록."""
     csv_path = (body.get("csv_path") or "").strip()
@@ -164,10 +228,12 @@ def do_report(body):
         cfg_path = CR.find_config((body.get("config") or "").strip() or None)
         if cfg_path:
             mix_parts, comment_r, gen_r, cfg = CR.load_config(cfg_path)
+    mix_source = "config" if mix_parts else "none"
     if body.get("mix"):
         mix_parts = [float(x) for x in str(body["mix"]).split(",")]
         if len(mix_parts) != len(KINDS):
             raise ValueError("구성비는 CODE,DOC,DATA 세 값이어야 한다")
+        mix_source = "inline"
     if body.get("comment_ratio") not in (None, ""):
         comment_r = float(body["comment_ratio"])
     if body.get("generated_ratio") not in (None, ""):
@@ -192,10 +258,14 @@ def do_report(body):
         _LAST["rows"] = rows
         _LAST["total"] = tot
         _LAST["csv_path"] = csv_path
+    gates = {"mix": mix_status(mix_parts, mix_source),
+             "hitl": hitl_status(rows)}
     return {"rows": rows, "total": tot, "fields": list(CR.FIELDS),
             "assumptions": buf.getvalue().strip(),
             "config_path": cfg_path,
             "uncorrected": not mix_parts and not (comment_r or gen_r),
+            "gates": gates,
+            "trustworthy": gates["mix"]["ok"] and gates["hitl"]["ok"],
             "csv_path": csv_path, "out_suggest": suggest_out(csv_path)}
 
 
@@ -284,6 +354,8 @@ class Handler(BaseHTTPRequestHandler):
                     "sort_keys": list(CR.SORT_KEYS),
                     "required": list(CR.REQUIRED),
                     "default_config": CR.DEFAULT_CONFIG,
+                    "hitl_min_share": HITL_MIN_SHARE,
+                    "hitl_min_sec": HITL_MIN_SEC,
                     "home": os.path.expanduser("~")})
             if p == "/api/suggest-out":
                 return self._json(
