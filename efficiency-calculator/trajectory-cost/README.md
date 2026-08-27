@@ -13,6 +13,12 @@ usd = session_cost_usd(r"C:\Users\joung\.claude\projects\C--proj\<세션ID>.json
 
 CLI: `python trajectory_cost.py <경로 또는 세션ID>`
 
+`record_actions_code_api.py` 에 붙이는 호출부 예시(임포트·호출 넣을 자리 표시):
+`callsite_example.py` — 원본을 고치지 않고 그대로 실행해 확인할 수 있다.
+```bash
+python callsite_example.py <세션.jsonl 경로>
+```
+
 ## 포함 범위
 
 - 서브에이전트(`<세션ID>/subagents/*.jsonl`) 비용 포함
