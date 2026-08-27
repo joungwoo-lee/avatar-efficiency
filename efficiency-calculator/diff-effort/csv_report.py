@@ -134,17 +134,26 @@ def analyze_row(row, band=DEFAULT_BAND, mix=None, eff_ratio=1.0):
     }
 
 
+def analyze_stream(f, band=DEFAULT_BAND, mix=None, eff_ratio=1.0):
+    """열린 텍스트 스트림 -> [지표 dict]. 필수 컬럼이 없으면 ValueError.
+
+    파일이 아니라 스트림을 받는다 — 업로드된 CSV 내용처럼 디스크에 없는
+    입력도 같은 코드로 처리하기 위해서다.
+    """
+    r = csv.DictReader(f)
+    cols = set(r.fieldnames or [])
+    missing = [c for c in REQUIRED if c not in cols]
+    if missing:
+        raise ValueError("CSV 에 필수 컬럼이 없다: %s" % ", ".join(missing))
+    return [analyze_row(row, band, mix, eff_ratio) for row in r
+            if (row.get("employee_id") or "").strip()]
+
+
 def analyze_csv(path, band=DEFAULT_BAND, mix=None, eff_ratio=1.0,
                 encoding="utf-8-sig"):
     """CSV 파일 -> [지표 dict]. 필수 컬럼이 없으면 ValueError."""
     with open(path, newline="", encoding=encoding) as f:
-        r = csv.DictReader(f)
-        cols = set(r.fieldnames or [])
-        missing = [c for c in REQUIRED if c not in cols]
-        if missing:
-            raise ValueError("CSV 에 필수 컬럼이 없다: %s" % ", ".join(missing))
-        return [analyze_row(row, band, mix, eff_ratio) for row in r
-                if (row.get("employee_id") or "").strip()]
+        return analyze_stream(f, band, mix, eff_ratio)
 
 
 def totals(rows):
@@ -284,14 +293,27 @@ def print_table(rows, tot=None):
         print_total_block(tot)
 
 
+def write_rows(f, rows, tot=None):
+    """열린 텍스트 스트림에 리포트 CSV 를 쓴다."""
+    w = csv.DictWriter(f, fieldnames=FIELDS, extrasaction="ignore")
+    w.writeheader()
+    for x in rows:
+        w.writerow(x)
+    if tot:
+        w.writerow(tot)
+
+
+def csv_text(rows, tot=None):
+    """리포트 CSV 를 문자열로. 파일로 못 쓰는 자리(업로드형 UI)에서 쓴다."""
+    import io as _io
+    buf = _io.StringIO(newline="")
+    write_rows(buf, rows, tot)
+    return buf.getvalue()
+
+
 def write_csv(rows, path, tot=None):
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.DictWriter(f, fieldnames=FIELDS, extrasaction="ignore")
-        w.writeheader()
-        for x in rows:
-            w.writerow(x)
-        if tot:
-            w.writerow(tot)
+        write_rows(f, rows, tot)
 
 
 def _main():

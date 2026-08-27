@@ -109,6 +109,22 @@ def _git(repo, args):
     return out.stdout
 
 
+def git_remote(repo):
+    """origin 의 주소. 없으면 None.
+
+    로컬 경로는 남에게 보여줄 수 없다(서버 모드에서 그대로 노출된다).
+    저장소를 가리키는 공개 가능한 이름이 원격 주소다.
+    """
+    try:
+        out = subprocess.run(["git", "-C", repo, "remote", "get-url", "origin"],
+                             capture_output=True, text=True, encoding="utf-8",
+                             errors="replace")
+    except OSError:
+        return None
+    url = (out.stdout or "").strip()
+    return url if out.returncode == 0 and url else None
+
+
 def scan_diff(repo, since=None, until=None, author=None):
     """git log --numstat -> 종류별·생성물 라인 집계."""
     args = ["log", "--numstat", "--no-merges", "--pretty=tformat:"]
@@ -261,7 +277,9 @@ def measure(repos, since=None, until=None, author=None, use_cloc=True):
     c_lines = 0.0
     c_noncode = 0.0
     c_source = set()
+    remotes = []
     for repo in repos:
+        remotes.append(git_remote(repo))
         d = scan_diff(repo, since, until, author)
         for k in kind:
             kind[k] += d["kind"][k]
@@ -281,6 +299,7 @@ def measure(repos, since=None, until=None, author=None, use_cloc=True):
         mix = {k: kind[k] / named for k in ("code", "doc", "data")}
     return {
         "repos": list(repos),
+        "remotes": remotes,
         "diff_lines_total": total,
         "diff_lines_by_kind": kind,
         "generated_lines": generated,
@@ -311,6 +330,7 @@ def to_config(m, args_ns):
             "at": datetime.datetime.now().astimezone().isoformat(
                 timespec="seconds"),
             "repos": [os.path.abspath(r) for r in m["repos"]],
+            "remotes": [x for x in (m.get("remotes") or []) if x],
             "since": args_ns.since,
             "until": args_ns.until,
             "author": args_ns.author,

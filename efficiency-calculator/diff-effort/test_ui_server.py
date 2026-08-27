@@ -358,6 +358,111 @@ class TestMeasure(ServerCase):
         self.assertIn("하나 이상", err)
 
 
+class TestServerMode(ServerCase):
+    """서버 모드 — CSV 는 내용만, 비율은 서버 고정, 나머지는 막힘."""
+
+    @classmethod
+    def setUpClass(cls):
+        super(TestServerMode, cls).setUpClass()
+        cls.fixed = _write(os.path.join(cls.tmp, "fixed-ratios.json"),
+                           json.dumps({
+                               "mix": {"code": 0.5, "doc": 0.4, "data": 0.1},
+                               "comment_ratio": 0.2,
+                               "generated_ratio": 0.01,
+                               "measured": {
+                                   "at": "2026-01-01T00:00:00+09:00",
+                                   "repos": ["C:\\\\secret\\\\path\\\\repo"],
+                                   "remotes": ["https://github.com/acme/app.git"],
+                                   "basis": "diff lines (git log --numstat)",
+                                   "diff_lines_total": 1234,
+                               }}, ensure_ascii=False))
+        cls.shttpd = ThreadingHTTPServer(
+            ("127.0.0.1", 0), UI.make_handler("server", cls.fixed))
+        cls.sport = cls.shttpd.server_address[1]
+        threading.Thread(target=cls.shttpd.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.shttpd.shutdown()
+        cls.shttpd.server_close()
+        super(TestServerMode, cls).tearDownClass()
+
+    def url(self, path):                    # 서버 모드 쪽으로 쏜다
+        return "http://127.0.0.1:%d%s" % (self.sport, path)
+
+    def test_meta_says_server_and_hides_local_paths(self):
+        m = self.get("/api/meta")
+        self.assertEqual(m["mode"], "server")
+        for leak in ("here", "home", "default_config"):
+            self.assertNotIn(leak, m)
+
+    def test_ratios_show_remote_url_only(self):
+        r = self.get("/api/ratios")
+        pub = r["public"]
+        self.assertEqual(pub["repos"], ["https://github.com/acme/app.git"])
+        self.assertEqual(pub["mix"]["code"], 0.5)
+        self.assertNotIn("secret", json.dumps(r, ensure_ascii=False))
+
+    def test_browse_measure_save_are_blocked(self):
+        try:
+            with urlopen(self.url("/api/browse?path=" + self.tmp)):
+                self.fail("막혀야 한다")
+        except HTTPError as e:
+            self.assertEqual(e.code, 403)
+        for path, body in (("/api/measure", {"repos": [self.tmp]}),
+                           ("/api/save", {"out": "x.csv"})):
+            code, err = self.post_err(path, body)
+            self.assertEqual(code, 403)
+            self.assertIn("서버 모드에서는 막혀 있다", err)
+
+    def test_csv_path_is_refused_but_content_works(self):
+        code, err = self.post_err("/api/report", {"csv_path": self.csv})
+        self.assertEqual(code, 400)
+        self.assertIn("막혀 있다", err)
+
+        res = self.post("/api/report", {"csv_text": SAMPLE})
+        self.assertEqual([r["employee_id"] for r in res["rows"]],
+                         ["oseok.kim", "jane.doe"])
+        self.assertTrue(res["csv_text"].startswith("employee_id,"))
+        self.assertIn("TOTAL(n=2)", res["csv_text"])
+
+    def test_fixed_config_is_used_and_cannot_be_overridden(self):
+        base = self.post("/api/report", {"csv_text": SAMPLE})
+        self.assertEqual(base["gates"]["mix"]["level"], "measured")
+        self.assertIsNone(base["config_path"])        # 서버 경로 비공개
+        self.assertEqual(base["ratios"]["repos"],
+                         ["https://github.com/acme/app.git"])
+        # 클라이언트가 무엇을 보내든 고정값이 이긴다
+        tampered = self.post("/api/report", {"csv_text": SAMPLE,
+                                             "no_config": True,
+                                             "mix": "1,0,0",
+                                             "comment_ratio": 0.0,
+                                             "config": "C:/other.json"})
+        self.assertAlmostEqual(tampered["total"]["effort_min"],
+                               base["total"]["effort_min"], places=6)
+
+    def test_assumptions_carry_no_server_paths(self):
+        a = self.post("/api/report", {"csv_text": SAMPLE})["assumptions"]
+        self.assertIn("https://github.com/acme/app.git", a)
+        self.assertNotIn("secret", a)
+        self.assertNotIn(self.fixed, a)
+
+    def test_empty_and_oversized_uploads_are_refused(self):
+        code, err = self.post_err("/api/report", {"csv_text": "   "})
+        self.assertEqual(code, 400)
+        self.assertIn("올려라", err)
+        big = HEADER + ("x,1,1,1,1,1\n" * 10)
+        code, _ = self.post_err("/api/report",
+                                {"csv_text": big + "a" * UI.MAX_UPLOAD})
+        self.assertEqual(code, 400)
+
+    def test_missing_columns_still_named(self):
+        code, err = self.post_err("/api/report",
+                                  {"csv_text": "employee_id,lines_added\na,1\n"})
+        self.assertEqual(code, 400)
+        self.assertIn("lines_removed", err)
+
+
 class TestSuggestOut(unittest.TestCase):
 
     def test_suggest_sits_next_to_input(self):

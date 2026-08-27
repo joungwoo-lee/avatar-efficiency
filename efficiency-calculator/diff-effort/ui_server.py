@@ -33,10 +33,19 @@ from urllib.parse import parse_qs, urlparse
 
 import csv_report as CR
 import measure_ratios as MR
-from diff_effort import BANDS, DEFAULT_BAND, KINDS, effective_ratio, mix_factor
+from diff_effort import (BANDS, DEFAULT_BAND, KINDS, effective_ratio,
+                         mix_factor, rates)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX = os.path.join(_HERE, "ui.html")
+
+# 서버 모드에서 받는 CSV 내용의 상한. 사람 한 줄짜리 표라 이걸 넘길 일이 없다.
+MAX_UPLOAD = 5 * 1024 * 1024
+
+# 서버 모드에서 막는 것들 — 왜 막는지 그대로 사용자에게 보낸다.
+BLOCKED_MSG = ("서버 모드에서는 막혀 있다: %s. 이 서버는 남의 PC 가 아니라 "
+               "서버 자신의 디스크를 보게 되기 때문이다. 비율은 서버에 "
+               "고정된 ratios.json 을 쓰고, CSV 는 내용만 올린다.")
 
 # 마지막 리포트 결과 — 저장 버튼이 이걸 쓴다(다시 계산하지 않는다).
 _LAST = {"rows": None, "total": None, "csv_path": None}
@@ -148,6 +157,69 @@ def read_ratios(path=None):
         return {"path": p, "config": json.load(f)}
 
 
+def public_ratios(cfg):
+    """서버 모드에서 내보내도 되는 것만 추린다.
+
+    보여줄 것은 **잰 저장소의 git 원격 주소와 비율값**뿐이다. 로컬 경로·
+    설정 파일 위치는 서버 안쪽 사정이라 내보내지 않는다.
+    """
+    m = (cfg or {}).get("measured") or {}
+    return {
+        "mix": (cfg or {}).get("mix"),
+        "comment_ratio": (cfg or {}).get("comment_ratio"),
+        "generated_ratio": (cfg or {}).get("generated_ratio"),
+        "proxy": bool((cfg or {}).get("proxy")),
+        "proxy_note": m.get("proxy_note"),
+        "repos": list(m.get("remotes") or []),   # 원격 주소만. 경로는 뺀다
+        "repo_count": len(m.get("repos") or []),
+        "since": m.get("since"), "until": m.get("until"),
+        "at": m.get("at"), "basis": m.get("basis"),
+        "diff_lines_total": m.get("diff_lines_total"),
+        "comment_source": m.get("comment_source"),
+    }
+
+
+def server_assumptions(band, mix, eff_ratio, mix_parts, comment_r, gen_r, pub):
+    """서버 모드용 [가정] 블록 — 경로 대신 원격 주소를 적는다.
+
+    csv_report.print_assumptions 를 그대로 쓰면 서버의 파일 경로가 그대로
+    딸려 나간다. 값은 같고 출처 표기만 공개 가능한 것으로 바꾼다.
+    """
+    r = rates(band)
+    out = ["[가정]", "  설정          이 서버에 고정된 ratios.json"]
+    repos = pub.get("repos") or []
+    span = " ~ ".join(x for x in (pub.get("since"), pub.get("until")) if x)
+    out.append("                잰 대상: %s / %s"
+               % (", ".join(repos) or "(원격 주소 미기록)",
+                  span or "전체 기간"))
+    if pub.get("at"):
+        out.append("                잰 시각: %s (기준: %s)"
+                   % (pub["at"], pub.get("basis", "-")))
+    if pub.get("proxy"):
+        out.append("                ※ 대리 측정(추정) — %s"
+                   % (pub.get("proxy_note")
+                      or "대상 세션의 저장소가 아니다"))
+    out.append("  밴드          %s — 작성 %.3f분/줄 (%.1f줄/h), "
+               "삭제 %.3f분/줄 (%.0f줄/h)"
+               % (band, r["new_min_per_line"], r["loc_per_hour"],
+                  r["delete_min_per_line"], r["delete_loc_per_hour"]))
+    if mix_parts:
+        tot = sum(mix_parts)
+        out.append("  구성비        코드 %.1f%% / 문서 %.1f%% / 데이터 %.1f%%"
+                   " → 실효 요율 배수 %.4f"
+                   % (mix_parts[0] / tot * 100, mix_parts[1] / tot * 100,
+                      mix_parts[2] / tot * 100, mix))
+    else:
+        out.append("  구성비        미지정 → 전부 코드 요율 (문서·데이터 과대)")
+    if comment_r or gen_r:
+        out.append("  유효 라인     주석·빈 줄 %.1f%% + 자동생성물 %.1f%% 제외"
+                   " → 유효 라인 비율 %.4f"
+                   % (comment_r * 100, gen_r * 100, eff_ratio))
+    else:
+        out.append("  유효 라인     미보정 (과대)")
+    return "\n".join(out)
+
+
 # ------------------------------------------------------- 전제 두 개 점검
 #
 # 이 계산은 실측 두 개에 기댄다. 둘 중 하나라도 없으면 나온 숫자는
@@ -241,12 +313,26 @@ def hitl_status(rows):
             "min_share": HITL_MIN_SHARE, "min_sec": HITL_MIN_SEC}
 
 
-def do_report(body):
-    """사용량 CSV -> 사람별 지표 + 전체 합산 + [가정] 블록."""
+def do_report(body, mode="local", fixed_config=None):
+    """사용량 CSV -> 사람별 지표 + 전체 합산 + [가정] 블록.
+
+    로컬 모드는 서버 디스크의 CSV 경로를 읽고, 서버 모드는 브라우저가
+    올린 **내용**만 받는다(경로는 아예 안 받는다 — 서버 자신의 파일을
+    읽히는 통로가 되기 때문).
+    """
     csv_path = (body.get("csv_path") or "").strip()
-    if not csv_path:
+    csv_text_in = body.get("csv_text")
+    if mode == "server":
+        if csv_path:
+            raise ValueError(BLOCKED_MSG % "CSV 를 경로로 지정하는 것")
+        if not isinstance(csv_text_in, str) or not csv_text_in.strip():
+            raise ValueError("CSV 파일을 올려라")
+        if len(csv_text_in.encode("utf-8")) > MAX_UPLOAD:
+            raise ValueError("CSV 가 너무 크다 (상한 %dMB)"
+                             % (MAX_UPLOAD // (1024 * 1024)))
+    elif not csv_path and not csv_text_in:
         raise ValueError("CSV 경로를 골라라")
-    if not os.path.isfile(csv_path):
+    elif csv_path and not os.path.isfile(csv_path):
         raise ValueError("파일이 없다: %s" % csv_path)
 
     band = body.get("band") or DEFAULT_BAND
@@ -260,34 +346,56 @@ def do_report(body):
     comment_r = 0.0
     gen_r = 0.0
     cfg = cfg_path = None
-    if not body.get("no_config"):
-        cfg_path = CR.find_config((body.get("config") or "").strip() or None)
-        if cfg_path:
-            mix_parts, comment_r, gen_r, cfg = CR.load_config(cfg_path)
-    mix_source = "config" if mix_parts else "none"
-    if body.get("mix"):
-        mix_parts = [float(x) for x in str(body["mix"]).split(",")]
-        if len(mix_parts) != len(KINDS):
-            raise ValueError("구성비는 CODE,DOC,DATA 세 값이어야 한다")
-        mix_source = "inline"
-    if body.get("comment_ratio") not in (None, ""):
-        comment_r = float(body["comment_ratio"])
-    if body.get("generated_ratio") not in (None, ""):
-        gen_r = float(body["generated_ratio"])
+    if mode == "server":
+        # 서버 모드의 비율은 **서버에 고정된 파일 하나**다. 요청으로 바꿀
+        # 수 없다 — 사람마다 다른 계수를 쓰면 같은 표에서 비교가 안 된다.
+        cfg_path = fixed_config or CR.find_config(None)
+        if not cfg_path:
+            raise ValueError("이 서버에 고정된 ratios.json 이 없다 "
+                             "— 관리자가 먼저 넣어야 한다")
+        mix_parts, comment_r, gen_r, cfg = CR.load_config(cfg_path)
+        mix_source = "config"
+    else:
+        if not body.get("no_config"):
+            cfg_path = CR.find_config(
+                (body.get("config") or "").strip() or None)
+            if cfg_path:
+                mix_parts, comment_r, gen_r, cfg = CR.load_config(cfg_path)
+        mix_source = "config" if mix_parts else "none"
+        if body.get("mix"):
+            mix_parts = [float(x) for x in str(body["mix"]).split(",")]
+            if len(mix_parts) != len(KINDS):
+                raise ValueError("구성비는 CODE,DOC,DATA 세 값이어야 한다")
+            mix_source = "inline"
+        if body.get("comment_ratio") not in (None, ""):
+            comment_r = float(body["comment_ratio"])
+        if body.get("generated_ratio") not in (None, ""):
+            gen_r = float(body["generated_ratio"])
 
     mix = mix_factor(*mix_parts) if mix_parts else None
     er = effective_ratio(comment_r, gen_r)
-    rows = CR.analyze_csv(csv_path, band, mix, er,
-                          body.get("encoding") or "utf-8-sig")
+    if csv_text_in is not None and (mode == "server" or not csv_path):
+        rows = CR.analyze_stream(io.StringIO(csv_text_in.lstrip("﻿"),
+                                             newline=""), band, mix, er)
+    else:
+        rows = CR.analyze_csv(csv_path, band, mix, er,
+                              body.get("encoding") or "utf-8-sig")
     if not rows:
         raise ValueError("employee_id 가 있는 줄이 없다")
     CR.sort_rows(rows, sort_key, bool(body.get("asc")))
     tot = None if body.get("no_total") else CR.totals(rows)
 
+    pub = public_ratios(cfg)
     buf = io.StringIO()
     with redirect_stdout(buf):
-        CR.print_assumptions(band, mix if mix is not None else 1.0, er,
-                             mix_parts, comment_r, gen_r, cfg_path, cfg)
+        if mode == "server":
+            # 경로가 딸려나가지 않는 판을 쓴다. 값은 같다.
+            print(server_assumptions(band, mix if mix is not None else 1.0,
+                                     er, mix_parts, comment_r, gen_r, pub))
+            print()
+        else:
+            CR.print_assumptions(band, mix if mix is not None else 1.0, er,
+                                 mix_parts, comment_r, gen_r, cfg_path, cfg)
         if tot:
             CR.print_total_block(tot)
     with _LOCK:
@@ -299,11 +407,14 @@ def do_report(body):
              "hitl": hitl_status(rows)}
     return {"rows": rows, "total": tot, "fields": list(CR.FIELDS),
             "assumptions": buf.getvalue().strip(),
-            "config_path": cfg_path,
+            "config_path": None if mode == "server" else cfg_path,
+            "ratios": pub if mode == "server" else None,
+            "csv_text": CR.csv_text(rows, tot) if mode == "server" else None,
             "uncorrected": not mix_parts and not (comment_r or gen_r),
             "gates": gates,
             "trustworthy": gates["mix"]["ok"] and gates["hitl"]["ok"],
-            "csv_path": csv_path, "out_suggest": suggest_out(csv_path)}
+            "csv_path": csv_path,
+            "out_suggest": None if mode == "server" else suggest_out(csv_path)}
 
 
 def do_save(body):
@@ -334,15 +445,17 @@ def suggest_out(csv_path):
 
 # ---------------------------------------------------------------- HTTP
 
-ROUTES = {
-    "/api/measure": do_measure,
-    "/api/report": do_report,
-    "/api/save": do_save,
-}
+# 서버 모드에서 열어두는 것 — 이 둘뿐이다.
+SERVER_GET = ("/", "/index.html", "/ui.html", "/api/meta", "/api/ratios")
+SERVER_POST = ("/api/report",)
 
 
 class Handler(BaseHTTPRequestHandler):
+    """로컬 모드 핸들러. 서버 모드는 아래 make_handler 로 만든다."""
+
     server_version = "diff-effort-ui"
+    mode = "local"          # "local" | "server"
+    fixed_config = None     # 서버 모드에서 쓸 ratios.json 경로
 
     def log_message(self, fmt, *args):      # 조용히
         pass
@@ -370,8 +483,53 @@ class Handler(BaseHTTPRequestHandler):
         q = parse_qs(urlparse(self.path).query)
         return dict((k, v[0]) for k, v in q.items())
 
+    def _drain(self, n, chunk=65536):
+        """거절할 요청의 몸통을 읽어 버린다 (최대 64MB 까지만)."""
+        left = min(n, 64 * 1024 * 1024)
+        while left > 0:
+            got = self.rfile.read(min(chunk, left))
+            if not got:
+                break
+            left -= len(got)
+
+    def _blocked(self, what):
+        self._json({"error": BLOCKED_MSG % what, "blocked": True}, 403)
+
+    def _meta(self):
+        m = {
+            "mode": self.mode,
+            "bands": list(BANDS),
+            "default_band": DEFAULT_BAND,
+            "sort_keys": list(CR.SORT_KEYS),
+            "required": list(CR.REQUIRED),
+            "hitl_min_share": HITL_MIN_SHARE,
+            "hitl_min_sec": HITL_MIN_SEC,
+            "hitl_why": HITL_WHY,
+            "hitl_remedy": HITL_REMEDY,
+            "mix_proxy_guide": MIX_PROXY_GUIDE,
+            "max_upload": MAX_UPLOAD,
+        }
+        if self.mode == "local":
+            # 로컬 모드에서만 서버(=내 PC) 경로를 내준다.
+            m.update({"here": _HERE, "default_config": CR.DEFAULT_CONFIG,
+                      "home": os.path.expanduser("~")})
+        return m
+
+    def _ratios(self):
+        """서버 모드에서는 원격 주소와 비율값만 내보낸다."""
+        if self.mode != "server":
+            return read_ratios(self._query().get("path"))
+        path = self.fixed_config or CR.find_config(None)
+        if not path:
+            return {"mode": "server", "public": None,
+                    "error_hint": "이 서버에 고정된 ratios.json 이 없다"}
+        with open(path, encoding="utf-8") as f:
+            return {"mode": "server", "public": public_ratios(json.load(f))}
+
     def do_GET(self):
         p = urlparse(self.path).path
+        if self.mode == "server" and p not in SERVER_GET:
+            return self._blocked("이 경로(%s)" % p)
         try:
             if p in ("/", "/index.html", "/ui.html"):
                 with open(INDEX, encoding="utf-8") as f:
@@ -382,21 +540,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(browse(q.get("path", ""),
                                          q.get("kind", "dir")))
             if p == "/api/ratios":
-                return self._json(read_ratios(self._query().get("path")))
+                return self._json(self._ratios())
             if p == "/api/meta":
-                return self._json({
-                    "here": _HERE,
-                    "bands": list(BANDS),
-                    "default_band": DEFAULT_BAND,
-                    "sort_keys": list(CR.SORT_KEYS),
-                    "required": list(CR.REQUIRED),
-                    "default_config": CR.DEFAULT_CONFIG,
-                    "hitl_min_share": HITL_MIN_SHARE,
-                    "hitl_min_sec": HITL_MIN_SEC,
-                    "hitl_why": HITL_WHY,
-                    "hitl_remedy": HITL_REMEDY,
-                    "mix_proxy_guide": MIX_PROXY_GUIDE,
-                    "home": os.path.expanduser("~")})
+                return self._json(self._meta())
             if p == "/api/suggest-out":
                 return self._json(
                     {"out": suggest_out(self._query().get("csv_path"))})
@@ -408,31 +554,68 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         p = urlparse(self.path).path
-        fn = ROUTES.get(p)
-        if not fn:
-            return self._json({"error": "없는 경로: %s" % p}, 404)
+        if self.mode == "server" and p not in SERVER_POST:
+            return self._blocked(
+                "저장소 선택·비율 측정" if p == "/api/measure"
+                else "서버 디스크에 저장" if p == "/api/save"
+                else "이 경로(%s)" % p)
         try:
             n = int(self.headers.get("Content-Length") or 0)
+            if n > MAX_UPLOAD:
+                # 답하기 전에 보낸 몸통을 비워준다. 안 읽고 끊으면 클라이언트가
+                # 응답 대신 연결 끊김(RST)을 본다 — 왜 거절됐는지 못 읽는다.
+                self._drain(n)
+                raise ValueError("요청이 너무 크다 (상한 %dMB)"
+                                 % (MAX_UPLOAD // (1024 * 1024)))
             body = json.loads(self.rfile.read(n) or b"{}")
-            return self._json(fn(body))
+            if p == "/api/report":
+                return self._json(do_report(body, self.mode,
+                                            self.fixed_config))
+            if p == "/api/measure":
+                return self._json(do_measure(body))
+            if p == "/api/save":
+                return self._json(do_save(body))
+            return self._json({"error": "없는 경로: %s" % p}, 404)
         except (OSError, ValueError, RuntimeError) as e:
             return self._err(e)
         except Exception as e:                              # noqa: BLE001
             return self._err(e, 500)
 
 
-def serve(port=8765, open_browser=True):
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    url = "http://127.0.0.1:%d/" % port
-    print("diff-effort UI  %s" % url)
-    print("  (127.0.0.1 전용 — 이 서버는 이 PC 의 파일을 읽고 쓴다)")
+def make_handler(mode="local", fixed_config=None):
+    """모드가 박힌 핸들러 클래스를 만든다."""
+    return type("Handler_" + mode, (Handler,),
+                {"mode": mode, "fixed_config": fixed_config})
+
+
+def serve(port=8765, open_browser=True, mode="local", config=None,
+          host=None):
+    if mode == "server":
+        cfg = config or CR.find_config(None)
+        if not cfg:
+            sys.stderr.write("오류: 서버 모드는 고정된 ratios.json 이 "
+                             "있어야 한다 (--config 로 지정)" + chr(10))
+            return 2
+        cfg = os.path.abspath(cfg)
+        host = host or "0.0.0.0"
+    else:
+        cfg = None
+        host = host or "127.0.0.1"
+    httpd = ThreadingHTTPServer((host, port), make_handler(mode, cfg))
+    url = "http://%s:%d/" % ("127.0.0.1" if host == "0.0.0.0" else host, port)
+    print("diff-effort UI [%s]  %s" % (mode, url))
+    if mode == "server":
+        print("  고정 비율: %s" % cfg)
+        print("  CSV 는 내용만 받는다. 저장소 선택·측정·서버 저장은 막혀 있다.")
+    else:
+        print("  (127.0.0.1 전용 — 이 서버는 이 PC 의 파일을 읽고 쓴다)")
     print("  Ctrl+C 로 종료")
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\n종료")
+        print(chr(10) + "종료")
     finally:
         httpd.server_close()
     return 0
@@ -443,12 +626,20 @@ def _main():
     p.add_argument("--port", type=int, default=8765, help="포트 (기본 8765)")
     p.add_argument("--no-browser", action="store_true",
                    help="브라우저를 자동으로 열지 않는다")
+    p.add_argument("--server", action="store_true",
+                   help="서버 모드 — CSV 업로드만 받고 비율은 고정. "
+                        "저장소 선택·측정·서버 저장을 막는다")
+    p.add_argument("--config", default=None,
+                   help="서버 모드에서 쓸 고정 ratios.json 경로")
+    p.add_argument("--host", default=None,
+                   help="바인딩 주소 (기본: 로컬 127.0.0.1 / 서버 0.0.0.0)")
     a = p.parse_args()
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
-    return serve(a.port, not a.no_browser)
+    return serve(a.port, not a.no_browser,
+                 "server" if a.server else "local", a.config, a.host)
 
 
 if __name__ == "__main__":
