@@ -189,11 +189,16 @@ def call_cost(call: Call, rates: dict, onprem_models: Iterable[str] = ()) -> tup
     mult = rates["cache_multipliers"]
     inp, out = spec["input"], spec["output"]
 
+    # 캐시 단가: rates.json 에 직접 적혀 있으면 그 값, 없으면 input x 배수
+    w5_rate = spec.get("cache_write_5m", inp * mult["write_5m"])
+    w1_rate = spec.get("cache_write_1h", inp * mult["write_1h"])
+    rd_rate = spec.get("cache_read", inp * mult["read"])
+
     usd = (
         call.input_tokens * inp
-        + call.cache_write_5m * inp * mult["write_5m"]
-        + call.cache_write_1h * inp * mult["write_1h"]
-        + call.cache_read * inp * mult["read"]
+        + call.cache_write_5m * w5_rate
+        + call.cache_write_1h * w1_rate
+        + call.cache_read * rd_rate
         + call.output_tokens * out
     ) / 1_000_000
 
