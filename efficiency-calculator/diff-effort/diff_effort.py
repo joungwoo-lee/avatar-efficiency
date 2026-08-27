@@ -33,7 +33,11 @@ _LOC_PER_HOUR = {"fast": 31.0, "mid": 26.5, "slow": 22.0}
 _DELETE_LOC_PER_HOUR = 200.0
 
 # 종류별 요율 배수 — ../agent-effort/rates.json human_write_model 의
-# 코드 0.08 / 문서 0.05 / 데이터 0.01 비율을 그대로 승계 (README §2.6).
+# 코드 0.08 / 문서 0.05 / 데이터 0.01 비율을 그대로 승계 (README §2.5).
+# 이 배수는 요율의 비율이다(코드=문헌 유도, 문서=Karat 앵커, 데이터=seed).
+# 여기에 곱할 **구성비**는 사용자가 넣는 값이고, 출처가 다르다 — 예시로
+# 도는 0.44/0.315/0.244 는 Claude Code 세션 트랜스크립트에서 Write/Edit 로
+# 나간 단어를 확장자별로 집계한 실측이다(단어 기준, 라인 기준 아님).
 KIND_FACTOR = {"code": 1.0, "doc": 0.625, "data": 0.125}
 KINDS = ("code", "doc", "data")
 
@@ -63,7 +67,14 @@ def mix_factor(code=1.0, doc=0.0, data=0.0):
     """코드/문서/데이터 구성비 -> 실효 요율 배수.
 
     비율은 합이 1이 아니어도 된다 — 내부에서 정규화한다.
-    (0.44, 0.315, 0.244) -> 0.667
+    (0.44, 0.315, 0.244) -> 0.668
+
+    이 예시 구성비의 출처: Claude Code 세션 트랜스크립트에서 Write/Edit
+    도구로 나간 단어를 확장자별로 집계한 실측 (session-api/
+    record_actions_code_api.md §2.5). 사람이 짠 코드가 아니라 **에이전트
+    산출물**의 구성이고, **단어 기준**이라 라인 기준인 이 모듈에 그대로
+    넣으면 오차가 있다. 자기 데이터를 라인 기준으로 재서 넣을 것 —
+    measure_ratios.py 가 그 값을 뽑는다.
 
     가정: 종류별 상대 비용(코드 1 : 문서 0.625 : 데이터 0.125)은
     타이핑 축에서 잰 비율인데, 전체 작업 축으로 옮겨도 같다고 본다.
@@ -171,7 +182,8 @@ def _main():
     p.add_argument("--band", choices=BANDS, default=DEFAULT_BAND,
                    help="생산성 밴드 (기본 mid)")
     p.add_argument("--mix", default=None, metavar="CODE,DOC,DATA",
-                   help="구성비 (예: 0.44,0.315,0.244). 생략하면 전부 코드")
+                   help="구성비 (measure_ratios.py 로 실측해 넣는다). "
+                        "생략하면 전부 코드 요율")
     p.add_argument("--comment-ratio", type=float, default=0.0,
                    help="주석·빈 줄 비율 (예: 0.25). 기본 0 = 미보정")
     p.add_argument("--generated-ratio", type=float, default=0.0,

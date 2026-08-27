@@ -19,7 +19,12 @@
 
 보정 두 축 (둘 다 기본 꺼짐 — 켤 때만 적용하고 가정을 리포트에 찍는다):
     --mix CODE,DOC,DATA    구성비 -> 실효 요율 배수. 전부 코드 요율로
-                           치면 문서·데이터를 과대 계상한다.
+                           치면 문서·데이터를 과대 계상한다. 넣을 값은
+                           measure_ratios.py 로 자기 저장소에서 잰다
+                           (라인 기준). README 가 예시로 드는
+                           0.44/0.315/0.244 는 Claude Code 세션
+                           트랜스크립트의 Write/Edit 단어를 집계한
+                           실측이라 단어 기준 — 그대로 베끼지 말 것.
     --comment-ratio R      주석·빈 줄 비율
     --generated-ratio R    자동생성물 비율
                            둘을 곱해 유효 라인 비율을 만든다. 요율이
@@ -247,7 +252,8 @@ def _main():
     p.add_argument("--band", choices=BANDS, default=DEFAULT_BAND,
                    help="생산성 밴드 (기본 mid)")
     p.add_argument("--mix", default=None, metavar="CODE,DOC,DATA",
-                   help="구성비 (예: 0.44,0.315,0.244). 생략하면 전부 코드")
+                   help="구성비 (measure_ratios.py 로 실측해 넣는다). "
+                        "생략하면 전부 코드 요율")
     p.add_argument("--comment-ratio", type=float, default=0.0,
                    help="주석·빈 줄 비율 (예: 0.25). 기본 0 = 미보정")
     p.add_argument("--generated-ratio", type=float, default=0.0,
