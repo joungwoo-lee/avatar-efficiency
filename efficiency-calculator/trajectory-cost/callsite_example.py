@@ -16,7 +16,7 @@
 
             "speedup": speedup(h_min, actual["total_min"]),
             "speedup_vs_hitl": speedup(h_min, actual["hitl_min"]),
-    +       "trajectory_cost_usd": _cost_usd(jsonl_path),
+    +       "user_tokens_USD": _cost_usd(jsonl_path),
             "channel_audit": audit,
 
       그리고 파일 아무 데나 (measure 위) 헬퍼 하나 — 트랜스크립트가 없는 세션에서
@@ -53,7 +53,7 @@ def _cost_usd(jsonl_path):
 
 def measure_with_cost(jsonl_path, **kw):
     r = measure(jsonl_path, **kw)
-    r["trajectory_cost_usd"] = _cost_usd(jsonl_path)   # ← (2) 호출
+    r["user_tokens_USD"] = _cost_usd(jsonl_path)   # ← (2) 호출
     return r
 
 
@@ -68,5 +68,5 @@ if __name__ == "__main__":
     print("사람 시간 : %s 분" % r["human"]["min"])
     print("기계 시간 : %s 분" % r["agent"]["machine_min"])
     print("speedup   : %s" % r["speedup"])
-    print("LLM 비용  : %s" % ("$%.4f" % r["trajectory_cost_usd"]
-                              if r["trajectory_cost_usd"] is not None else "측정 불가"))
+    print("LLM 비용  : %s" % ("$%.4f" % r["user_tokens_USD"]
+                              if r["user_tokens_USD"] is not None else "측정 불가"))

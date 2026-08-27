@@ -38,7 +38,7 @@ python callsite_example.py <세션.jsonl 경로>
 from trajectory_cost import session_cost
 
 d = session_cost(session)
-d["trajectory_cost_usd"]        # 전체
+d["user_tokens_USD"]        # 전체
 d["main_agent"]["cost_usd"]     # 메인 / d["subagents"]["cost_usd"] 서브에이전트
 d["by_model"], d["by_agent"], d["onprem"], d["warnings"]
 ```

@@ -6,7 +6,7 @@
 - message.id 기준 중복 제거 (스트리밍 중간 레코드 과대계상 방지)
 - 온프렘(사내 구축) 모델 호출은 provider="onprem" 으로 분리하고 비용 0
 
-지표 이름은 llm_cost_usd 대신 trajectory_cost_usd 로 두는 편이 정확하다.
+지표 이름은 llm_cost_usd 대신 user_tokens_USD 로 두는 편이 정확하다.
 = "해당 trajectory 에서 관측 가능한 모델 호출 비용". Claude Code 내부 background
 호출(제목 생성 등) 일부는 JSONL 에 남지 않아 /usage 값과 소폭 차이가 날 수 있다.
 """
@@ -265,7 +265,7 @@ def session_cost(session: str | Path,
         "session_id": Path(files[0]).stem,
         "files": [str(f) for f in files],
         "subagent_files": len(files) - 1,
-        "trajectory_cost_usd": round(total.cost_usd, 6),
+        "user_tokens_USD": round(total.cost_usd, 6),
         "total": total.as_dict(),
         "main_agent": main.as_dict(),
         "subagents": sub.as_dict(),
@@ -288,7 +288,7 @@ def session_cost_usd(session: str | Path,
     서브에이전트 포함, 온프렘 모델 호출은 0원. 분해가 필요하면 session_cost() 를 쓴다.
     """
     return session_cost(session, projects_root=projects_root,
-                        onprem_models=onprem_models)["trajectory_cost_usd"]
+                        onprem_models=onprem_models)["user_tokens_USD"]
 
 
 def project_cost(project_dir: str | Path,
@@ -302,7 +302,7 @@ def project_cost(project_dir: str | Path,
     return {
         "project_dir": str(pdir),
         "sessions": len(sessions),
-        "trajectory_cost_usd": round(sum(s["trajectory_cost_usd"] for s in sessions), 6),
+        "user_tokens_USD": round(sum(s["user_tokens_USD"] for s in sessions), 6),
         "detail": sessions,
     }
 
@@ -311,7 +311,7 @@ def _fmt(d: dict) -> str:
     t = d["total"]
     lines = [
         "session %s  (서브에이전트 파일 %d개)" % (d["session_id"], d["subagent_files"]),
-        "  비용 합계        $%.4f" % d["trajectory_cost_usd"],
+        "  비용 합계        $%.4f" % d["user_tokens_USD"],
         "    메인 에이전트  $%.4f  (%d calls)" % (d["main_agent"]["cost_usd"], d["main_agent"]["calls"]),
         "    서브에이전트   $%.4f  (%d calls)" % (d["subagents"]["cost_usd"], d["subagents"]["calls"]),
         "    온프렘(무료)   $%.4f  (%d calls, %s tok)" % (
@@ -348,9 +348,9 @@ def main(argv: list[str] | None = None) -> int:
         if a.json:
             print(json.dumps(out, ensure_ascii=False, indent=2))
         else:
-            print("%s  세션 %d개  합계 $%.4f" % (out["project_dir"], out["sessions"], out["trajectory_cost_usd"]))
+            print("%s  세션 %d개  합계 $%.4f" % (out["project_dir"], out["sessions"], out["user_tokens_USD"]))
             for s in out["detail"]:
-                print("  %s  $%.4f" % (s["session_id"], s["trajectory_cost_usd"]))
+                print("  %s  $%.4f" % (s["session_id"], s["user_tokens_USD"]))
         return 0
 
     out = session_cost(a.session, onprem_models=a.onprem_model)

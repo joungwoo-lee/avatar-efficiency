@@ -107,7 +107,7 @@ def test_session_with_subagents_and_onprem():
         d = tc.session_cost(sid, projects_root=root)
 
     assert d["subagent_files"] == 1
-    assert abs(d["trajectory_cost_usd"] - 35.0) < 1e-6, d["trajectory_cost_usd"]
+    assert abs(d["user_tokens_USD"] - 35.0) < 1e-6, d["user_tokens_USD"]
     assert abs(d["main_agent"]["cost_usd"] - 25.0) < 1e-6
     assert abs(d["subagents"]["cost_usd"] - 10.0) < 1e-6
     assert d["onprem"]["cost_usd"] == 0.0
@@ -122,7 +122,7 @@ def test_unknown_model_flagged():
         sid = "99999999-0000-0000-0000-000000000000"
         _write(root / "C--proj", sid + ".jsonl", [_rec("x1", "gpt-9-turbo", out=1000)])
         d = tc.session_cost(sid, projects_root=root)
-    assert d["trajectory_cost_usd"] == 0.0
+    assert d["user_tokens_USD"] == 0.0
     assert any("gpt-9-turbo" in w for w in d["warnings"])
     print("ok unknown_model_flagged")
 
