@@ -146,6 +146,32 @@ def _f(v, spec="%.1f"):
     return "-" if v is None else spec % v
 
 
+def print_total_block(tot):
+    """전 인원 합산 — 비율 3종을 식과 함께 따로 찍는다.
+
+    각 비율은 '합계 ÷ 합계'다. 사람별 비율의 평균이 아니다 — 라인 수가
+    많은 사람이 그만큼 더 반영되는 게 맞다.
+    """
+    sess_min = (tot["cli_active_sec"] + tot["user_active_sec"]) / 60.0
+    user_min = tot["user_active_sec"] / 60.0
+    print()
+    print("[전체 합산 %s]" % tot["employee_id"])
+    print("  사람노동 합                 %14.1f 분  (%.1f 시간)"
+          % (tot["effort_min"], tot["effort_hours"]))
+    print("  CC+사용자 세션시간 합       %14.1f 분  (%.1f 시간)"
+          % (sess_min, sess_min / 60.0))
+    print("  사용자 세션시간 합          %14.1f 분  (%.1f 시간)"
+          % (user_min, user_min / 60.0))
+    print("  달러비용 합                 %14.2f $" % tot["total_cost"])
+    print("  ----")
+    print("  사람노동합 / (CC+사용자)세션시간합 = %s 배"
+          % _f(tot["x_total"], "%.2f"))
+    print("  사람노동합 / 사용자세션시간합      = %s 배"
+          % _f(tot["x_user"], "%.2f"))
+    print("  사람노동합 / 달러비용합            = %s 분/$"
+          % _f(tot["min_per_usd"], "%.2f"))
+
+
 def print_table(rows, band, tot=None):
     r = rates(band)
     idw = max([len(x["employee_id"]) for x in rows] + [11])
@@ -174,6 +200,8 @@ def print_table(rows, band, tot=None):
     print("x_total     사람노동 / (CC세션시간 + 사용자세션시간)  [배]")
     print("x_user      사람노동 / 사용자세션시간                 [배]")
     print("min_per_usd 사람노동 / 달러비용                       [분/$]")
+    if tot:
+        print_total_block(tot)
     print()
     print("주의: 원시 라인 수는 주석·빈 줄·자동생성 파일을 포함한다.")
     print("      절대 시간으로 읽지 말고 사람 간 상대 비교로 쓸 것 (README §4).")
