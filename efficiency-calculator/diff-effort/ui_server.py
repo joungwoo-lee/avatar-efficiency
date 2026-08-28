@@ -228,7 +228,7 @@ def server_assumptions(band, mix, eff_ratio, mix_parts, comment_r, gen_r, pub):
 #   (1) 구성비   코드/문서/데이터 비율. 전부 코드 요율로 치면 문서·데이터
 #                가 코드만큼 비싸져 effort 자체가 부풀려진다.
 #   (2) 사람 개입시간(user_active_sec)  사람이 실제로 붙어 있던 시간.
-#                x_user·x_total 의 분모다. 안 재면 효율을 못 낸다.
+#                x_user_time·x_total 의 분모다. 안 재면 효율을 못 낸다.
 
 # 사람 개입시간이 CC 세션시간의 이 비율보다 작으면 계측 누락으로 본다.
 HITL_MIN_SHARE = 0.15
@@ -277,7 +277,7 @@ def mix_status(mix_parts, source, proxy=False):
 def hitl_status(rows):
     """사람 개입시간 실측 상태 -> UI 가 그릴 dict.
 
-    분모가 0 인 사람은 효율을 아예 못 낸다(x_user 가 '-' 로 빠진다).
+    분모가 0 인 사람은 효율을 아예 못 낸다(x_user_time 가 '-' 로 빠진다).
     분모가 있어도 CC 시간에 견줘 터무니없이 작으면 계측 누락을 의심한다 —
     사람이 그 시간에 그 결과물을 다 봤다는 게 성립하지 않기 때문이다.
     """
@@ -291,7 +291,7 @@ def hitl_status(rows):
     n = len(rows)
     ok = not missing and not tiny
     if missing and len(missing) == n:
-        detail = ("사람 개입시간이 전원 0 이다 — 효율(x_user·x_total)을 "
+        detail = ("사람 개입시간이 전원 0 이다 — 효율(x_user_time·x_total)을 "
                   "낼 수 없다.")
     elif missing or tiny:
         bits = []

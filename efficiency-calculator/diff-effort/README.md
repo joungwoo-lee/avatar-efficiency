@@ -30,7 +30,7 @@ UI 는 **전제 두 개를 화면 맨 위에 상시로 걸어두고** 실시간�
 | 전제 | 없으면 무엇이 망가지나 | 어디서 채우나 | 판정 |
 |---|---|---|---|
 | ① 코드·문서·데이터 구성비 | 문서·데이터까지 코드 요율로 쳐서 **사람노동(effort) 자체가 과대** | 1 칸에서 저장소를 재면 `ratios.json` 에 들어간다 | 실측 · 추정(대리) · 미측정 |
-| ② 사람 개입시간 `user_active_sec` | `x_user`·`x_total` 의 **분모** — 없으면 효율을 낼 수 없다 | 3 칸의 사용량 CSV 안에 들어 있어야 한다 | 사람별로 0 인가, CC 시간의 15% 또는 60초 미만인가 |
+| ② 사람 개입시간 `user_active_sec` | `x_user_time`·`x_total` 의 **분모** — 없으면 효율을 낼 수 없다 | 3 칸의 사용량 CSV 안에 들어 있어야 한다 | 사람별로 0 인가, CC 시간의 15% 또는 60초 미만인가 |
 
 **①에서 대상 저장소를 못 쓸 때** — 성격이 비슷한 **예시 프로젝트를 대신
 재서 개략 추정값**을 쓴다. 1 칸의 "예시 프로젝트로 대신 잼" 을 켜고 재면
@@ -131,7 +131,7 @@ python csv_report.py <사용량CSV경로>
 어떤 설정 파일을, 어느 저장소·기간에서 잰 것으로 썼는지 찍힌다.
 
 옵션: `--out report.csv` (CSV 저장) · `--json` · `--band slow`
-(느린 밴드) · `--sort x_user` (정렬) · `--config <경로>` (다른 설정 파일)
+(느린 밴드) · `--sort x_user_time` (정렬) · `--config <경로>` (다른 설정 파일)
 
 ### 판단이 필요한 경우
 
@@ -474,7 +474,7 @@ Prechelt 원값으로 복귀시킨다. 그게 2.26이다.
 python csv_report.py usage.csv
 python csv_report.py usage.csv --mix 0.44,0.315,0.244
 python csv_report.py usage.csv --mix 0.44,0.315,0.244 --comment-ratio 0.25 --generated-ratio 0.10
-python csv_report.py usage.csv --band slow --sort x_user --out report.csv
+python csv_report.py usage.csv --band slow --sort x_user_time --out report.csv
 python csv_report.py usage.csv --json
 ```
 
@@ -490,9 +490,9 @@ python csv_report.py usage.csv --json
 | 지표 | 정의 | 단위 |
 |---|---|---|
 | `effort_min` | `diff_effort(lines_added, lines_removed)` | 분 |
-| `x_cli` | `effort_min ÷ (cli_active_sec / 60)` — AI 세션시간만이 분모 | 배 |
+| `x_ai_time` | `effort_min ÷ (cli_active_sec / 60)` — AI 세션시간만이 분모 | 배 |
 | `x_total` | `effort_min ÷ ((cli_active_sec + user_active_sec) / 60)` | 배 |
-| `x_user` | `effort_min ÷ (user_active_sec / 60)` | 배 |
+| `x_user_time` | `effort_min ÷ (user_active_sec / 60)` | 배 |
 | `min_per_usd` | `effort_min ÷ total_cost` | 분/$ |
 
 출력 예 (보정 켠 경우):
@@ -503,7 +503,7 @@ python csv_report.py usage.csv --json
   구성비        코드 44.0% / 문서 31.5% / 데이터 24.4% → 실효 요율 배수 0.6680
   유효 라인     주석·빈 줄 25.0% + 자동생성물 10.0% 제외 → 유효 라인 비율 0.6750
 
-employee_id      added    removed   effort_min   effort_h     x_cli    x_total     x_user  min_per_usd
+employee_id      added    removed   effort_min   effort_h     x_ai_time    x_total     x_user_time  min_per_usd
 ------------------------------------------------------------------------------------------------------
 oseok.kim       179887      25046     183659.5     3061.0      13.1       12.5      297.8         17.3
 jane.doe         20000      31000      21907.5      365.1      14.6       12.9      109.5         18.2
