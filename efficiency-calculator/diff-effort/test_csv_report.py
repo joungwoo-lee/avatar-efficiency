@@ -36,6 +36,10 @@ class TestAnalyzeRow(unittest.TestCase):
         self.assertAlmostEqual(r["effort_min"], 407291.3, places=1)
         # x_user = 407291.3 / (37005/60)
         self.assertAlmostEqual(r["x_user"], 407291.3 / (37005 / 60.0), places=3)
+        # x_cli = 사람노동 / CC 세션시간 (사람시간은 분모에 안 들어간다)
+        self.assertAlmostEqual(r["x_cli"], 407291.3 / (842715 / 60.0),
+                               places=3)
+        self.assertGreater(r["x_user"], r["x_cli"])
         self.assertAlmostEqual(r["x_total"],
                                407291.3 / ((842715 + 37005) / 60.0), places=3)
         self.assertAlmostEqual(r["min_per_usd"], 407291.3 / 10638.70, places=3)
@@ -45,6 +49,7 @@ class TestAnalyzeRow(unittest.TestCase):
                "cli_active_sec": "0", "user_active_sec": "0",
                "total_cost": "0"}
         r = analyze_row(row)
+        self.assertIsNone(r["x_cli"])
         self.assertIsNone(r["x_total"])
         self.assertIsNone(r["x_user"])
         self.assertIsNone(r["min_per_usd"])
@@ -114,6 +119,8 @@ class TestTotalsAndSort(unittest.TestCase):
         s_min = sum(r["effort_min"] for r in self.rows)
         s_user = sum(r["user_active_sec"] for r in self.rows)
         self.assertAlmostEqual(t["x_user"], s_min / (s_user / 60.0), places=3)
+        s_cli = sum(r["cli_active_sec"] for r in self.rows)
+        self.assertAlmostEqual(t["x_cli"], s_min / (s_cli / 60.0), places=3)
 
     def test_sort_puts_none_last_both_directions(self):
         desc = sort_rows(list(self.rows), "x_user", asc=False)

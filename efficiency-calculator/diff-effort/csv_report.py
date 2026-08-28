@@ -11,11 +11,12 @@
 
 출력 지표 (사람마다):
     effort_min   = diff_effort(추가, 삭제)                      [분]
+    x_cli        = effort_min / (cli_active_sec / 60)
     x_total      = effort_min / ((cli_active_sec + user_active_sec) / 60)
     x_user       = effort_min / (user_active_sec / 60)
     min_per_usd  = effort_min / total_cost                      [분/$]
 
-전 인원 합산도 같은 세 식을 합계끼리 나눠 따로 찍는다.
+전 인원 합산도 같은 네 식을 합계끼리 나눠 따로 찍는다.
 
 보정 계수는 **ratios.json 에서 읽는다.** measure_ratios.py 로 대상
 저장소를 한 번 재면 그 파일이 생기고, 이 스크립트가 자동으로 집어
@@ -55,9 +56,9 @@ REQUIRED = ("employee_id", "lines_added", "lines_removed",
 
 FIELDS = ("employee_id", "lines_added", "lines_removed",
           "effort_min", "effort_hours", "cli_active_sec", "user_active_sec",
-          "total_cost", "x_total", "x_user", "min_per_usd")
+          "total_cost", "x_cli", "x_total", "x_user", "min_per_usd")
 
-SORT_KEYS = ("effort_min", "x_total", "x_user", "min_per_usd",
+SORT_KEYS = ("effort_min", "x_cli", "x_total", "x_user", "min_per_usd",
              "lines_added", "employee_id")
 
 
@@ -128,6 +129,7 @@ def analyze_row(row, band=DEFAULT_BAND, mix=None, eff_ratio=1.0):
         "cli_active_sec": cli_s,
         "user_active_sec": user_s,
         "total_cost": cost,
+        "x_cli": _ratio(minutes, cli_s / 60.0),
         "x_total": _ratio(minutes, (cli_s + user_s) / 60.0),
         "x_user": _ratio(minutes, user_s / 60.0),
         "min_per_usd": _ratio(minutes, cost),
@@ -173,6 +175,7 @@ def totals(rows):
         "cli_active_sec": s_cli,
         "user_active_sec": s_user,
         "total_cost": s_cost,
+        "x_cli": _ratio(s_min, s_cli / 60.0),
         "x_total": _ratio(s_min, (s_cli + s_user) / 60.0),
         "x_user": _ratio(s_min, s_user / 60.0),
         "min_per_usd": _ratio(s_min, s_cost),
@@ -239,23 +242,28 @@ def print_assumptions(band, mix, eff_ratio, mix_parts, comment_r, gen_r,
 
 
 def print_total_block(tot):
-    """전 인원 합산 — 비율 3종을 식과 함께 따로 찍는다.
+    """전 인원 합산 — 비율 4종을 식과 함께 따로 찍는다.
 
     각 비율은 '합계 ÷ 합계'다. 사람별 비율의 평균이 아니다 — 라인 수가
     많은 사람이 그만큼 더 반영되는 게 맞다.
     """
+    cli_min = tot["cli_active_sec"] / 60.0
     sess_min = (tot["cli_active_sec"] + tot["user_active_sec"]) / 60.0
     user_min = tot["user_active_sec"] / 60.0
     print()
     print("[전체 합산 %s]" % tot["employee_id"])
     print("  사람노동 합                 %14.1f 분  (%.1f 시간)"
           % (tot["effort_min"], tot["effort_hours"]))
+    print("  CC 세션시간 합              %14.1f 분  (%.1f 시간)"
+          % (cli_min, cli_min / 60.0))
     print("  CC+사용자 세션시간 합       %14.1f 분  (%.1f 시간)"
           % (sess_min, sess_min / 60.0))
     print("  사용자 세션시간 합          %14.1f 분  (%.1f 시간)"
           % (user_min, user_min / 60.0))
     print("  달러비용 합                 %14.2f $" % tot["total_cost"])
     print("  ----")
+    print("  사람노동합 / CC세션시간합          = %s 배"
+          % _f(tot["x_cli"], "%.2f"))
     print("  사람노동합 / (CC+사용자)세션시간합 = %s 배"
           % _f(tot["x_total"], "%.2f"))
     print("  사람노동합 / 사용자세션시간합      = %s 배"
@@ -268,24 +276,27 @@ def print_table(rows, tot=None):
     idw = max([len(x["employee_id"]) for x in rows] + [11])
     if tot:
         idw = max(idw, len(tot["employee_id"]))
-    fmt = "%-*s %10d %10d %12.1f %10.1f %10s %10s %12s"
-    head = ("%-*s %10s %10s %12s %10s %10s %10s %12s"
+    fmt = "%-*s %10d %10d %12.1f %10.1f %9s %10s %10s %12s"
+    head = ("%-*s %10s %10s %12s %10s %9s %10s %10s %12s"
             % (idw, "employee_id", "added", "removed", "effort_min",
-               "effort_h", "x_total", "x_user", "min_per_usd"))
+               "effort_h", "x_cli", "x_total", "x_user", "min_per_usd"))
     print(head)
     print("-" * len(head))
     for x in rows:
         print(fmt % (idw, x["employee_id"], x["lines_added"],
                      x["lines_removed"], x["effort_min"], x["effort_hours"],
-                     _f(x["x_total"]), _f(x["x_user"]), _f(x["min_per_usd"])))
+                     _f(x["x_cli"]), _f(x["x_total"]), _f(x["x_user"]),
+                     _f(x["min_per_usd"])))
     if tot:
         print("-" * len(head))
         print(fmt % (idw, tot["employee_id"], tot["lines_added"],
                      tot["lines_removed"], tot["effort_min"],
-                     tot["effort_hours"], _f(tot["x_total"]),
-                     _f(tot["x_user"]), _f(tot["min_per_usd"])))
+                     tot["effort_hours"], _f(tot["x_cli"]),
+                     _f(tot["x_total"]), _f(tot["x_user"]),
+                     _f(tot["min_per_usd"])))
     print()
     print("effort_min  사람이 직접 짰다면 걸릴 노동 (분)")
+    print("x_cli       사람노동 / CC세션시간                     [배]")
     print("x_total     사람노동 / (CC세션시간 + 사용자세션시간)  [배]")
     print("x_user      사람노동 / 사용자세션시간                 [배]")
     print("min_per_usd 사람노동 / 달러비용                       [분/$]")

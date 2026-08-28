@@ -469,7 +469,7 @@ const LABEL = {
   employee_id: '사람', lines_added: '추가', lines_removed: '삭제',
   effort_min: '사람노동(분)', effort_hours: '시간', cli_active_sec: 'CC초',
   user_active_sec: '사용자초', total_cost: '비용($)',
-  x_total: 'x_total', x_user: 'x_user', min_per_usd: '분/$'
+  x_cli: 'x_cli', x_total: 'x_total', x_user: 'x_user', min_per_usd: '분/$'
 };
 function cell(k, v) {
   if (v === null || v === undefined || v === '') return '-';
@@ -523,8 +523,9 @@ function drawReport(res) {
 
   $('kpis').innerHTML = t ? (
     kpi(Number(t.effort_hours).toFixed(1) + ' h', '사람노동 합') +
-    kpi(t.x_total === null ? '-' : Number(t.x_total).toFixed(2) + '배', '사람노동 / (CC+사용자)시간') +
-    kpi(t.x_user === null ? '-' : Number(t.x_user).toFixed(2) + '배', '사람노동 / 사용자시간') +
+    kpi(t.x_cli === null ? '-' : Number(t.x_cli).toFixed(2) + '배', '사람노동 / AI 세션시간') +
+    kpi(t.x_total === null ? '-' : Number(t.x_total).toFixed(2) + '배', '사람노동 / (AI+사용자)시간') +
+    kpi(t.x_user === null ? '-' : Number(t.x_user).toFixed(2) + '배', '사람노동 / 사람시간') +
     kpi(t.min_per_usd === null ? '-' : Number(t.min_per_usd).toFixed(1), '분 / $') +
     kpi(res.rows.length + '명', '인원')
   ) : '';
