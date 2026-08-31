@@ -3,11 +3,13 @@
 #   ./run-ui.sh            로컬판
 #   ./run-ui.sh server     서버판 (ratios.json 고정)
 #   ./run-ui.sh 9000       포트
+#   ./run-ui.sh open       로컬판을 0.0.0.0 으로 연다 (다른 PC 접속 가능 — 이 PC 디스크 노출 주의)
 set -e
 cd "$(dirname "$0")"
-MODE=local; PORT=8765
+MODE=local; PORT=8765; OPEN=""
 for a in "$@"; do
   [ "$a" = server ] && MODE=server
+  [ "$a" = open ] && OPEN=--open
   [[ "$a" =~ ^[0-9]+$ ]] && PORT=$a
 done
 PY=""
@@ -25,5 +27,5 @@ if [ "$MODE" = server ]; then
   [ -f ratios.json ] || { echo "[오류] 서버판은 ratios.json 이 필요하다. 로컬판 1 칸에서 먼저 재라." >&2; exit 2; }
   exec "$PY" ui_server.py --server --config ratios.json --port "$PORT"
 else
-  exec "$PY" ui_server.py --port "$PORT"
+  exec "$PY" ui_server.py --port "$PORT" $OPEN
 fi
