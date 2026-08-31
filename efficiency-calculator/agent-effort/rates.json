@@ -116,7 +116,8 @@
     },
     "edit": {
       "unit": "word_count",
-      "min_per_unit": 0.02
+      "min_per_unit": 0.025,
+      "_comment": "§72: human.edit(§66, 40 wpm)과 동일하게 0.02→0.025. LLM 사전추산 경로(agent_effort·counterfactual-api trajectory_minutes)에서만 쓰임 — 실측 분모 경로(transcript_actual)는 미사용이라 record-actions-code 측정값 영향 0."
     },
     "data_entry": {
       "unit": "record_count",
