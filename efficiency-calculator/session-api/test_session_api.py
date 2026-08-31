@@ -335,6 +335,41 @@ class TestSessionApi(unittest.TestCase):
         self.assertEqual(bd0["read"]["count"], 511)
         self.assertGreaterEqual(r_off["human"]["min"], r_on["human"]["min"])
 
+    def test_range_read_full_deep_and_contributed_floor(self):
+        # §75: (a) Read(offset/limit)로만 읽은 기여 파일은 전량 정독(§70 조회형과
+        # 동일 행위) (b) 통째 읽은 기여 파일은 증거 블록 없어도 최소 200단어 정독.
+        import record_actions_code_api  # noqa: F401
+        from requirement_actions import collect_record_stats
+        body = "w " * 1000   # 증거 없는 5블록
+        lines = [
+            {"type": "user", "message": {"role": "user", "content": "지시 " * 10}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "g", "name": "Grep", "input": {"pattern": "x"}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "g", "content": "a.py b.py"}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "r1", "name": "Read",
+                 "input": {"file_path": "a.py", "offset": 100, "limit": 80}},   # 범위 → 착지·기여
+                {"type": "tool_use", "id": "r2", "name": "Read",
+                 "input": {"file_path": "b.py"}}]}},                          # 통째
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "r1", "content": body},
+                {"type": "tool_result", "tool_use_id": "r2", "content": body}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "a.py 와 b.py 확인함"}]}},          # ② 이름 언급 → 둘 다 기여
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "s.jsonl")
+            with open(p, "w", encoding="utf-8") as f:
+                for ln in lines:
+                    f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+            rs = collect_record_stats(p, subagent_paths=[], detail=True)
+        self.assertEqual(rs["contributed_docs"], 2)
+        self.assertEqual(rs["files"]["deep_split"]["a.py"], [1000, 0])   # 범위 읽기 전량 정독
+        self.assertEqual(rs["files"]["deep_split"]["b.py"], [200, 800])  # 통째: 바닥 200
+        self.assertEqual(rs["deep_words"], 1200)
+        self.assertEqual(rs["skim_words"], 800)
+
     def test_rawrecord_mode(self):
         # §39: rawrecord = 궤적 재연 — 행동 횟수를 세션 기록 그대로.
         # Bash 6회 세션: 기본 자는 execute 1건, rawrecord는 6건.

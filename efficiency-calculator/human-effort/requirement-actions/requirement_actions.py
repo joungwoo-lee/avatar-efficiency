@@ -765,6 +765,8 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
     pending_query = {}       # tool_use id → (도구명, 인자, 호출 순번) — 조회형 후보
     query_tokens = {}        # 조회 신원 → 인자 속 id성 토큰들 (신호② 언급 대조)
     query_files = set()      # 조회형 읽기 신원 (§70: 기여 시 블록 분해 없이 전량 정독)
+    range_files = set()      # Read(offset/limit) 범위 지정으로 읽은 파일 (§75)
+    whole_files = set()      # Read 통째로 읽은 파일 (§75) — 둘 다면 블록 규칙
     search_turns = 0         # 검색 도구를 1회+ 쓴 지시 턴 수 (§70: 검색 턴당 하한 1건)
     write_seq = {}           # fp → [(kind, old, new, tool_id)] 쓰기 순서열 (§31 재생용)
     failed_tool_ids = set()  # 툴 에러가 난 호출 id — 적용 안 된 편집 제외
@@ -974,6 +976,12 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                         region = (fp, inp.get("offset"))
                         read_regions[region] = read_regions.get(region, 0) + 1
                         turn_reads.append((fp, tool_i, region))
+                        # §75: 범위 지정 읽기(offset/limit)는 sed -n과 같은 행위
+                        if (inp.get("offset") is not None
+                                or inp.get("limit") is not None):
+                            range_files.add(fp)
+                        else:
+                            whole_files.add(fp)
                         if b.get("id"):
                             pending_read[b["id"]] = (fp, region)
                     elif name == "Write":
@@ -1077,9 +1085,11 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
     deep_w = skim_w = 0
     file_split = {}
     for f in contributed:
-        if f in query_files:
+        if f in query_files or (f in range_files and f not in whole_files):
             # §70: 조회형(셸 cat/sed -n·MCP 조회)은 AI가 범위를 이미 집어서 본
             # 출력 — 후보 훑기가 아니라 목적 읽기. 기여 판정이면 전량 정독.
+            # §75: Read(offset/limit)로만 읽은 파일도 같은 행위 — 도구 이름이
+            # 다르다고 달리 취급하지 않는다(통째 읽기가 섞였으면 블록 규칙).
             _fw = file_read_words.get(f, 0)
             file_split[f] = (_fw, 0)
             deep_w += _fw
@@ -1108,6 +1118,11 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                     f_deep += len(blk)
                 else:
                     f_skim += len(blk)
+        # §75: 기여 판정된 파일은 최소 앞 200단어는 읽은 것으로 — 실행 출력·
+        # 검색 결과·hitl 결론과 같은 "열었으면 앞부분은 읽는다" 규칙. 기여
+        # 파일인데 정독 0단어(실측 70%)는 결과에 쓰고도 한 글자도 안 읽었다는
+        # 뜻이라 어색했다.
+        f_deep = max(f_deep, min(_DEEP_BLOCK_WORDS, file_read_words.get(f, 0)))
         f_deep = min(f_deep, file_read_words.get(f, 0))
         file_split[f] = (f_deep, max(file_read_words.get(f, 0) - f_deep, 0))
         deep_w += file_split[f][0]
