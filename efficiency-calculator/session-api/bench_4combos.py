@@ -3,7 +3,7 @@
 첫 실행 시 이 PC 최근 60세션(200KB 초과) 목록을 bench_files.json에 고정하고, 이후 같은 목록으로 돈다.
 수정 전 1회 → 수정 후 1회 돌려 표를 비교. 역전(ON>OFF) 세션 수도 함께 낸다."""
 import sys, glob, os, json
-sys.path.insert(0, r"C:\Users\joung\avatar-efficiency\efficiency-calculator\session-api")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.stdout.reconfigure(encoding="utf-8")
 import session_api
 from record_actions_code_api import measure
