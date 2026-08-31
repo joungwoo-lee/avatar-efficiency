@@ -55,7 +55,8 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 from session_api import (measure_agent_actual, is_trivial_session)  # noqa: E402
-from requirement_actions import collect_record_stats  # noqa: E402
+from requirement_actions import (collect_record_stats,  # noqa: E402
+                                 find_subagent_files)
 from agent_effort import load_rates, speedup  # noqa: E402
 
 
@@ -98,8 +99,7 @@ _CHANNEL_AXIS = {
     "user_input_words": "읽기(지시 입력)",
     "subagent_files": "서브에이전트(전 축 편입, §59)",
     "unrec_write_words": None,      # 미등록 쓰기 포맷 — §38 경보 대상
-    "sub_report_words": None,       # 산출물 있는 서브의 보고문 — 속으로 정리한 것(미계상)
-    "sub_report_counted_words": "쓰기(draft — 산출물 없는 서브의 보고, §67)",
+    "sub_report_words": "생각(think — 서브 보고문, §68)",
     "image_blocks": None,           # 스크린샷 판독 — 미계상
 }
 _UNCOUNTED_WARN_WORDS = 2000        # 미계상 채널 경보 문턱
@@ -148,8 +148,13 @@ _THINK_DEFAULT_SPEC = {"unit": "word_count", "min_per_unit": 0.005}
 #                      # (§57 분자 정독과 동속 — 200wpm 상당)
 
 
-def collect_strategy_thinking(jsonl_path):
+def collect_strategy_thinking(jsonl_path, subagent_paths=()):
     """지시 직후 첫 응답의 생각(=전략 생각)만 **계상**. 결정론, LLM 0회.
+
+    §68: 서브에이전트 기록(subagent_paths)도 같은 규칙으로 훑는다 — 서브의
+    지시(부모가 준 프롬프트) 직후 첫 응답 생각 = 그 서브의 전략 생각.
+    "사람이 직렬로 다 한다면" 위임 여부에 값이 흔들리지 않게. 서브 몫은
+    sub_tokens/sub_points/sub_fallback_points로 따로도 보고한다.
 
     도구 중간 생각은 계상하지 않는다(§53 숙련자 가정) — 다만 그 크기를
     mid_tokens로 함께 보고해 미계상 규모가 리포트에 드러나게 한다
@@ -166,19 +171,47 @@ def collect_strategy_thinking(jsonl_path):
     반환: {"points": 전략 지점 수, "tokens": 전략 생각 토큰,
            "fallback_points": 토큰 미기록 전략 지점 수,
            "mid_tokens": 도구 중간 생각 토큰, "mid_points": 그 지점 수,
-           "all_tokens": 전략+중간 합}
+           "all_tokens": 전략+중간 합,
+           "sub_points"/"sub_tokens"/"sub_fallback_points": 위 합계 중 서브 몫}
     """
+    points = tokens = fallback = 0
+    mid_tokens = mid_points = 0
+    sub_points = sub_tokens = sub_fallback = 0
+    for _path, _is_sub in [(jsonl_path, False)] + [(p, True)
+                                                   for p in subagent_paths]:
+        try:
+            fh = open(_path, encoding="utf-8", errors="replace")
+        except OSError:
+            if _is_sub:
+                continue
+            raise
+        with fh:
+            _r = _scan_strategy_thinking(fh, skip_sidechain=not _is_sub)
+        points += _r[0]; tokens += _r[1]; fallback += _r[2]
+        mid_points += _r[3]; mid_tokens += _r[4]
+        if _is_sub:
+            sub_points += _r[0]; sub_tokens += _r[1]; sub_fallback += _r[2]
+    return {"points": points, "tokens": tokens, "fallback_points": fallback,
+            "mid_points": mid_points, "mid_tokens": mid_tokens,
+            "all_tokens": tokens + mid_tokens,
+            "sub_points": sub_points, "sub_tokens": sub_tokens,
+            "sub_fallback_points": sub_fallback}
+
+
+def _scan_strategy_thinking(fh, skip_sidechain=True):
+    """기록 1파일의 전략/중간 생각 집계 → (points, tokens, fallback, mid_points,
+    mid_tokens). 서브 파일은 전 기록이 isSidechain이라 skip_sidechain=False."""
     points = tokens = fallback = 0
     mid_tokens = mid_points = 0
     seen = set()
     awaiting = False
-    with open(jsonl_path, encoding="utf-8", errors="replace") as fh:
+    if True:
         for line in fh:
             try:
                 rec = json.loads(line)
             except Exception:
                 continue
-            if rec.get("isSidechain"):
+            if skip_sidechain and rec.get("isSidechain"):
                 continue
             t = rec.get("type")
             if t == "user":
@@ -224,9 +257,7 @@ def collect_strategy_thinking(jsonl_path):
                 if tt:
                     mid_points += 1
                     mid_tokens += tt
-    return {"points": points, "tokens": tokens, "fallback_points": fallback,
-            "mid_points": mid_points, "mid_tokens": mid_tokens,
-            "all_tokens": tokens + mid_tokens}
+    return points, tokens, fallback, mid_points, mid_tokens
 
 
 def write_minutes(kind_words, rates, is_edit=False):
@@ -350,12 +381,7 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
     if not (draft_w or edit_w):
         # 보고형: 대화 보고가 산출물 (문서 요율)
         draft_kind = {"doc": stats.get("answer_words", 0)}
-    # §67: 파일 산출물 없는 서브에이전트의 마지막 보고 = 그 일의 결과물 — 메인의
-    # 보고형 규칙을 서브에도 적용. 양 모드 동일 가산(단조성 불변).
-    sub_rep = stats.get("sub_report_words_counted", 0)
-    if sub_rep:
-        draft_kind["doc"] = draft_kind.get("doc", 0) + sub_rep
-    draft_w = sum(draft_kind.values())
+        draft_w = sum(draft_kind.values())
     items = []
     if read_w:
         items.append({"primitive": "read", "count": round(read_w, 1)})
@@ -418,7 +444,9 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
     rates = rates or load_rates()
     # 분자는 서브에이전트 몫을 포함한다 (§59 규칙1: 병렬은 분모만) —
     # subagent_paths=[]로 끄면 구 동작(전량 0원). 감사·기여도 분해용.
-    stats = collect_record_stats(jsonl_path, subagent_paths=subagent_paths)
+    subs = (list(subagent_paths) if subagent_paths is not None
+            else find_subagent_files(jsonl_path))
+    stats = collect_record_stats(jsonl_path, subagent_paths=subs)
     suspect, suspect_why = suspect_output_channel(stats)
     # §64 초소형 제외: 세션 러닝타임(첫~마지막 기록)이 5분 이하면 측정 안 함
     actual = measure_agent_actual(jsonl_path, rates, include_subagents)
@@ -448,7 +476,7 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
         breakdown.append(row)
     think_info = None
     if include_think:  # 전략 생각 (§53) — 휴먼화 축과 독립, 기본 ON
-        st = collect_strategy_thinking(jsonl_path)
+        st = collect_strategy_thinking(jsonl_path, subs)
         spec = card.get("think") or _THINK_DEFAULT_SPEC
         # 구 포맷 지점은 건당 고정 분(§58) — 요율에 무관하게 같은 시간이
         # 되도록 분을 단어로 역환산해 더한다(breakdown 단위 일관성 유지).
@@ -457,14 +485,23 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
         # 전략 생각(지시 직후 첫 응답)만 계상 — 도구 중간 생각은 집계만
         # 하고 분자에 넣지 않는다(§53 숙련자 가정 유지). 미계상 크기는
         # think.mid_tokens로 그대로 보고된다.
-        think_words = round(st["tokens"] * THINK_TOK2WORD + fb_words, 1)
+        # §68: 서브에이전트가 부모에게 낸 보고문(전량)은 밖으로 나온 생각 —
+        # think 요율로 가산. 직접 생각(토큰×0.005) ≈ 위임(서브 생각 토큰×0.005
+        # + 보고 단어×0.005)이 되어 위임 여부에 값이 안 흔들린다.
+        rep_words = stats.get("sub_report_words", 0)
+        strat_words = round(st["tokens"] * THINK_TOK2WORD, 1)
+        think_words = round(strat_words + fb_words + rep_words, 1)
         if think_words:
             minutes = think_words * spec["min_per_unit"]
             total += minutes
             breakdown.append({"primitive": "think", "count": think_words,
                               "unit": spec.get("unit", "word_count"),
-                              "minutes": round(minutes, 2)})
-        think_info = st
+                              "minutes": round(minutes, 2),
+                              "detail": {"strategy_words": strat_words,
+                                         "fallback_words": round(fb_words, 1),
+                                         "sub_report_words": rep_words}})
+        think_info = dict(st)
+        think_info["sub_report_words"] = rep_words
     h_min = round(total, 2)
     audit = channel_audit(stats)
     notes = [suspect_why] if suspect else []

@@ -1092,9 +1092,9 @@ class TestRequirementActions(unittest.TestCase):
         finally:
             os.unlink(p)
 
-    def test_subagent_report_counted_only_without_artifact(self):
-        # §67: 파일 산출물 없는 서브의 마지막 보고만 sub_report_words_counted.
-        # 산출물 있는 서브의 보고는 미계상(결산 sub_report_words에만).
+    def test_subagent_report_words_total(self):
+        # §68: 서브에이전트 텍스트(부모에게 낸 보고)는 전량 sub_report_words로
+        # 집계 — measure()가 think 요율로 계상. 산출물 유무로 가르지 않는다.
         import tempfile, os, json as _json
         from requirement_actions import collect_record_stats
         def tu(i, name, inp):
@@ -1109,7 +1109,7 @@ class TestRequirementActions(unittest.TestCase):
                     {"type": "text", "text": "do"}]}}]
         sub_a = [tx("progress " * 30), tu("w1", "Write",
                  {"file_path": "a.py", "content": "x " * 10}), tx("done " * 40)]
-        sub_b = [tx("interim " * 25), tx("final report " * 20)]   # 산출물 없음
+        sub_b = [tx("interim " * 25), tx("final report " * 20)]
         paths = []
         for rows in (main, sub_a, sub_b):
             fd, p = tempfile.mkstemp(suffix=".jsonl")
@@ -1119,10 +1119,9 @@ class TestRequirementActions(unittest.TestCase):
             paths.append(p)
         try:
             rs = collect_record_stats(paths[0], subagent_paths=paths[1:])
-            self.assertEqual(rs["sub_report_words_counted"], 40)   # sub_b 마지막 보고만
-            self.assertEqual(rs["sub_report_words"], 30 + 40 + 25 + 40)  # 전량(결산)
-            self.assertEqual(rs["channels"]["sub_report_counted_words"], 40)
-            self.assertEqual(rs["channels"]["sub_report_words"], 30 + 40 + 25)
+            self.assertEqual(rs["sub_report_words"], 30 + 40 + 25 + 40)
+            self.assertEqual(rs["channels"]["sub_report_words"], 135)
+            self.assertNotIn("sub_report_words_counted", rs)
         finally:
             for p in paths:
                 os.unlink(p)

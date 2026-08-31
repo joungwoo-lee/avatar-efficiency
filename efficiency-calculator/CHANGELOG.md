@@ -1399,6 +1399,47 @@ draft(doc)에 가산(단조성 불변). 채널 결산은 `sub_report_counted_wor
 테스트: human-effort 53(신규 `test_subagent_report_counted_only_without_artifact`),
 session-api 16, agent-effort 15 통과.
 
+## 68. 서브에이전트 보고문은 draft가 아니라 think 요율로 전량 계상 + 서브 전략 생각 포함 — §67 대체 (위임 불변)
+
+**문제 (§67 하루 만에 발견).** 전략 생각을 메인이 직접 하면 토큰×0.75×0.005
+(200 wpm 상당)로 think에 잡히고, Plan 서브에 위임하면 메인 think ≈0 + 서브의
+계획 보고문이 §67로 draft 0.05(20 wpm)에 잡혀 **같은 인지 산출물이 단어당 10배**
+차이. 서브 자신의 생각 토큰은 `collect_strategy_thinking`이 메인 파일만 읽어
+어느 쪽에도 안 잡혔다. §67 이전에는 반대로 위임하면 0이었다. 어느 쪽도
+"숙련자가 직렬로 다 했다면"과 맞지 않는다.
+
+**원칙.** 위임 여부에 값이 흔들리면 안 된다. 서브→부모 보고는 사람 하나가
+직렬로 했다면 머릿속에 있던 것을 다음 단계로 넘기는 것 = 밖으로 나온 생각.
+사용자에게 가는 최종 보고는 메인이 따로 쓰므로(보고형 §33), 서브 보고를 draft로
+치면 보고형 세션에서 같은 내용을 두 번 센다.
+
+**수리.**
+- `collect_strategy_thinking(jsonl_path, subagent_paths)`: 서브 파일도 같은
+  선별 규칙(지시 직후 첫 응답)으로 훑어 합산. `sub_tokens/sub_points/
+  sub_fallback_points`로 서브 몫 보고. 내부를 `_scan_strategy_thinking`으로 분리.
+- `measure()`: 서브 파일 목록을 한 번 정해 `collect_record_stats`·
+  `collect_strategy_thinking`에 같이 넘김. think 행 = 전략 단어 + 구 포맷 환산
+  + **서브 보고문 전량 단어**, `detail`에 셋 분해. `human.think.sub_report_words`.
+- `build_actions`: §67의 draft 가산 제거. 수집기의 `sub_report_words_counted`·
+  `sub_report_counted_words`·서브별 산출물 추적 제거(`sub_report_words` 총량만).
+  채널 결산 축: `sub_report_words` → "생각(think)".
+- `subagent_type`(Plan/Explore)으로 요율을 가르는 방식은 채택하지 않음 —
+  통로 이름으로 면제/차등하는 데서 구멍이 났던 §59 교훈.
+
+**영향 (이 PC 최근 55세션).** 서브 보고문 81,519단어 × 0.005 = 408분(§67의
+957분 대비 −549분). 서브 전략 생각: 토큰 기록 0이지만 **구 포맷 생각 블록이
+517지점** → §58 규칙(건당 1.5분) 그대로 776분. 합 +1,184분 → think 3,870 →
+5,066분(분해: 전략 2,042 · 구포맷 2,616 · 서브 보고 408). 서브가 생각 블록만
+남기고 토큰을 안 적는 기록 포맷이라 서브 몫이 전부 하한값으로 들어간 것.
+
+| 조합 | §67 | §68 |
+|---|---:|---:|
+| rw ON · act ON | 72,669분 5.27배 | **73,108분 5.29배** (+0.6%) |
+| rw OFF · act OFF | 108,573분 7.88배 | 109,017분 7.89배 (+0.4%) |
+
+테스트: session-api 17(신규 `test_think_includes_subagent_report_and_thinking`),
+human-effort 53(§67 테스트를 총량 테스트로 교체), agent-effort 15 통과.
+
 ## 미해결 (알려진 한계·다음 단계)
 
 1. **사람 실측 정답지 0건** — 모든 절대값의 상한. A급 3~5건 확보가 최우선.

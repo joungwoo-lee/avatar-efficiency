@@ -192,6 +192,55 @@ class TestSessionApi(unittest.TestCase):
         # 결정론: 같은 입력 → 같은 결과
         self.assertEqual(r_again["human"]["min"], r_on["human"]["min"])
 
+    def test_think_includes_subagent_report_and_thinking(self):
+        # §68: 서브 보고문 전량 + 서브의 전략 생각 토큰이 think 행에 들어간다
+        # (draft 아님). 양 모드 동일 → ON ≤ OFF 불변.
+        from record_actions_code_api import measure, collect_strategy_thinking
+        T = "2026-08-31T00:%02d:00.000Z"
+        def rec(t, content, ts, sub=False, usage=None):
+            m = {"role": t, "id": f"m{ts}{int(sub)}", "content": content}
+            if usage:
+                m["usage"] = usage
+            r = {"type": t, "timestamp": ts, "message": m}
+            if sub:
+                r["isSidechain"] = True
+            return r
+        think_usage = {"output_tokens_details": {"thinking_tokens": 400}}
+        main = [rec("user", [{"type": "text", "text": "plan it"}], T % 0),
+                rec("assistant", [{"type": "tool_use", "id": "ag", "name": "Agent",
+                                   "input": {"prompt": "plan"}}], T % 1),
+                rec("user", [{"type": "tool_result", "tool_use_id": "ag",
+                              "content": "ok"}], T % 9),
+                rec("assistant", [{"type": "text", "text": "done"}], T % 10)]
+        sub = [rec("user", [{"type": "text", "text": "plan"}], T % 2, sub=True),
+               rec("assistant", [{"type": "thinking", "thinking": "hmm"},
+                                 {"type": "text", "text": "plan " * 200}],
+                   T % 3, sub=True, usage=think_usage)]
+        with tempfile.TemporaryDirectory() as d:
+            mp = os.path.join(d, "s.jsonl"); sp = os.path.join(d, "agent-s.jsonl")
+            with open(mp, "w", encoding="utf-8") as f:
+                f.write("\n".join(json.dumps(r) for r in main) + "\n")
+            with open(sp, "w", encoding="utf-8") as f:
+                f.write("\n".join(json.dumps(r) for r in sub) + "\n")
+            st = collect_strategy_thinking(mp, [sp])
+            self.assertEqual(st["sub_tokens"], 400)
+            self.assertEqual(st["tokens"], 400)       # 메인 첫 응답엔 생각 없음
+            r_on = measure(mp, force=True, subagent_paths=[sp])
+            r_off = measure(mp, force=True, subagent_paths=[sp],
+                            humanize_rw=False, humanize_act=False)
+        for r in (r_on, r_off):
+            th = [b for b in r["human"]["breakdown"] if b["primitive"] == "think"]
+            self.assertEqual(len(th), 1)
+            # 400토큰×0.75 = 300단어 + 서브 보고 200단어 = 500
+            self.assertEqual(th[0]["count"], 500)
+            self.assertEqual(th[0]["detail"]["sub_report_words"], 200)
+            self.assertEqual(r["human"]["think"]["sub_report_words"], 200)
+            # 보고문이 draft로 새지 않는다
+            self.assertFalse(any(b["primitive"] == "draft"
+                                 and b["count"] >= 200
+                                 for b in r["human"]["breakdown"]))
+        self.assertGreaterEqual(r_off["human"]["min"], r_on["human"]["min"])
+
     def test_rawrecord_mode(self):
         # §39: rawrecord = 궤적 재연 — 행동 횟수를 세션 기록 그대로.
         # Bash 6회 세션: 기본 자는 execute 1건, rawrecord는 6건.
