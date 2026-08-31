@@ -95,9 +95,9 @@ class TestTranscriptActual(unittest.TestCase):
             # §50 턴 확인 + §63 코드/문서 요율 분리:
             #   동작 확인 1회 2.0 + 코드 500×0.005 + 문서 250×0.0025
             #   + 문서·기타 파일당 표본 확인 2×0.5
-            #   + 결론 100×0.008 + 진행 100×0.002
-            #   = 2 + 2.5 + 0.625 + 1 + 0.8 + 0.2 = 7.125
-            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 7.125,
+            #   + 결론 100×0.005 + 진행 100×0.00222 (§71 분자 동속)
+            #   = 2 + 2.5 + 0.625 + 1 + 0.5 + 0.222 = 6.847
+            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 6.847,
                                    places=2)
             # §52 기계 draft = (답변 200 + 파일 본문 500+250+1)×0.002
             #                = 1.902, execute 3×0.3 → machine 2.80
@@ -300,8 +300,8 @@ class TestTranscriptActual(unittest.TestCase):
                 f.write(json.dumps(ln, ensure_ascii=False) + "\n")
         try:
             m = actual_effort_minutes(parse_actions(p))
-            # 검토 = 정독 300×0.008 + 초과 훑기 200×0.002 = 2.4 + 0.4 = 2.8
-            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 2.8,
+            # 검토 = 정독 300×0.005 + 초과 훑기 200×0.00222 = 1.5 + 0.444 = 1.944 (§71)
+            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 1.944,
                                    places=2)
         finally:
             os.unlink(p)
@@ -333,11 +333,11 @@ class TestTranscriptActual(unittest.TestCase):
             self.assertEqual(c["corrective_instructions"], 1)
             m = actual_effort_minutes(c)
             # machine = 1×0.3 + 100×0.0005 + 20×0.002 = 0.39
-            # hitl = 지시 2건×(0.5+0.05×2단어) + 검토(결론 20단어×정독 0.008
+            # hitl = 지시 2건×(0.5+0.05×2단어) + 검토(결론 20단어×정독 0.005 §71
             #        + 문서 파일 표본 확인 0.5, 내용물 0단어)
-            #        + 교정 1×4.0 = 1.2 + 0.66 + 4.0 = 5.86
+            #        + 교정 1×4.0 = 1.2 + 0.6 + 4.0 = 5.8
             self.assertAlmostEqual(m["machine_min"], 0.39, places=2)
-            self.assertAlmostEqual(m["hitl_min"], 5.86, places=2)
+            self.assertAlmostEqual(m["hitl_min"], 5.8, places=2)
             self.assertEqual(m["total_min"],
                              actual_effort_minutes(parse_actions(p))["total_min"])
         finally:
