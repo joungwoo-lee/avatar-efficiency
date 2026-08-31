@@ -1092,6 +1092,41 @@ class TestRequirementActions(unittest.TestCase):
         finally:
             os.unlink(p)
 
+    def test_subagent_report_counted_only_without_artifact(self):
+        # §67: 파일 산출물 없는 서브의 마지막 보고만 sub_report_words_counted.
+        # 산출물 있는 서브의 보고는 미계상(결산 sub_report_words에만).
+        import tempfile, os, json as _json
+        from requirement_actions import collect_record_stats
+        def tu(i, name, inp):
+            return {"type": "assistant", "isSidechain": True,
+                    "message": {"role": "assistant", "content": [
+                        {"type": "tool_use", "id": i, "name": name, "input": inp}]}}
+        def tx(t):
+            return {"type": "assistant", "isSidechain": True,
+                    "message": {"role": "assistant", "content": [
+                        {"type": "text", "text": t}]}}
+        main = [{"type": "user", "message": {"role": "user", "content": [
+                    {"type": "text", "text": "do"}]}}]
+        sub_a = [tx("progress " * 30), tu("w1", "Write",
+                 {"file_path": "a.py", "content": "x " * 10}), tx("done " * 40)]
+        sub_b = [tx("interim " * 25), tx("final report " * 20)]   # 산출물 없음
+        paths = []
+        for rows in (main, sub_a, sub_b):
+            fd, p = tempfile.mkstemp(suffix=".jsonl")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                for ln in rows:
+                    f.write(_json.dumps(ln) + "\n")
+            paths.append(p)
+        try:
+            rs = collect_record_stats(paths[0], subagent_paths=paths[1:])
+            self.assertEqual(rs["sub_report_words_counted"], 40)   # sub_b 마지막 보고만
+            self.assertEqual(rs["sub_report_words"], 30 + 40 + 25 + 40)  # 전량(결산)
+            self.assertEqual(rs["channels"]["sub_report_counted_words"], 40)
+            self.assertEqual(rs["channels"]["sub_report_words"], 30 + 40 + 25)
+        finally:
+            for p in paths:
+                os.unlink(p)
+
     def test_write_net_replay(self):
         # §31: 쓰기 순계 재생 — 만든 파일은 편집을 재생해 최종본 복원(왕복
         # 자동 제거), 기존 파일은 덮어쓰임 겹침 차감, 실패 편집(is_error) 제외.

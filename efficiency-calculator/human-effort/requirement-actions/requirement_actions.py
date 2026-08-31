@@ -647,7 +647,8 @@ def _iter_session_records(jsonl_path, subagent_paths=()):
     순서열을 재생하므로, 부모와 서브가 같은 파일을 만졌을 때 순서가 어긋나면
     중복이 샌다 (§59 규칙4 — 순계는 세션 전체에 한 번).
     """
-    streams = [(jsonl_path, False)] + [(p, True) for p in subagent_paths]
+    # is_sub는 서브 파일 경로(truthy) — §67에서 서브별 산출물 유무를 가르는 키
+    streams = [(jsonl_path, False)] + [(p, p) for p in subagent_paths]
     merged = []
     for path, is_sub in streams:
         last = 0.0
@@ -729,7 +730,9 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                              # 이라 즉석 스크립트 작성(건당 평균 97단어)과
                              # `git status`가 같은 값이었다.
     image_blocks = 0         # 스크린샷·차트 블록 수 (채널 결산용 — 아직 미계상)
-    sub_report_w = 0         # 서브에이전트 보고문 단어수 (채널 결산용 — 미계상)
+    sub_report_w = 0         # 서브에이전트 보고문 단어수 (채널 결산용)
+    sub_last_text = {}       # 서브 파일 → 마지막 텍스트 블록 (§67 보고형 규칙)
+    sub_has_artifact = set() # 파일 산출물(Write/Edit)을 낸 서브 파일
     unrec_write = {}         # 미등록 도구명 → 입력에 실려 나간 단어수 (§38)
     turn_search_i = None     # 이 턴의 마지막 검색 시점 (신호④ — 턴 단위)
     turn_reads = []          # 이 턴의 (fp, 읽기 시점)
@@ -868,10 +871,13 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                     if not isinstance(b, dict):
                         continue
                     if b.get("type") == "text":
-                        # 서브에이전트 보고문은 사람에게 간 마무리 답변이 아님
-                        # — 결산에만 올리고 분자에는 안 넣는다 (알려진 미계상)
+                        # 서브에이전트 텍스트: 파일 산출물이 있는 서브의 보고는
+                        # 사람이 속으로 정리한 것(0), 산출물 없는 서브(조사·요약
+                        # 지시)의 마지막 보고는 그 일의 결과물 — 메인의 보고형
+                        # 규칙(§33)을 서브에도 적용(§67). 전량은 결산에 올린다.
                         if is_sub:
                             sub_report_w += len(b.get("text", "").split())
+                            sub_last_text[is_sub] = b.get("text", "")
                         else:
                             texts.append(b.get("text", ""))
                     if b.get("type") != "tool_use":
@@ -932,6 +938,8 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                             pending_read[b["id"]] = (fp, region)
                     elif name == "Write":
                         edited_files.add(fp)
+                        if is_sub:
+                            sub_has_artifact.add(is_sub)   # §67
                         write_seq.setdefault(fp, []).append(
                             ("write", "", inp.get("content") or "", b.get("id")))
                         # Write 전체 본문은 편집 증거로 안 쓴다 — 파일을 통째로
@@ -939,6 +947,8 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                         # 핵심 위치 증거는 Edit의 원문(old_string)만 (§26)
                     else:
                         edited_files.add(fp)
+                        if is_sub:
+                            sub_has_artifact.add(is_sub)   # §67
                         multi = inp.get("edits")
                         pairs = ([(e.get("old_string") or "",
                                    e.get("new_string") or "")
@@ -962,6 +972,9 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
         exec_events.append({"canon": _canon, "cmd_words": _cw,
                             "out_words": 0, "wait_sec": 0.0, "failed": False})
     _end_turn()  # 마지막 턴 마감
+    # §67: 파일 산출물 없는 서브의 마지막 보고 = 결과물 (draft 문서 요율로 계상)
+    sub_report_counted = sum(len(t.split()) for k, t in sub_last_text.items()
+                             if k not in sub_has_artifact)
 
     # 신호⑤ 준비: 턴별 마무리 답변들의 6단어 연속 조각·식별자 집합
     ans_text = " ".join(answers)
@@ -1170,6 +1183,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
            "subagent_files": len(subagent_paths),
            "image_blocks": image_blocks,
            "sub_report_words": sub_report_w,
+           "sub_report_words_counted": sub_report_counted,   # §67 계상분
            # 채널 결산 (§59 규칙2) — 세션에서 나간/들어온 글이 어느 축으로
            # 갔는지 감사용. 어느 축에도 안 잡히는 양이 크면 구멍이다.
            "channels": {
@@ -1180,7 +1194,8 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                "user_input_words": input_w,
                "unrec_write_words": sum(unrec_write.values()),
                "image_blocks": image_blocks,
-               "sub_report_words": sub_report_w,
+               "sub_report_words": sub_report_w - sub_report_counted,
+               "sub_report_counted_words": sub_report_counted,
                "subagent_files": len(subagent_paths)}}
     if detail:  # 감사·검증용: 등급별 파일 목록(+실측 단어수·기여 파일 분해)
         out["files"] = {"deep": sorted(contributed), "skim": sorted(skim),

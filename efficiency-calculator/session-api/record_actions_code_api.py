@@ -98,7 +98,8 @@ _CHANNEL_AXIS = {
     "user_input_words": "읽기(지시 입력)",
     "subagent_files": "서브에이전트(전 축 편입, §59)",
     "unrec_write_words": None,      # 미등록 쓰기 포맷 — §38 경보 대상
-    "sub_report_words": None,       # 서브에이전트 보고문 — 알려진 미계상
+    "sub_report_words": None,       # 산출물 있는 서브의 보고문 — 속으로 정리한 것(미계상)
+    "sub_report_counted_words": "쓰기(draft — 산출물 없는 서브의 보고, §67)",
     "image_blocks": None,           # 스크린샷 판독 — 미계상
 }
 _UNCOUNTED_WARN_WORDS = 2000        # 미계상 채널 경보 문턱
@@ -349,7 +350,12 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
     if not (draft_w or edit_w):
         # 보고형: 대화 보고가 산출물 (문서 요율)
         draft_kind = {"doc": stats.get("answer_words", 0)}
-        draft_w = sum(draft_kind.values())
+    # §67: 파일 산출물 없는 서브에이전트의 마지막 보고 = 그 일의 결과물 — 메인의
+    # 보고형 규칙을 서브에도 적용. 양 모드 동일 가산(단조성 불변).
+    sub_rep = stats.get("sub_report_words_counted", 0)
+    if sub_rep:
+        draft_kind["doc"] = draft_kind.get("doc", 0) + sub_rep
+    draft_w = sum(draft_kind.values())
     items = []
     if read_w:
         items.append({"primitive": "read", "count": round(read_w, 1)})
