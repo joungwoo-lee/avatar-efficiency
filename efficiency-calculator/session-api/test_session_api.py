@@ -241,6 +241,52 @@ class TestSessionApi(unittest.TestCase):
                                  for b in r["human"]["breakdown"]))
         self.assertGreaterEqual(r_off["human"]["min"], r_on["human"]["min"])
 
+    def test_query_read_full_deep_and_search_turn_floor(self):
+        # §70: (a) 기여 판정된 조회형(셸 sed -n) 결과는 블록 분해 없이 전량 정독
+        #      (b) 검색 건수 하한 = 검색한 지시 턴 수 (세션당 1이 아님)
+        import record_actions_code_api  # noqa: F401
+        from requirement_actions import collect_record_stats
+        from record_actions_code_api import build_actions
+        from agent_effort import load_rates
+        body = "word " * 900   # 5블록 — 증거 없는 블록은 종전엔 훑기
+        def turn(i, cmd_search, cmd_read):
+            return [
+                {"type": "user", "message": {"role": "user",
+                                             "content": f"지시 {i} " * 30}},
+                {"type": "assistant", "message": {"role": "assistant", "content": [
+                    {"type": "tool_use", "id": f"g{i}", "name": "Bash",
+                     "input": {"command": cmd_search}}]}},
+                {"type": "user", "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": f"g{i}",
+                     "content": "src/mod.py:12: needle"}]}},
+                {"type": "assistant", "message": {"role": "assistant", "content": [
+                    {"type": "tool_use", "id": f"r{i}", "name": "Bash",
+                     "input": {"command": cmd_read}}]}},
+                {"type": "user", "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": f"r{i}", "content": body}]}},
+                {"type": "assistant", "message": {"role": "assistant", "content": [
+                    {"type": "text", "text": f"확인 {i}"}]}},
+            ]
+        lines = (turn(1, "grep -n needle src/mod.py", "sed -n 1,80p src/mod.py")
+                 + turn(2, "grep -n other src/mod.py", "sed -n 200,280p src/mod.py")
+                 + turn(3, "grep -n third src/mod.py", "sed -n 400,480p src/mod.py"))
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "s.jsonl")
+            with open(p, "w", encoding="utf-8") as f:
+                for ln in lines:
+                    f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+            rs = collect_record_stats(p, detail=True)
+        # 각 턴의 sed -n은 검색 직후 첫 읽기 = 착지(④) → 기여. 조회형이라 전량 정독.
+        self.assertEqual(rs["search_calls"], 3)
+        self.assertEqual(rs["search_turns"], 3)
+        self.assertEqual(rs["contributed_docs"], 3)
+        self.assertEqual(rs["deep_words"], 900 * 3)
+        self.assertEqual(rs["skim_words"], 0)
+        # 검색 건수: 착지-기여 3 = 턴 3 → 3건 (종전 규칙도 3; 하한 검증은 아래)
+        rs2 = dict(rs); rs2["search_landing_docs"] = 0   # 착지가 기여 안 된 경우 가정
+        acts = {a["primitive"]: a for a in build_actions(rs2, load_rates())}
+        self.assertEqual(acts["search"]["count"], 3)       # 세션당 1 아님, 턴당 1
+
     def test_rawrecord_mode(self):
         # §39: rawrecord = 궤적 재연 — 행동 횟수를 세션 기록 그대로.
         # Bash 6회 세션: 기본 자는 execute 1건, rawrecord는 6건.

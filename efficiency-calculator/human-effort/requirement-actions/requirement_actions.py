@@ -760,14 +760,17 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
     edit_texts = {}          # fp → 편집 원문+수정문 누적 (정독 핵심 위치 증거)
     pending_query = {}       # tool_use id → (도구명, 인자, 호출 순번) — 조회형 후보
     query_tokens = {}        # 조회 신원 → 인자 속 id성 토큰들 (신호② 언급 대조)
+    query_files = set()      # 조회형 읽기 신원 (§70: 기여 시 블록 분해 없이 전량 정독)
+    search_turns = 0         # 검색 도구를 1회+ 쓴 지시 턴 수 (§70: 검색 턴당 하한 1건)
     write_seq = {}           # fp → [(kind, old, new, tool_id)] 쓰기 순서열 (§31 재생용)
     failed_tool_ids = set()  # 툴 에러가 난 호출 id — 적용 안 된 편집 제외
     exec_hard_failed = set() # 실행 중 환경·타이핑 실수·거부로 무효인 호출 id (§69)
 
     def _end_turn():
         # 사용자 턴 경계: 신호④를 이 턴 안에서만 판정, 턴 마무리 답변 보관
-        nonlocal turn_search_i, turn_reads, final_answer
+        nonlocal turn_search_i, turn_reads, final_answer, search_turns
         if turn_search_i is not None:
+            search_turns += 1
             post = [(fp, rg) for fp, i, rg in turn_reads if i > turn_search_i]
             if post:
                 signal4.add(post[0][0])  # 착지 = 검색 멈춘 뒤 처음 연 파일만
@@ -854,6 +857,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                             qfp = f"{qname}:{canon}"
                             pr = (qfp, (qfp, None))
                             read_files.add(qfp)
+                            query_files.add(qfp)
                             read_regions[(qfp, None)] = (
                                 read_regions.get((qfp, None), 0) + 1)
                             turn_reads.append((qfp, qi, (qfp, None)))
@@ -1055,6 +1059,13 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
     deep_w = skim_w = 0
     file_split = {}
     for f in contributed:
+        if f in query_files:
+            # §70: 조회형(셸 cat/sed -n·MCP 조회)은 AI가 범위를 이미 집어서 본
+            # 출력 — 후보 훑기가 아니라 목적 읽기. 기여 판정이면 전량 정독.
+            _fw = file_read_words.get(f, 0)
+            file_split[f] = (_fw, 0)
+            deep_w += _fw
+            continue
         ev_words = (edit_texts.get(f, "") + " " + ans_text).lower().split()
         ev_shingles = ({" ".join(ev_words[i:i + 6])
                         for i in range(len(ev_words) - 5)}
@@ -1165,6 +1176,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
            "waste_words": waste_w,
            "tool_calls": tool_i,
            "search_calls": search_calls,
+           "search_turns": search_turns,   # §70 검색한 지시 턴 수
            "exec_calls": exec_calls,
            # 행동 순계 재료 (§46): 검색 = 착지-기여 문서 수(신호④∩DEEP —
            # 항해·헛검색은 착지에 흡수/자동 0), 실행 = 명령 신원 수.

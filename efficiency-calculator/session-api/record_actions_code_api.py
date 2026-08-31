@@ -326,7 +326,8 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
                      + 쓰기 번복 소계(순계). OFF면 검토 전량 정독·번복 미소거.
       humanize_act = 행동 건수 휴먼화. ON이면 행동 순계(§46) — 읽기 3등급·
                      쓰기 순계의 원리를 건수형에 적용: 검색 = 착지-기여
-                     문서당 1건(쿼리 다듬기는 그 1건에 흡수, 헛검색 자동 0),
+                     문서당 1건(쿼리 다듬기는 그 1건에 흡수, 헛검색 자동 0)
+                     — §70부터 검색한 지시 턴당 최소 1건,
                      실행 = 정규화 명령 신원당 1건(같은 명령 반복 = 번복
                      상쇄, 실패 호출은 쓰기 순계의 실패 편집 제외처럼
                      순계에서 상쇄 — §48). 하한 max(1,·) — 흔적 있으면
@@ -406,7 +407,10 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
         # 행동 순계 (§46): 하한 1(흔적 있으면 최소 1건) ≤ 순계 ≤ 호출 수
         # (로레코드) — 항목별 ON ≤ OFF 단조성 유지(§43 교훈)
         if stats.get("search_calls"):
-            n = max(1, stats.get("search_landing_docs", 0))
+            # §70: 하한을 세션당 1 → 검색한 지시 턴당 1로. 숙련자도 새 지시가
+            # 오면 위치 확인은 한 번 한다. 착지-기여 문서 수와 큰 쪽.
+            n = max(1, stats.get("search_landing_docs", 0),
+                    stats.get("search_turns", 0))
             items.append({"primitive": "search",
                           "count": min(n, stats["search_calls"])})
     ex = exec_item(stats, rates, humanize_act)   # 실행 4토막 (§59)

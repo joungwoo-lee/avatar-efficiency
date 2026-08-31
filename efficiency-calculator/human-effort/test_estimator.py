@@ -788,9 +788,10 @@ class TestRequirementActions(unittest.TestCase):
             self.assertEqual(rs["contributed_docs"], 1)
             self.assertEqual(rs["waste_docs"], 1)
             self.assertEqual(rs["waste_words"], 100)
-            # 기여 티켓도 인용 증거 없는 블록은 훑기 (본문 300 전부)
-            self.assertEqual(rs["deep_words"], 0)
-            self.assertEqual(rs["skim_words"], 300)
+            # §70: 기여 판정된 조회형(티켓 본문)은 AI가 집어서 본 목적 읽기 —
+            # 블록 분해 없이 전량 정독 (종전 §26 규칙에선 증거 없는 블록 훑기 300)
+            self.assertEqual(rs["deep_words"], 300)
+            self.assertEqual(rs["skim_words"], 0)
             self.assertTrue(any("PROJ-123" in f for f in rs["files"]["deep"]))
         finally:
             os.unlink(p)
