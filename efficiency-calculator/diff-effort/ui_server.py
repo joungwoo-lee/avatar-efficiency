@@ -30,7 +30,6 @@ import webbrowser
 from contextlib import redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
-import socket
 
 import csv_report as CR
 import measure_ratios as MR
@@ -634,28 +633,6 @@ def make_handler(mode="local", fixed_config=None):
                 {"mode": mode, "fixed_config": fixed_config})
 
 
-def lan_addresses():
-    """이 PC 의 LAN 주소 목록 (0.0.0.0 으로 열었을 때 남이 칠 주소)."""
-    found = []
-    try:
-        for info in socket.getaddrinfo(socket.gethostname(), None,
-                                       socket.AF_INET):
-            ip = info[4][0]
-            if not ip.startswith("127.") and ip not in found:
-                found.append(ip)
-    except Exception:
-        pass
-    if not found:
-        try:                      # 게이트웨이로 향하는 소켓의 출발 주소
-            sk = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sk.connect(("10.255.255.255", 1))
-            found.append(sk.getsockname()[0])
-            sk.close()
-        except Exception:
-            pass
-    return found
-
-
 def serve(port=8765, open_browser=True, mode="local", config=None,
           host=None):
     if mode == "server":
@@ -675,19 +652,8 @@ def serve(port=8765, open_browser=True, mode="local", config=None,
     if mode == "server":
         print("  고정 비율: %s" % cfg)
         print("  CSV 는 내용만 받는다. 저장소 선택·측정·서버 저장은 막혀 있다.")
-    elif host == "0.0.0.0":
-        print("  !! 경고: 로컬판을 0.0.0.0 으로 열었다. 접속하는 모든 사람이 이 PC 의")
-        print("     폴더를 뒤지고(1·3 칸) 파일을 쓸 수(4 칸 저장) 있다. 믿는 망에서만, 쓰고 끄기.")
     else:
         print("  (127.0.0.1 전용 — 이 서버는 이 PC 의 파일을 읽고 쓴다)")
-    if host == "0.0.0.0":
-        ips = lan_addresses()
-        if ips:
-            print("  다른 PC 에서 접속: " + "   ".join(
-                "http://%s:%d/" % (ip, port) for ip in ips))
-        print("  안 열리면 Windows 방화벽이 막은 것 — 관리자 명령창에서:")
-        print("    netsh advfirewall firewall add rule name=\"diff-effort UI %d\""
-              " dir=in action=allow protocol=TCP localport=%d" % (port, port))
     print("  Ctrl+C 로 종료")
     print("  브라우저가 자동으로 안 열리면 주소창에 직접 입력: %s" % url)
     print("  파일선택창·업로드·내려받기가 보안으로 막힌 PC 라면:")
@@ -720,17 +686,13 @@ def _main():
                    help="서버 모드에서 쓸 고정 ratios.json 경로")
     p.add_argument("--host", default=None,
                    help="바인딩 주소 (기본: 로컬 127.0.0.1 / 서버 0.0.0.0)")
-    p.add_argument("--open", action="store_true",
-                   help="--host 0.0.0.0 과 같다 — 다른 PC 에서도 접속하게 연다. "
-                        "로컬판이면 이 PC 디스크가 그대로 노출되니 믿는 망에서만")
     a = p.parse_args()
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
     return serve(a.port, not a.no_browser,
-                 "server" if a.server else "local", a.config,
-                 "0.0.0.0" if a.open and not a.host else a.host)
+                 "server" if a.server else "local", a.config, a.host)
 
 
 if __name__ == "__main__":
