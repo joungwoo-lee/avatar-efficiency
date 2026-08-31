@@ -1440,6 +1440,29 @@ session-api 16, agent-effort 15 통과.
 테스트: session-api 17(신규 `test_think_includes_subagent_report_and_thinking`),
 human-effort 53(§67 테스트를 총량 테스트로 교체), agent-effort 15 통과.
 
+## 69. 실행 "실패" 판정을 환경·타이핑 실수·거부 서명으로 좁힘 — 테스트 실패는 노동
+
+**문제.** §48은 쓰기 순계의 "실패한 편집 제외"(§31)를 실행에 이식하며 Bash
+`is_error`를 실패로 썼다. 그런데 Bash의 `is_error`는 **종료코드≠0이면 전부**
+붙는다. 55세션 931건 분류: 테스트 실패·스크립트 traceback **71%** / 명령·경로·
+모듈 없음·문법 오류 23% / 툴 거부 4% / 타임아웃 2%. Edit 거절(적용 안 됨)에
+해당하는 것은 뒤 두 부류뿐이고, 71%는 숙련자도 똑같이 짜서 돌리는 정상 작업
+(테스트 돌려 깨지고 고치는 게 일)인데 명령문 작성 시간이 0이 됐다.
+
+**수리.** `_EXEC_HARD_FAIL_RE`(command not found · is not recognized · No such
+file · cannot find path/file/module · Permission denied · ModuleNotFoundError ·
+ImportError · NameError · SyntaxError · ParserError · tool use was rejected ·
+doesn't want to proceed · not allowed · blocked by)에 걸리는 결과만 무효
+(`exec_hard_failed`). 종료코드≠0 단독·타임아웃은 실패 아님. `exec_events.failed`·
+`exec_net_calls`가 이 집합을 쓴다. 쓰기 순계의 `failed_tool_ids`(모든 is_error)는
+그대로 — 편집은 툴이 거절하면 실제로 적용이 안 된 것이라 의미가 다르다.
+
+**영향 (이 PC 최근 55세션).** execute(ON) 26,657 → 27,907분(+1,250, 분자 +1.7%) — 무효 판정에서 벗어난 명령문 작성분. OFF는 총량이라 불변(41,587 → 41,651은 표본 내 진행 중 세션 증가분). ON/ON 73,108 → 74,499분 5.38배, OFF/OFF 109,224분 7.89배. 역전 0 유지.
+
+테스트: session-api `test_failed_exec_cancelled`를 §69 규칙으로 갱신(command
+not found는 탈락, 테스트 실패 로그는 생존, compose 순계 검산). 문서: 방법서 §2.3,
+PENDING_CONSIDERATIONS #3 반영 표시.
+
 ## 미해결 (알려진 한계·다음 단계)
 
 > §66~§68 감사에서 검토했으나 미반영한 항목·기대효과 %·위치·판단 근거는

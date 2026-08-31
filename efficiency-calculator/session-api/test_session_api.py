@@ -362,23 +362,29 @@ class TestSessionApi(unittest.TestCase):
         self.assertEqual(rs["search_landing_docs"], 1)
 
     def test_failed_exec_cancelled(self):
-        # §48: 실패 실행 상쇄 — 쓰기 순계의 "실패한 편집 제외"(§31) 이식.
-        # npm test 2회 전부 실패(신원 탈락) + pytest 실패→성공(신원 생존)
-        # + build 성공 → 순계 2. 로레코드 exec_calls는 5 그대로.
+        # §48·§69: 무효 실행 상쇄 — 쓰기 순계의 "실패한 편집 제외"(§31) 이식.
+        # 실패 판정은 환경·타이핑 실수·거부 서명이 있을 때만(§69). 종료코드≠0
+        # (테스트 실패 로그)은 숙련자도 똑같이 짜서 돌리는 정상 작업 → 생존.
+        #   npx tset 2회 "command not found"(무효, 신원 탈락)
+        #   pytest 실패(is_error지만 테스트 실패 로그 → 생존)→성공
+        #   make build 성공 → 순계 2(pytest·build; npx 신원 탈락). exec_calls는 5 그대로.
         import record_actions_code_api  # noqa: F401 (sys.path 세팅)
         from requirement_actions import collect_record_stats
-        runs = [("npm test", True), ("npm test", True), ("pytest tests/", True),
-                ("pytest tests/", False), ("make build", False)]
+        cnf = "bash: npx: command not found"
+        tf = "FAILED tests/test_a.py::test_x - AssertionError " + "log " * 30
+        runs = [("npx tset", True, cnf), ("npx tset", True, cnf),
+                ("pytest tests/", True, tf), ("pytest tests/", False, "ok"),
+                ("make build", False, "ok")]
         lines = [{"type": "user",
                   "message": {"role": "user", "content": "작업 지시 " * 60}}]
-        for i, (c, err) in enumerate(runs):
+        for i, (c, err, out) in enumerate(runs):
             lines += [
                 {"type": "assistant", "message": {"role": "assistant",
                  "content": [{"type": "tool_use", "id": f"e{i}", "name": "Bash",
                               "input": {"command": c}}]}},
                 {"type": "user", "message": {"role": "user", "content": [
                     {"type": "tool_result", "tool_use_id": f"e{i}",
-                     "is_error": err, "content": "log " * 30}]}},
+                     "is_error": err, "content": out}]}},
             ]
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "s.jsonl")
@@ -387,7 +393,10 @@ class TestSessionApi(unittest.TestCase):
                     f.write(json.dumps(ln, ensure_ascii=False) + "\n")
             rs = collect_record_stats(p)
         self.assertEqual(rs["exec_calls"], 5)      # 로레코드 불변
-        self.assertEqual(rs["exec_net_calls"], 2)  # pytest(성공 有)+build
+        self.assertEqual(rs["exec_net_calls"], 2)  # pytest+build (npx는 탈락)
+        # compose 순계: 무효 npx 탈락, pytest 첫 실패 호출의 명령문은 계상
+        self.assertEqual(rs["exec_compose_words"], 2 + 2)   # "pytest tests/" + "make build"
+        self.assertEqual(rs["exec_compose_words_gross"], 2 * 5)
 
     def test_suspect_output_channel(self):
         # §38: 미등록 도구 입력에 글 60단어가 실려 나갔고 응답은 ack,

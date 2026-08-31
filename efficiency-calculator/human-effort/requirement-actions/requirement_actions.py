@@ -43,6 +43,20 @@ _IMG_EXT = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg", ".ico"}
 # 시간 지식이 아니라 구조 눈금이라 요율표가 아닌 코드 상수로 둔다.
 _DEEP_BLOCK_WORDS = 200
 
+# §69 실행 "실패" 판정 — Bash의 is_error는 종료코드≠0이면 전부 붙는다. 실측
+# (55세션 931건): 테스트 실패·스크립트 traceback 71% = 숙련자도 똑같이 짜서
+# 돌리는 정상 작업 / 명령·경로·모듈 없음·문법 23% / 툴 거부 4% / 타임아웃 2%.
+# 쓰기 순계의 "실패한 편집 제외"(§31)는 툴이 거절해 적용 안 된 편집이 대상 —
+# 실행에서 그에 해당하는 것은 뒤 두 부류(환경·타이핑 실수, 거부)만이다.
+# 종료코드≠0 단독은 실패 아님. 타임아웃도 명령 자체는 사람이 짠 것이라 제외 안 함.
+_EXEC_HARD_FAIL_RE = re.compile(
+    r"command not found|is not recognized as|No such file or directory"
+    r"|cannot find (?:the )?(?:path|file|module)|Permission denied"
+    r"|ModuleNotFoundError|ImportError: cannot import|NameError: name"
+    r"|SyntaxError|ParserError|syntax error near"
+    r"|tool use was rejected|doesn't want to proceed|permission denied"
+    r"|not allowed|blocked by", re.I)
+
 # 조회형 읽기 일반화 (§27): 파일이 아닌 자료(지라 티켓·위키 페이지 등)를
 # MCP·스킬 도구로 읽어도 같은 등급 분해를 적용한다.
 # 실행형 도구는 읽기가 아님 — 출력이 커도 제외 (테스트 로그 등은 분모
@@ -748,6 +762,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
     query_tokens = {}        # 조회 신원 → 인자 속 id성 토큰들 (신호② 언급 대조)
     write_seq = {}           # fp → [(kind, old, new, tool_id)] 쓰기 순서열 (§31 재생용)
     failed_tool_ids = set()  # 툴 에러가 난 호출 id — 적용 안 된 편집 제외
+    exec_hard_failed = set() # 실행 중 환경·타이핑 실수·거부로 무효인 호출 id (§69)
 
     def _end_turn():
         # 사용자 턴 경계: 신호④를 이 턴 안에서만 판정, 턴 마무리 답변 보관
@@ -815,11 +830,17 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                             _d = ((rec_t - _t0)
                                   if (rec_t and _t0 and 0 <= rec_t - _t0 < 3600)
                                   else 0.0)
+                            # §69: 종료코드≠0(테스트 실패 등)은 실패가 아니다 —
+                            # 환경·타이핑 실수·거부 서명이 있을 때만
+                            _hard = bool(b.get("is_error")) and bool(
+                                _EXEC_HARD_FAIL_RE.search(text[:2000]))
+                            if _hard and b.get("tool_use_id"):
+                                exec_hard_failed.add(b["tool_use_id"])
                             exec_events.append(
                                 {"canon": _canon, "cmd_words": _cw,
                                  "out_words": len(text.split()),
                                  "wait_sec": _d,
-                                 "failed": bool(b.get("is_error"))})
+                                 "failed": _hard})
                         pr = pending_read.pop(b.get("tool_use_id"), None)
                         pq = (None if pr else
                               pending_query.pop(b.get("tool_use_id"), None))
@@ -1147,11 +1168,12 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
            "exec_calls": exec_calls,
            # 행동 순계 재료 (§46): 검색 = 착지-기여 문서 수(신호④∩DEEP —
            # 항해·헛검색은 착지에 흡수/자동 0), 실행 = 명령 신원 수.
-           # 실패 호출(툴 에러)은 순계 제외(§48) — 전 판 실패 신원은 탈락
-           # (하한 1은 build_actions 클램프 몫). 로레코드 exec_calls는 불변
+           # 무효 호출(§69: 환경·타이핑 실수·거부)은 순계 제외(§48) — 전 판
+           # 무효 신원은 탈락(하한 1은 build_actions 클램프 몫). 종료코드≠0
+           # 만으로는 제외 안 함. 로레코드 exec_calls는 불변
            "search_landing_docs": len(signal4 & contributed),
            "exec_net_calls": len({c for c, tid in exec_seq
-                                  if not (tid and tid in failed_tool_ids)}),
+                                  if not (tid and tid in exec_hard_failed)}),
            "unrec_write_tools": unrec_write,
            "unrec_write_words": sum(unrec_write.values()),
            "gross_draft_words": gross_d,
