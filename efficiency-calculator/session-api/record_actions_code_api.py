@@ -348,7 +348,11 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
         factor = (skim_rate / read_rate) if read_rate else 0.0
         read_w = (stats.get("deep_words", 0)
                   + stats.get("skim_words", 0) * factor
-                  + stats.get("input_words", 0))
+                  + stats.get("input_words", 0)
+                  # §73: 검색 결과 판독 — 호출당 앞 200 정독·나머지 훑기
+                  # (rw OFF는 reviewed 전량 정독에 이미 포함, 여기만 가산)
+                  + stats.get("search_out_deep_words", 0)
+                  + stats.get("search_out_skim_words", 0) * factor)
         draft_kind = dict(stats.get("out_draft_by_kind") or {})
         edit_kind = dict(stats.get("out_edit_by_kind") or {})
         if not draft_kind:  # 구 stats 호환
@@ -379,10 +383,13 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
             edit_kind = {"other": stats.get("gross_edit_words", 0)}
     draft_w = sum(draft_kind.values())
     edit_w = sum(edit_kind.values())
-    if not (draft_w or edit_w):
-        # 보고형: 대화 보고가 산출물 (문서 요율)
-        draft_kind = {"doc": stats.get("answer_words", 0)}
-        draft_w = sum(draft_kind.values())
+    # §73: 마무리 답변은 파일 산출물 유무와 무관하게 draft(문서 요율) — 파일이
+    # 있어도 사람은 인수인계 메모·결과 보고를 쓴다. 보고형(파일 없음)은 종전과
+    # 같은 값. 양 모드 동일(단조성 불변).
+    aw = stats.get("answer_words", 0)
+    if aw:
+        draft_kind["doc"] = draft_kind.get("doc", 0) + aw
+    draft_w = sum(draft_kind.values())
     items = []
     if read_w:
         items.append({"primitive": "read", "count": round(read_w, 1)})
@@ -493,8 +500,11 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
         # think 요율로 가산. 직접 생각(토큰×0.005) ≈ 위임(서브 생각 토큰×0.005
         # + 보고 단어×0.005)이 되어 위임 여부에 값이 안 흔들린다.
         rep_words = stats.get("sub_report_words", 0)
+        # §73: 메인 진행 나레이션(마무리 답변 제외 assistant 텍스트)도 §68과
+        # 같은 논리 — 사람이 혼자 했다면 속으로 정리한 것 = 밖으로 나온 생각.
+        narr_words = stats.get("narration_words", 0)
         strat_words = round(st["tokens"] * THINK_TOK2WORD, 1)
-        think_words = round(strat_words + fb_words + rep_words, 1)
+        think_words = round(strat_words + fb_words + rep_words + narr_words, 1)
         if think_words:
             minutes = think_words * spec["min_per_unit"]
             total += minutes
@@ -503,9 +513,11 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
                               "minutes": round(minutes, 2),
                               "detail": {"strategy_words": strat_words,
                                          "fallback_words": round(fb_words, 1),
-                                         "sub_report_words": rep_words}})
+                                         "sub_report_words": rep_words,
+                                         "narration_words": narr_words}})
         think_info = dict(st)
         think_info["sub_report_words"] = rep_words
+        think_info["narration_words"] = narr_words
     h_min = round(total, 2)
     audit = channel_audit(stats)
     notes = [suspect_why] if suspect else []

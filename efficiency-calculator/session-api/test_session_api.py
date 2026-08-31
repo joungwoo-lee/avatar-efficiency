@@ -287,6 +287,54 @@ class TestSessionApi(unittest.TestCase):
         acts = {a["primitive"]: a for a in build_actions(rs2, load_rates())}
         self.assertEqual(acts["search"]["count"], 3)       # 세션당 1 아님, 턴당 1
 
+    def test_answer_narration_and_search_output(self):
+        # §73: (7) 파일 산출물 있어도 마무리 답변은 draft(doc) (8) 진행 나레이션은
+        # think 요율 (12) 검색 결과 판독은 rw ON 읽기에 앞 200 정독·나머지 훑기.
+        import record_actions_code_api  # noqa: F401
+        from requirement_actions import collect_record_stats
+        from record_actions_code_api import measure
+        lines = [
+            {"type": "user", "message": {"role": "user", "content": "지시 " * 10}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "먼저 찾아보겠습니다 " * 20},        # 나레이션 2×20=40
+                {"type": "tool_use", "id": "g1", "name": "Grep",
+                 "input": {"pattern": "needle"}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "g1", "content": "hit " * 500}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "w1", "name": "Write",
+                 "input": {"file_path": "a.py", "content": "code " * 100}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "w1", "content": "ok"}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "완료 보고 " * 25}]}},                # 마무리 50
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "s.jsonl")
+            with open(p, "w", encoding="utf-8") as f:
+                for ln in lines:
+                    f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+            rs = collect_record_stats(p, subagent_paths=[])
+            self.assertEqual(rs["answer_words"], 50)
+            self.assertEqual(rs["narration_words"], 40)
+            self.assertEqual(rs["search_out_deep_words"], 200)
+            self.assertEqual(rs["search_out_skim_words"], 300)
+            r_on = measure(p, force=True, subagent_paths=[])
+            r_off = measure(p, force=True, subagent_paths=[],
+                            humanize_rw=False, humanize_act=False)
+        bd = {b["primitive"]: b for b in r_on["human"]["breakdown"]}
+        # (7) 파일 100단어(code) + 마무리 답변 50단어(doc) 둘 다 draft
+        self.assertEqual(bd["draft"]["detail"], {"code": 100, "doc": 50})
+        # (8) 나레이션 40단어 → think
+        self.assertEqual(bd["think"]["detail"]["narration_words"], 40)
+        # (12) rw ON 읽기 = 지시 10 + 검색 결과 정독 200 + 훑기 300×(0.00222/0.005)
+        self.assertAlmostEqual(bd["read"]["count"], 10 + 200 + 300 * 0.444, places=0)
+        bd0 = {b["primitive"]: b for b in r_off["human"]["breakdown"]}
+        self.assertEqual(bd0["draft"]["detail"], {"code": 100, "doc": 50})
+        # OFF 읽기는 reviewed 전량(검색 결과 500 + "ok" 1) + 지시 10 — 가산 없음
+        self.assertEqual(bd0["read"]["count"], 511)
+        self.assertGreaterEqual(r_off["human"]["min"], r_on["human"]["min"])
+
     def test_rawrecord_mode(self):
         # §39: rawrecord = 궤적 재연 — 행동 횟수를 세션 기록 그대로.
         # Bash 6회 세션: 기본 자는 execute 1건, rawrecord는 6건.

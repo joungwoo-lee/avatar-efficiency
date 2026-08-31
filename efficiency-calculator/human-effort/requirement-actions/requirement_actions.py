@@ -739,6 +739,10 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                              # "실패한 편집 제외"(§31)와 같은 규칙
     tool_report_w = 0        # StructuredOutput 보고 실측 단어수 (§33)
     pending_exec = {}        # tool_use id → (신원, 명령 단어수, 시작 시각)
+    pending_search = set()   # 검색 도구 호출 id (§73: 결과 판독 계상용)
+    search_out_deep = 0      # 검색 결과 판독 — 호출당 앞 200단어 정독 (§73)
+    search_out_skim = 0      #                 나머지 훑기
+    assistant_text_w = 0     # 메인 assistant 텍스트 전량 (§73 나레이션 = 이것 − 마무리 답변)
     exec_events = []         # 실행 4토막 재료 (§59 규칙3): 명령 단어·실측
                              # 대기·출력 단어. 지금까지 실행은 건당 고정 2분
                              # 이라 즉석 스크립트 작성(건당 평균 97단어)과
@@ -827,6 +831,13 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                                  if isinstance(rc, list) else [])
                         text = " ".join(parts)
                         reviewed += len(text.split())
+                        if b.get("tool_use_id") in pending_search:
+                            # §73: 검색 결과(Grep/Glob/셸 grep·MCP 검색)를 읽는
+                            # 시간 — 실행 출력과 같은 눈금(앞 200 정독·나머지 훑기)
+                            pending_search.discard(b["tool_use_id"])
+                            _sw = len(text.split())
+                            search_out_deep += min(_sw, _DEEP_BLOCK_WORDS)
+                            search_out_skim += max(0, _sw - _DEEP_BLOCK_WORDS)
                         pe = pending_exec.pop(b.get("tool_use_id"), None)
                         if pe:
                             _canon, _cw, _t0 = pe
@@ -902,6 +913,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                             sub_report_w += len(b.get("text", "").split())
                         else:
                             texts.append(b.get("text", ""))
+                            assistant_text_w += len(b.get("text", "").split())
                     if b.get("type") != "tool_use":
                         continue
                     name = b.get("name")
@@ -909,6 +921,8 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                     if name in _SEARCH_TOOLS:
                         turn_search_i = tool_i
                         search_calls += 1
+                        if b.get("id"):
+                            pending_search.add(b["id"])
                     if name in ("Bash", "PowerShell"):
                         cmd = str((b.get("input") or {}).get("command", ""))
                         canon = " ".join(cmd.split())[:120]
@@ -916,6 +930,8 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                         if kind == "search":         # §47: 셸 grep·find류
                             turn_search_i = tool_i   # = 탐색 신호(착지 로직)
                             search_calls += 1
+                            if b.get("id"):
+                                pending_search.add(b["id"])
                         elif kind == "read" and b.get("id"):
                             # §47: 셸 sed -n·cat류 = 조회형 읽기 후보 —
                             # 결과 본문 크기(§27 문턱)로 읽기 여부 확정,
@@ -944,6 +960,8 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                         if _QUERY_SEARCH_RE.search(name or ""):
                             turn_search_i = tool_i  # 검색형 조회 = 탐색 신호
                             search_calls += 1
+                            if b.get("id"):
+                                pending_search.add(b["id"])
                             continue
                         if b.get("id"):  # 읽기 여부는 결과 본문 크기로 확정
                             pending_query[b["id"]] = (name, inp, tool_i)
@@ -1165,6 +1183,12 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
            # 워크플로 에이전트는 답변 텍스트 0, 보고가 도구 입력으로 나감)
            "answer_words": max(len(answers[-1].split()) if answers else 0,
                                tool_report_w),
+           # §73: 메인 진행 나레이션 = assistant 텍스트 전량 − 마무리 답변(위)
+           "narration_words": max(0, assistant_text_w
+                                  - (len(answers[-1].split()) if answers else 0)),
+           # §73: 검색 결과 판독 재료 (rw ON 전용 — OFF는 reviewed에 이미 포함)
+           "search_out_deep_words": search_out_deep,
+           "search_out_skim_words": search_out_skim,
            "out_draft_words": sum(out_draft.values()),
            "out_edit_words": sum(out_edit.values()),
            "contributed_docs": len(contributed),
