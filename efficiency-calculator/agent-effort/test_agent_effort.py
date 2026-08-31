@@ -300,8 +300,8 @@ class TestTranscriptActual(unittest.TestCase):
                 f.write(json.dumps(ln, ensure_ascii=False) + "\n")
         try:
             m = actual_effort_minutes(parse_actions(p))
-            # 검토 = 정독 300×0.005 + 초과 훑기 200×0.00222 = 1.5 + 0.444 = 1.944 (§71)
-            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 1.944,
+            # 검토 = 정독 200×0.005 + 초과 훑기 300×0.00222 = 1.0 + 0.666 = 1.666 (§71·§74 상한 200)
+            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 1.666,
                                    places=2)
         finally:
             os.unlink(p)
