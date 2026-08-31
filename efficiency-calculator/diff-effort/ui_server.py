@@ -408,7 +408,9 @@ def do_report(body, mode="local", fixed_config=None):
             "assumptions": buf.getvalue().strip(),
             "config_path": None if mode == "server" else cfg_path,
             "ratios": pub if mode == "server" else None,
-            "csv_text": CR.csv_text(rows, tot) if mode == "server" else None,
+            # 양쪽 모드 모두 본문을 준다 — 내려받기·저장이 막힌 PC 에서
+            # 화면의 상자를 복사해 쓰는 통로.
+            "csv_text": CR.csv_text(rows, tot),
             "uncorrected": not mix_parts and not (comment_r or gen_r),
             "gates": gates,
             "trustworthy": gates["mix"]["ok"] and gates["hitl"]["ok"],
@@ -653,6 +655,14 @@ def serve(port=8765, open_browser=True, mode="local", config=None,
     else:
         print("  (127.0.0.1 전용 — 이 서버는 이 PC 의 파일을 읽고 쓴다)")
     print("  Ctrl+C 로 종료")
+    print("  브라우저가 자동으로 안 열리면 주소창에 직접 입력: %s" % url)
+    print("  파일선택창·업로드·내려받기가 보안으로 막힌 PC 라면:")
+    if mode == "server":
+        print("   - CSV 를 메모장으로 열어 전체 복사 -> 3 칸 '붙여넣기' 상자")
+    else:
+        print("   - 3 칸은 서버가 폴더를 보여주니 눌러 고르면 된다 (브라우저 파일선택창 안 씀)")
+        print("   - 그래도 안 되면 CSV 를 메모장으로 열어 전체 복사 -> 3 칸 '붙여넣기' 상자")
+    print("   - 결과 저장: 4 칸 '리포트 CSV 본문' 전체 복사 -> 메모장 -> .csv 로 저장")
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
     try:

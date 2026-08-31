@@ -233,6 +233,15 @@ class TestReport(ServerCase):
         self.assertTrue(res["gates"]["mix"]["ok"])
         self.assertTrue(res["trustworthy"])
 
+    def test_pasted_text_works_in_local_mode_and_returns_csv_text(self):
+        # 보안 PC 통로: 경로 없이 붙여넣은 본문만으로 계산하고,
+        # 내려받기 대신 복사할 리포트 본문을 준다.
+        res = self.post("/api/report", {"csv_text": SAMPLE})
+        self.assertEqual(len(res["rows"]), 2)
+        self.assertTrue(res["csv_text"].startswith("employee_id,"))
+        self.assertIn("TOTAL(n=2)", res["csv_text"])
+        self.assertEqual(res["csv_text"], CR.csv_text(res["rows"], res["total"]))
+
     def test_missing_columns_are_named(self):
         bad = _write(os.path.join(self.tmp, "bad.csv"),
                      "employee_id,lines_added\na,1\n")

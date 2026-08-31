@@ -197,6 +197,13 @@ details summary{cursor:pointer;color:var(--dim);font-size:12.5px;margin-top:8px}
       <input type="file" id="csvFile" accept=".csv,text/csv"></label>
   </div>
   <div class="hint" id="csvUploadInfo" hidden></div>
+  <div class="row" id="csvPasteRow">
+    <label class="grow"><b>또는 CSV 내용 붙여넣기</b> — 파일 선택창·업로드가 보안으로 막힌 PC 용.
+      메모장이나 엑셀(다른 이름으로 저장 → CSV)에서 CSV 를 열어 <b>전체 복사</b>한 뒤 여기 붙여넣으면 파일 없이 같은 계산을 한다.<br>
+      <textarea id="csvPaste" rows="4" style="width:100%;font-family:ui-monospace,Consolas,monospace;font-size:12px"
+        placeholder="employee_id,lines_added,lines_deleted,cli_active_sec,user_active_sec,...&#10;jane.doe,120,30,3600,900"></textarea></label>
+  </div>
+  <div class="hint" id="csvPasteInfo"></div>
   <div class="browser" id="csvBrowser">
     <div class="crumbs">
       <button id="csvUp">↑ 상위</button>
@@ -255,6 +262,16 @@ details summary{cursor:pointer;color:var(--dim);font-size:12.5px;margin-top:8px}
     </div>
     <div class="msg ok" id="saveOk"></div>
     <div class="msg err" id="saveErr"></div>
+    <h3>리포트 CSV 본문</h3>
+    <div class="hint" style="margin:0 0 6px">내려받기·저장이 보안으로 막힌 PC 에서는 이 상자를 <b>전체 복사</b>해
+      메모장에 붙여 <code>.csv</code> 로 저장한다. 위 표·내려받기와 같은 내용이다.</div>
+    <div class="row">
+      <button id="btnCopy">전체 복사</button>
+      <span class="msg ok" id="copyOk"></span>
+      <span class="msg err" id="copyErr"></span>
+    </div>
+    <textarea id="outCsv" rows="8" readonly
+      style="width:100%;font-family:ui-monospace,Consolas,monospace;font-size:12px"></textarea>
   </div>
 </section>
 
@@ -531,6 +548,7 @@ function drawReport(res) {
   ) : '';
 
   LAST_CSV = res.csv_text || null;
+  $('outCsv').value = LAST_CSV || '';
   $('assump').textContent = res.assumptions;
   if (res.out_suggest && !$('outPath').value)
     $('outPath').value = res.out_suggest;
@@ -575,14 +593,23 @@ $('btnMeasure').onclick = async () => {
 $('btnReport').onclick = async () => {
   msg($('reportErr'), '');
   const server = META.mode === 'server';
-  if (server && !UPLOAD) return msg($('reportErr'), 'CSV 파일을 올려라');
+  const pasted = $('csvPaste').value.trim();
   const p = $('csvPicked').value.trim();
-  if (!server && !p) return msg($('reportErr'), 'CSV 를 골라라');
+  // 붙여넣은 내용이 있으면 그것이 우선한다 — 파일선택·경로가 막힌 PC 의 통로.
+  const src = pasted ? {name: 'pasted.csv', text: pasted} : (server ? UPLOAD : null);
+  if (server && !src) return msg($('reportErr'), 'CSV 파일을 올리거나 내용을 붙여넣어라');
+  if (!server && !p && !src) return msg($('reportErr'), 'CSV 를 고르거나 내용을 붙여넣어라');
+  if (src) {
+    if (new Blob([src.text]).size > META.max_upload)
+      return msg($('reportErr'), 'CSV 가 너무 크다 (상한 ' +
+                 Math.round(META.max_upload / 1048576) + 'MB)');
+    UPLOAD = src;
+  }
   busy($('spinReport'), $('btnReport'), true);
   try {
-    const body = server
-      ? {csv_text: UPLOAD.text, band: $('band').value, sort: $('sort').value,
-         asc: $('asc').checked}
+    const body = src
+      ? {csv_text: src.text, band: $('band').value, sort: $('sort').value,
+         asc: $('asc').checked, no_config: server ? undefined : $('noConfig').checked}
       : {csv_path: p, band: $('band').value, sort: $('sort').value,
          asc: $('asc').checked, no_config: $('noConfig').checked};
     drawReport(await api('/api/report', body));
@@ -600,6 +627,38 @@ $('csvFile').onchange = async (e) => {
   UPLOAD = {name: f.name, text: await f.text()};
   $('csvUploadInfo').textContent =
     '올림: ' + f.name + ' (' + (f.size / 1024).toFixed(1) + ' KB) — 내용만 전송한다.';
+};
+
+$('csvPaste').oninput = () => {
+  const t = $('csvPaste').value.trim();
+  const lines = t ? t.split(/\r?\n/).filter(l => l.trim()).length : 0;
+  $('csvPasteInfo').textContent = t
+    ? '붙여넣음: ' + lines + '줄 (' + (new Blob([t]).size / 1024).toFixed(1) +
+      ' KB) — 파일·경로 대신 이 내용으로 계산한다.'
+    : '';
+};
+
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext !== false) {
+      await navigator.clipboard.writeText(text); return true;
+    }
+  } catch (e) { /* 아래 폴백 */ }
+  try {
+    const ta = $('outCsv');
+    ta.focus(); ta.select();
+    return document.execCommand('copy');
+  } catch (e) { return false; }
+}
+
+$('btnCopy').onclick = async () => {
+  msg($('copyOk'), ''); msg($('copyErr'), '');
+  if (!LAST_CSV) return msg($('copyErr'), '먼저 리포트를 돌려라');
+  if (await copyText(LAST_CSV)) msg($('copyOk'), '복사했다 — 메모장에 붙여 .csv 로 저장', 'ok');
+  else {
+    $('outCsv').focus(); $('outCsv').select();
+    msg($('copyErr'), '클립보드가 막혀 있다. 상자를 골라놨으니 Ctrl+C 로 직접 복사해라');
+  }
 };
 
 $('btnDownload').onclick = () => {
@@ -649,7 +708,7 @@ $('btnSave').onclick = async () => {
     $('savePathRow').hidden = true;
     $('btnSave').hidden = true;
     $('btnDownload').hidden = false;
-    $('outEmpty').innerHTML = '아직 결과가 없다. 3 에서 CSV 파일을 올리고 <b>리포트 돌리기</b>.';
+    $('outEmpty').innerHTML = '아직 결과가 없다. 3 에서 CSV 파일을 올리거나 내용을 붙여넣고 <b>리포트 돌리기</b>.';
     // 서버 모드에서는 "직접 재라" 는 안내가 성립하지 않는다. 관리자 몫이다.
     $('gateMix').querySelector('.bd').innerHTML =
       '<b>① 코드·문서·데이터 구성비</b>' +
