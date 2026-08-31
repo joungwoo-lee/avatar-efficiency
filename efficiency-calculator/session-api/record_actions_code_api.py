@@ -326,8 +326,15 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
         read_w = (max(0, stats.get("reviewed_words", 0)
                       - stats.get("exec_out_words", 0))
                   + stats.get("input_words", 0))
+        gdk = stats.get("gross_draft_by_kind")
+        gek = stats.get("gross_edit_by_kind")
         gk = dict(stats.get("gross_write_by_kind") or {})
-        if gk:
+        if gdk is not None and gek is not None:
+            # §66: 총량도 종류별 draft/edit가 직접 온다 (파일 출처 기준 분류).
+            # 종전의 전역 share 비율 분배는 종류 무관 희석이라 폐지.
+            draft_kind = dict(gdk)
+            edit_kind = dict(gek)
+        elif gk:  # 구 stats 호환
             gd = stats.get("gross_draft_words", 0)
             ge = stats.get("gross_edit_words", 0)
             tot = gd + ge

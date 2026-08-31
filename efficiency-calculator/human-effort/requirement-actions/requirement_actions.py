@@ -16,6 +16,7 @@
 
 프롬프트 설계 근거: doc/PROMPT_DESIGN.md
 """
+import difflib
 import json
 import re
 import sys
@@ -495,6 +496,30 @@ def estimate_actions_from_requirements(llm, requirements, record_stats=None,
     }
 
 
+_EDIT_ANCHOR_MIN = 3   # 이 길이 이상 연속 일치만 "다시 뱉은 앵커"로 인정 (우연 일치 방지)
+
+
+def edit_delta(old, new, anchor_min=_EDIT_ANCHOR_MIN):
+    """Edit 1건의 실제 변경량 (§66). 반환: (added, removed, anchor) 단어수.
+
+    Edit 도구는 위치를 찍기 위해 바꾸지 않는 줄도 old_string·new_string에
+    같이 싣는다. 사람은 편집기에서 그 줄을 다시 치지 않으므로, new_string
+    전량이 아니라 **old와 다른 단어만** 노동이다 (실측: new_string의 31%가
+    앵커 — 55세션 3,111건). 단어열 diff의 연속 일치 블록(anchor_min 이상)이
+    앵커, 나머지 new 단어가 added, 어느 블록에도 안 든 old 단어가 removed.
+    removed == 0 이면 "순수 추가"(기존 글을 고친 게 아니라 새 글을 써넣음).
+    """
+    ow, nw = old.split(), new.split()
+    if not ow or not nw:
+        return len(nw), len(ow), 0
+    sm = difflib.SequenceMatcher(None, ow, nw,
+                                 autojunk=(len(ow) + len(nw) > 4000))
+    blocks = sm.get_matching_blocks()
+    anchor = sum(b.size for b in blocks if b.size >= anchor_min)
+    matched = sum(b.size for b in blocks)
+    return len(nw) - anchor, len(ow) - matched, anchor
+
+
 def replay_write_net(write_seq, failed_tool_ids=()):
     """쓰기 순계 재생 (§31): "결말에 살아남은 단어만 노동이다" — 읽기
     3등급과 같은 원리를 쓰기에 적용. 실패한 편집(툴 에러)은 제외.
@@ -532,26 +557,38 @@ def replay_write_net(write_seq, failed_tool_ids=()):
                 artifact[fp] = net
                 out_draft[fp] = net
         else:
-            live = []                                  # 세션 중 써넣은 생존 문구들
+            # 생존 문구 [본문, 계상 단어수, 신규여부]. 계상 단어수는 new_string
+            # 전량이 아니라 edit_delta의 added(앵커 제외, §66). removed == 0
+            # (순수 추가)면 draft, 아니면 edit — OFF 총량과 같은 분류 원리.
+            live = []
             for kind, old, new, _id in seq:
                 if kind == "write":
-                    live = [new]
+                    live = [[new, len(new.split()), True]]
                     continue
+                added, removed, _anchor = edit_delta(old, new)
                 kept = []
-                for s in live:
-                    if s and old and (s in old or old in s):
-                        if old in s and len(s) > len(old):
-                            kept.append(s.replace(old, "", 1))
+                for ent in live:
+                    text, w, is_draft = ent
+                    if text and old and (text in old or old in text):
+                        if old in text and len(text) > len(old):
+                            rem = text.replace(old, "", 1)
+                            frac = (len(rem.split())
+                                    / max(1, len(text.split())))
+                            kept.append([rem, w * frac, is_draft])
                         # 전부 덮어쓰임 → 왕복, 폐기
                     else:
-                        kept.append(s)
-                if new:
-                    kept.append(new)
+                        kept.append(ent)
+                if new and added:
+                    kept.append([new, added, removed == 0])
                 live = kept
-            net = sum(len(s.split()) for s in live if s)
-            if net:
-                artifact[fp] = net
-                out_edit[fp] = net
+            d = sum(w for _t, w, is_d in live if is_d)
+            e = sum(w for _t, w, is_d in live if not is_d)
+            if d:
+                out_draft[fp] = d
+            if e:
+                out_edit[fp] = e
+            if d or e:
+                artifact[fp] = d + e
     return artifact, out_draft, out_edit
 
 
@@ -1027,14 +1064,36 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
 
     artifact, out_draft, out_edit = replay_write_net(write_seq, failed_tool_ids)
 
-    # 옛 방식 총량(§31 이전 의미: Write 마지막 판 + Edit 누적, 실패 포함) —
-    # 휴먼화 기능 효과 평가의 대조군(§32)용으로만 보존
+    # 총량(로레코드 rw OFF용, 실패 포함) — §66에서 분류를 도구명→**파일 출처**
+    # 기준으로 통일: 세션이 만든 파일(Write 기점)은 이후 Edit로 써넣은 단어도
+    # 신규(draft) — 순계(replay_write_net)와 같은 원리라 항목별 ON ≤ OFF가
+    # 지켜진다(종전 도구명 기준은 16/55세션에서 역전). Edit는 new_string
+    # 전량이 아니라 edit_delta의 added(앵커 제외); 기존 파일의 순수 추가
+    # (removed == 0)도 draft, 나머지가 edit.
     gross_d = gross_e = 0
+    gross_draft_kind = {"code": 0, "doc": 0, "data": 0, "other": 0}
+    gross_edit_kind = {"code": 0, "doc": 0, "data": 0, "other": 0}
+    write_tool_raw = 0   # 채널 결산용 원단위(앵커 포함, 도구에 실려 나간 글 전량)
     for _fp, seq in write_seq.items():
+        _k = write_kind(_fp)
+        _created = seq[0][0] == "write"
         writes = [op for op in seq if op[0] == "write"]
         if writes:
-            gross_d += len(writes[-1][2].split())
-        gross_e += sum(len(op[2].split()) for op in seq if op[0] == "edit")
+            _w = len(writes[-1][2].split())
+            gross_d += _w
+            gross_draft_kind[_k] += _w
+            write_tool_raw += _w
+        for op in seq:
+            if op[0] != "edit":
+                continue
+            write_tool_raw += len(op[2].split())
+            _added, _removed, _anchor = edit_delta(op[1], op[2])
+            if _created or _removed == 0:
+                gross_d += _added
+                gross_draft_kind[_k] += _added
+            else:
+                gross_e += _added
+                gross_edit_kind[_k] += _added
 
     # 쓰기 종류 분해 (§59): 코드/문서/데이터는 사람 절차가 다르다
     draft_kind = {"code": 0, "doc": 0, "data": 0, "other": 0}
@@ -1043,13 +1102,8 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
         draft_kind[write_kind(fp)] += w
     for fp, w in out_edit.items():
         edit_kind[write_kind(fp)] += w
-    gross_kind = {"code": 0, "doc": 0, "data": 0, "other": 0}
-    for _fp, seq in write_seq.items():
-        k = write_kind(_fp)
-        ws = [op for op in seq if op[0] == "write"]
-        if ws:
-            gross_kind[k] += len(ws[-1][2].split())
-        gross_kind[k] += sum(len(op[2].split()) for op in seq if op[0] == "edit")
+    gross_kind = {k: gross_draft_kind[k] + gross_edit_kind[k]
+                  for k in gross_draft_kind}   # 구 소비자 호환(합계)
 
     # 실행 4토막 재료 (§59 규칙3)
     ex_seen = set()
@@ -1103,6 +1157,9 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
            "out_draft_by_kind": draft_kind,
            "out_edit_by_kind": edit_kind,
            "gross_write_by_kind": gross_kind,
+           # §66 총량의 draft/edit 종류별 분해 (파일 출처 기준, 앵커 제외)
+           "gross_draft_by_kind": gross_draft_kind,
+           "gross_edit_by_kind": gross_edit_kind,
            # 실행 4토막 재료 (§59) — 전부 트랜스크립트 실측
            "exec_compose_words": ex_compose_net,
            "exec_compose_words_gross": ex_compose_gross,
@@ -1116,7 +1173,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
            # 채널 결산 (§59 규칙2) — 세션에서 나간/들어온 글이 어느 축으로
            # 갔는지 감사용. 어느 축에도 안 잡히는 양이 크면 구멍이다.
            "channels": {
-               "write_tool_words": gross_d + gross_e,
+               "write_tool_words": write_tool_raw,
                "shell_cmd_words": ex_compose_gross,
                "exec_out_words": ex_out,
                "tool_result_words": reviewed,

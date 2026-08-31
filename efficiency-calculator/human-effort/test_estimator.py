@@ -558,7 +558,8 @@ class TestPrimitiveEffort(unittest.TestCase):
 
     def test_record_stats_anchor(self):
         # 구방식도 record_stats를 주면 신방식과 같은 닻이 적용된다:
-        # 구조적 읽기 = 정독 실측 600 + 훑기 실측 400×0.05 + 입력 40 = 660
+        # 구조적 읽기 = 정독 실측 600 + 훑기 실측 400×0.444(§66: skim
+        # 0.00222/read 0.005) + 입력 40 = 817.6 → 818
         # (LLM 9999 대체) / 작성 = 실측 500 상한 (LLM 800 절단)
         from primitive_effort import estimate_human_min
         out = {"human": [{"primitive": "read", "count": 9999},
@@ -570,11 +571,11 @@ class TestPrimitiveEffort(unittest.TestCase):
                  "artifact_words": 500}
         r = estimate_human_min(self._Mock([out]), "spec", record_stats=stats)
         counts = {b["primitive"]: b["count"] for b in r["breakdown"]}
-        self.assertEqual(counts["read"], 660)
+        self.assertEqual(counts["read"], 818)
         self.assertEqual(counts["draft"], 500)
-        self.assertEqual(r["anchors"]["structured_read_words"], 660)
-        # read 660×0.005=3.3 + draft 500×0.05=25 = 28.3
-        self.assertAlmostEqual(r["human_min"], 28.3, places=2)
+        self.assertEqual(r["anchors"]["structured_read_words"], 818)
+        # read 818×0.005=4.09 + draft 500×0.05=25 = 29.09
+        self.assertAlmostEqual(r["human_min"], 29.09, places=2)
 
 
 class TestRequirementActions(unittest.TestCase):
@@ -612,8 +613,9 @@ class TestRequirementActions(unittest.TestCase):
         # verify: 완료조건 3개로 대체 (LLM 10 무시)
         self.assertEqual(bd["verify"]["count"], 3)
         self.assertTrue(any("닻 적용" in n for n in r["notes"]))
-        # 총액 수기검산: read 3000×0.005=15 + (draft1000×0.05+edit1000×0.02)=70 + verify 3×3=9
-        self.assertAlmostEqual(r["human_min"], 94.0, places=1)
+        # 총액 수기검산: read 3000×0.005=15 + (draft1000×0.05+edit1000×0.025)=75 + verify 3×3=9
+        # (§66: edit 40 wpm = 0.025)
+        self.assertAlmostEqual(r["human_min"], 99.0, places=1)
 
     def test_write_split_anchor(self):
         # §28: draft/edit 분류를 도구 실측(Write:Edit)으로 통일.
@@ -632,8 +634,8 @@ class TestRequirementActions(unittest.TestCase):
         bd = {b["primitive"]: b for b in r["breakdown"]}
         self.assertEqual(bd["draft"]["count"], 200)
         self.assertEqual(bd["edit"]["count"], 300)   # LLM 누락 → 실측으로 추가
-        # 200×0.05 + 300×0.02 = 16.0
-        self.assertAlmostEqual(r["human_min"], 16.0, places=1)
+        # 200×0.05 + 300×0.025 = 17.5 (§66: edit 40 wpm)
+        self.assertAlmostEqual(r["human_min"], 17.5, places=1)
         self.assertTrue(any("쓰기 분할" in n for n in r["notes"]))
 
     def test_verify_cap_only(self):
@@ -735,15 +737,15 @@ class TestRequirementActions(unittest.TestCase):
             self.assertEqual(rs["contributed_docs"], 1)
             self.assertEqual(rs["deep_words"], 200)    # 재읽기 중복 제거 + 블록
             self.assertEqual(rs["skim_words"], 2300)   # a 나머지 1000 + b 400 + c 900
-            # 닻: 200 + 2300×(탐색 0.00025/정독 0.005=0.05) = 200+115 = 315
+            # 닻: 200 + 2300×(훑기 0.00222/정독 0.005=0.444) = 200+1021.2 → 1221 (§66)
             out = {"human": [{"primitive": "read", "count": 9999}]}
             req = {"requirements": [{"title": "수정", "requested_quantities": [],
                                      "acceptance_criteria": []}]}
             r = estimate_actions_from_requirements(self._Mock([out]), req,
                                                    record_stats=rs)
             bd = {b["primitive"]: b for b in r["breakdown"]}
-            self.assertEqual(r["anchors"]["structured_read_words"], 315)
-            self.assertEqual(bd["read"]["count"], 315)
+            self.assertEqual(r["anchors"]["structured_read_words"], 1221)
+            self.assertEqual(bd["read"]["count"], 1221)
         finally:
             os.unlink(p)
 
@@ -1038,6 +1040,57 @@ class TestRequirementActions(unittest.TestCase):
         self.assertEqual(bd["verify"], 2)
         self.assertAlmostEqual(bd["search"] + bd["execute"], 1.0, places=1)
         self.assertTrue(any("건수형 상한" in n for n in notes))
+
+    def test_edit_delta_file_origin_monotone(self):
+        # §66: Edit는 new_string 전량이 아니라 **변경 단어**(3단어+ 연속 앵커
+        # 제외)만; old 단어를 하나도 지우지 않은 순수 추가는 draft; 세션이 만든
+        # 파일의 Edit는 OFF 총량에서도 draft(파일 출처 기준) → 항목별 ON ≤ OFF.
+        import tempfile, os, json as _json
+        from requirement_actions import collect_record_stats, edit_delta
+        self.assertEqual(edit_delta("k1 k2 k3 k4 old", "k1 k2 k3 k4 new"),
+                         (1, 1, 4))                       # 교체: added 1
+        self.assertEqual(edit_delta("k1 k2 k3 k4", "k1 k2 k3 k4 a b c"),
+                         (3, 0, 4))                       # 순수 추가
+        self.assertEqual(edit_delta("b", "b c"), (2, 0, 0))  # 짧은 일치는 앵커 아님
+        self.assertEqual(edit_delta("", "a b c"), (3, 0, 0))
+
+        def tu(i, name, inp):
+            return {"type": "assistant", "message": {"role": "assistant",
+                    "content": [{"type": "tool_use", "id": i, "name": name,
+                                 "input": inp}]}}
+        lines = [
+            tu("w1", "Write", {"file_path": "new.py", "content": "a b c d"}),
+            tu("e1", "Edit", {"file_path": "new.py", "old_string": "b c d",
+                              "new_string": "b c d e f"}),        # 생성파일 덧붙임 2
+            tu("e2", "Edit", {"file_path": "old.py",
+                              "old_string": "k1 k2 k3 k4 x",
+                              "new_string": "k1 k2 k3 k4 y z"}),  # 기존파일 교체 2
+            tu("e3", "Edit", {"file_path": "old.py",
+                              "old_string": "m1 m2 m3 m4",
+                              "new_string": "m1 m2 m3 m4 p q r"}),  # 기존파일 순수추가 3
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(_json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            rs = collect_record_stats(p, subagent_paths=[])
+            # OFF 총량: new.py = Write 4 + 덧붙임 2 → draft 6 (종전 도구명 기준이면
+            # edit 5 = 앵커 3 포함 × 0.4배 → ON보다 작아지는 역전의 원인이었다)
+            #           old.py = 교체 2 → edit, 순수추가 3 → draft
+            self.assertEqual(rs["gross_draft_by_kind"]["code"], 9)
+            self.assertEqual(rs["gross_edit_by_kind"]["code"], 2)
+            # ON 순계: new.py 최종본 6 draft, old.py 교체 2 edit + 순수추가 3 draft
+            self.assertEqual(rs["out_draft_by_kind"]["code"], 9)
+            self.assertEqual(rs["out_edit_by_kind"]["code"], 2)
+            self.assertEqual(rs["gross_draft_words"], 9)
+            self.assertEqual(rs["gross_edit_words"], 2)
+            self.assertEqual(rs["out_draft_words"], 9)
+            self.assertEqual(rs["out_edit_words"], 2)
+            # 채널 결산은 도구에 실려 나간 글 원단위(앵커 포함): 4+5+6+7
+            self.assertEqual(rs["channels"]["write_tool_words"], 22)
+        finally:
+            os.unlink(p)
 
     def test_write_net_replay(self):
         # §31: 쓰기 순계 재생 — 만든 파일은 편집을 재생해 최종본 복원(왕복

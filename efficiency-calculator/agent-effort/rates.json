@@ -25,7 +25,8 @@
     },
     "edit": {
       "unit": "word_count",
-      "min_per_unit": 0.02
+      "min_per_unit": 0.025,
+      "_comment": "§66: 40 wpm = 0.025분/단어, **변경된 단어 기준**(Edit new_string 전량이 아니라 old_string과 다른 단어만, 다시 뱉은 앵커 줄 제외). 근거: keystroke-logging 연구의 revision burst — L1 작성자 평균 7.59초에 22.69자, 5자=1단어 환산 ≈ 36 wpm(L2도 ≈36) → 문헌에 가까운 30~40 wpm 중 보수적 끝 40. 종전 50 wpm(0.02)은 Dhakal의 text-entry 타이핑 속도 앵커라 '고칠 곳 판단·삭제·삽입·재확인'이 든 수정 과정과 다름. 실제 계산은 human_write_model.edit_factor(종류별 draft × 0.5 → 문서 0.025)가 담당, 이 값은 폴백."
     },
     "data_entry": {
       "unit": "record_count",
@@ -162,7 +163,7 @@
   },
   "human_reading_model": {
     "_comment": "사람의 선별적 읽기 모델. 근거: 사람은 전수 탐색이 아니라 전략적 항해(후보는 훑고, 결과에 기여하는 자료만 정독) — 'Strategic Navigation or Stochastic Search?' 계열 연구의 agent/human 읽기 행태 차이. 읽기 닻은 기록 **실측 단어수의 등급별 환산**: 기여 파일 실측 단어 × 정독요율(human.read 0.005) + 훑은 후보 실측 단어 × skim_min_per_word(탐색, 정독의 1/20 — 사람은 건너뛰듯 훑으므로 10배보다 빨라야 한다는 지정(§26)) + 헛읽기 × 0. 같은 구간 재읽기는 1회로 중복 제거. 실측 단어가 없으면 구조 닻 없음(건당 고정치 폴백 폐지, §24). words_per_item(300)은 할일 명시 건수 닻('출처 10건')용, words_per_page는 페이지 명시 요구용. 전부 seed — 실측 보정 대상.",
-    "skim_min_per_word": 0.00025,
+    "skim_min_per_word": 0.00222,
     "words_per_item": 300,
     "words_per_page": 250,
     "item_units": [
@@ -187,19 +188,20 @@
       "page",
       "pages",
       "장"
-    ]
+    ],
+    "_comment_skim": "§66: 450 wpm = 0.00222분/단어 (종전 0.00025 = 4,000 wpm). 읽기 연구에서 skimming은 일반 묵독(≈200~300 wpm)의 약 2~4배까지 빨라지되 이해도가 떨어지는 행동 — 4,000 wpm은 사람 읽기가 아니라 '5% 비용 등가' 해석에 의존해야 했다. 정독 200 wpm의 2.25배인 450 wpm이면 문자 그대로 '훑어 읽는 속도'로 방어 가능. 파일 훑기·실행 출력 200단어 이후 판독에 공통 적용."
   },
   "human_write_model": {
     "_comment": "쓰기 종류별 요율 (§59). 지금까지 코드·문서·JSON 데이터를 한 요율(0.05=20wpm, Karat의 짧은 메시지 작문 실측)로 매겼는데, 실측 구성은 코드 42.5% / 문서 30% / 데이터 26%다. 코드에 20wpm을 쓰면 시간당 243줄(줄당 4.94단어 실측)이 되어 과소, 데이터에 쓰면 사람이 20만 단어 JSON을 손으로 친다는 뜻이 되어 과대. 종류별로 사람 절차가 다르므로 요율을 가른다.",
     "code_min_per_word": 0.08,
     "_comment_code": "시간당 152줄(0.08분/단어 x 4.94단어/줄 실측). **문헌 유도값** (§61): ① Prechelt(IEEE Computer 2000, 7개 언어 80개 구현)의 전체 작업 생산성 중앙값 22~31 non-comment LOC/시간 — 설계·작성·시험을 다 포함한 값. ② Xia et al.(IEEE TSE 2018, 전문 개발자 79명·3,244시간)의 시간 배분에서 **편집(코드 치는 행위)은 13.9~15.3%**, 이해 58%, 탐색 18~22%. ①을 ②의 편집 분율로 나누면 순수 편집 속도 144~223 LOC/h → 요율 0.054~0.084. 그 **보수적(느린) 끝인 0.08**을 쓴다. 이 나눗셈이 필요한 이유: 이해·탐색 몫은 이 측정기에서 read·think 축이 따로 받으므로, draft에 전체 작업 속도를 넣으면 이중계상이 된다. 종전 0.05(=243 LOC/h)는 Karat의 산문 타자 앵커라 코드엔 근거가 없었고, 직전 0.15(=81 LOC/h)는 내가 감으로 박은 값이라 문헌 범위 밖이었다.",
     "doc_min_per_word": 0.05,
-    "_comment_doc": "20wpm. Karat et al. CHI'99 keyboard composition 19wpm 실측 앵커.",
+    "_comment_doc": "20 wpm = 0.05분/단어. 근거: Karat et al. CHI'99 keyboard composition 19 wpm; keystroke-logging 연구에서 영어 L1 작성자의 composition rate(멈춤·문장 생성 포함) 평균 18.93 wpm; 전문 작가의 실제 업무 문서(편지·보고서·법률 문서) 작성 관찰 17.76 / 20.33 wpm; Chenoweth & Hayes(2001)의 writing fluency = 시간당 실제 텍스트 생산량 정의(계획·생성·수정으로 상당한 pause). 방어하기 좋은 값.",
     "data_min_per_word": 0.01,
     "_comment_data": "JSON·YAML·CSV. 사람은 데이터 파일을 손으로 치지 않고 **뽑는다** — 생성 스크립트를 짜거나 도구로 내보낸다. 단어당 타자 비용이 아니라 그 우회 절차의 등가 비용으로 둔 seed.",
     "other_min_per_word": 0.05,
-    "edit_factor": 0.4,
-    "_comment_edit": "수정은 같은 종류 신규의 0.4배 (종전 edit 0.02 / draft 0.05 = 0.4 유지).",
+    "edit_factor": 0.5,
+    "_comment_edit": "§66: 수정은 같은 종류 신규의 0.5배 — 문서 0.05×0.5 = 0.025분/단어 = 40 wpm (human.edit 주석의 revision-burst 근거), 코드 0.08×0.5 = 0.04, 데이터 0.01×0.5 = 0.005. 적용 단위는 **변경된 단어**(edit_delta: 앵커 제외 added). 종전 0.4는 '종전 edit 0.02 / draft 0.05' 비율 승계로 실측·문헌 근거 없음. 순수 추가(old 단어를 하나도 지우지 않은 Edit)와 세션이 만든 파일에 대한 Edit는 수정이 아니라 신규(draft 요율).",
     "source_type": "literature_derived (code) + expert_seed (doc/data)",
     "_comment_code_band": "문헌 밴드 0.054~0.084 (Prechelt 22~31 LOC/h ÷ Xia 편집분율 13.9~15.3%)",
     "_references": [
