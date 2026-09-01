@@ -91,7 +91,7 @@ def collect(root):
             rows.append({"session": on["session"],
                          "agent": on["agent"]["total_min"],
                          # 민감도용 분해 (§49): machine+instruct는 고정
-                         # (instruct는 실측 보정), seed 요율(review·correct)만
+                         # (instruct는 실측 보정), seed 요율(review)만
                          # 0.5×/1×/2×로 흔든다
                          "agent_fixed": (on["agent"]["machine_min"]
                                          + hb.get("instruct", 0)),
@@ -189,7 +189,7 @@ def render(rows, n_excl, n_err, n_excl_suspect, n_active, n_ai, root):
         "",
         "## hitl seed 요율 민감도 (0.5× / 1× / 2×)",
         "",
-        "분모의 사람 감독 중 **미보정 seed 요율(review·correct)만** 흔든 전체"
+        "분모의 사람 감독 중 **미보정 seed 요율(review)만** 흔든 전체"
         " 효율(휴먼 합산 ÷ 에이전트 합산, rw ON·act ON). instruct는 실측"
         " 보정(지시 1,456건)이라 고정, 기계 시간도 고정. 절대값 불확실성을"
         " 숨기지 않으면서 상대 결론의 강건성을 보이기 위함(§49).",

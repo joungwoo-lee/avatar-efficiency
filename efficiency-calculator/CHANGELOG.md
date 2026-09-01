@@ -1590,6 +1590,45 @@ ON/ON 6.01 → 6.07배, OFF/OFF 8.54 → 8.62배. 결론 대부분이 200~300단
   `SAVINGS_FLOOR=None`이면 끔. `speedup`도 바닥 적용된 `h_min` 기준(≥ 0.667).
 - **회귀**: 이 PC 67세션 중 바닥에 걸리는 세션 1(a8138f7a: 분자 실측 12.1분·agent 20.1분 → 절감율 −66% → −50%로 받침, 분자 13.4분). 나머지 66세션 수치 불변.
 
+## 77. 파일 확인 — 확인 시점당 로그·상한 2.0분, correct 폐지
+
+- **문제 1 (확인 모델이 거꾸로)**: 사람은 AI가 만든 **수단**(엑셀을 뽑는 생성
+  스크립트)이 아니라 **결과물**(엑셀)을 본다. 종전 모델은 스크립트(.py)에
+  동작 확인 2.0 + 규모 비례 대조(0.005/단어)를 물리고, Bash로 만들어진
+  엑셀은 0으로 쳤다. 코드가 수단인 세션에서 확인 노동이 통째로 잘못 붙었다.
+- **문제 2 (선형이 실측에 반함)**: §63 실측(짝 233개)은 확인 비용이 변경
+  규모와 거의 무관(1~200단어 7.5분 → 4,000단어+ 3.6분)인데 선형 0.005/단어를
+  "설계 결정"으로 유지했다. 이 PC 144세션에서 code_skim이 review의 33.7%로
+  최대 항목이었다.
+- **문제 3 (correct 이중 계상)**: interrupt 뒤 다시 친 지시는 instruct가
+  세고, instruct 요율 자체가 "직전 응답→지시 간격" 실측(1,456건)이라
+  재정향 시간을 이미 포함. hitl의 2.7%(212분)라 있으나 마나이기도 했다.
+- **수정** (`transcript_actual.py`, `rates.json`):
+  - `hitl_review_model.file_check = {a_min 0.5, b_words 100, cap_min 2.0}`.
+    확인 시점(실질 지시 턴·세션 끝)마다 그 구간에 Write/Edit가 있으면
+    유형 무관 1건 `min(cap, a × ln(1 + 구간 쓴 단어/b))` — 200단어 0.55,
+    1,000단어 1.20, 5,300단어+ 2.0(상한). `code_check_events`에 `words`·
+    `all_files` 추가, 코드 외 파일만 쓴 구간도 사건이 된다.
+  - 폐지: `code_run_min_per_file`·`code_skim_min_per_word`·
+    `doc_skim_min_per_word`·`other_check_min_per_file`·
+    `verified_check_min_per_file`·`expected_tests_per_file`(테스트 강등,
+    `automation_saved_min`은 호환용 0 고정). `file_check` 키 없으면 구식 경로
+    폴백(코드 잔존).
+  - `hitl.correct` 실측 경로 제거(`breakdown.hitl`에 키 없음). `interrupts`·
+    `corrective_instructions` 카운트는 감사용 유지.
+  - 대화 확인(결론 정독 0.005·200단어 상한, 진행 훑기 0.00222)은 불변.
+- **회귀 (이 PC 67세션, rw ON·act ON)**: 분모 13,253 → 10,484분(−20.9%),
+  전체 효율 6.09 → 7.70배, 효율 평균 5.46 → 6.91. seed 민감도(0.5×/2×)
+  7.54~4.40 → 8.66~6.30. 분자 불변(80,681 → 80,680, 바닥 세션 1건 미세).
+- **남은 한계**: Bash가 만든 파일(엑셀·이미지 등)은 여전히 포착 안 됨 —
+  구간 단어는 Write/Edit 본문만. 산출물 감지(명령 출력 경로·`FILE:` 마커)는
+  후속. 0단어 Write(빈 파일)는 0분.
+- 테스트: agent-effort `test_file_check_log_cap`·
+  `test_file_check_counts_non_code_files` 신규, `test_type_based_review`·
+  `test_code_review_turn_billing`·`test_code_check_per_real_turn`·
+  `test_deterministic_hand_check` 기대값 갱신, 강등 테스트 2종 제거.
+  문서: 방법서 §4.3·§2·§6·§7.2, agent-effort README 3항.
+
 ## 미해결 (알려진 한계·다음 단계)
 
 > §66~§68 감사에서 검토했으나 미반영한 항목·기대효과 %·위치·판단 근거는
@@ -1605,7 +1644,7 @@ ON/ON 6.01 → 6.07배, OFF/OFF 8.54 → 8.62배. 결론 대부분이 200~300단
    부풀림. 측정기는 "그 분량이 필요했는가"를 판정하지 않음 — record 계열에
    §30류 요구 분량 상한 부재. 문서 대량 생성형이 전형 사례.
 4. 판단 깊이: 건당 고정 시간이라 채점형 과소 잔존.
-5. review·correct 요율 미보정 (instruct와 같은 방법으로 가능).
+5. review 요율 미보정 (instruct와 같은 방법으로 가능). correct는 §77 폐지.
 6. 여러 세션 파일로 이어진 작업: 기여 승격이 파일 경계를 못 넘음 (§17).
 7. ~~기여 파일 내부의 구간 수준 분해~~ — §26에서 블록 분해로 해소.
    잔여: 블록 크기 200단어·훑기 1/20은 seed — 실측 보정 대상.
