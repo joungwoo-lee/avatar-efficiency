@@ -1779,6 +1779,32 @@ ON/ON 6.01 → 6.07배, OFF/OFF 8.54 → 8.62배. 결론 대부분이 200~300단
   대기 그대로·10일 대기 10분·instruct 미계상). 208 passed. 방법서 §4.2,
   agent-effort README 4항.
 
+## 85. hitl 축약 모드(§79)를 기본값으로 — 아무 옵션 없으면 축약, `--hitl-full`이 §76 전체 모델
+
+- **결정(사용자)**: §84(배경 작업 대기 가산)와 함께 §79 축약 모드를 기본
+  동작으로. `actual_effort_minutes` / `measure_agent_actual` / `measure` /
+  `collect`·`render`의 `hitl_compact` 기본 False → **True**. CLI는
+  `--hitl-compact`(이제 무의미, 받아만 줌) 대신 **`--hitl-full`**로 §76 전체
+  모델을 고른다(record_actions_code_api.py·전 세션 리포트 둘 다). 리포트
+  제목에 모드 표기: 기본 "hitl 축약 모드 (§79, 기본)", 전체 "hitl 전체 모델
+  (§76, --hitl-full)".
+- **수치 (이 PC 68세션, rw ON·act ON, 분자 82,162분)**:
+
+  | 조건 | 분모 | 기계 | hitl | hitl/기계 | 전체 효율 | 세션 중앙 |
+  |---|---|---|---|---|---|---|
+  | §84 이전 · §76 전체 (67세션) | 13,253 | 5,795 | 7,654 | 1.32 | 6.07 | 5.08 |
+  | §84 · §76 전체 (`--hitl-full`) | 14,495 | 6,841 | 7,654 | 1.12 | 5.67 | 4.96 |
+  | **§84 · 축약 (기본)** | **11,601** | 6,841 | **4,760** | **0.70** | **7.08** | 6.11 |
+
+  축약이 줄이는 곳: review 4,980 → 2,294(파일 확인을 확인 시점당 1건·상한,
+  테스트 통과 파일 제외), correct 208 → 0. instruct 2,466(실측 보정) 불변.
+  hitl 비중 53% → 41%. OFF/OFF 7.92 → 9.92배.
+- **회귀 처리**: §76 전체 모델을 검산하던 TestTranscriptActual 6건은
+  `hitl_compact=False`를 명시(모델 자체는 불변). `test_compact_is_default`
+  신규(기본 = 명시 True, ≠ False). 209 passed.
+- 문서: 방법서 §4.3.1·§5.0 CLI, agent-effort README 3항, rates.json
+  `hitl_compact_model` 주석, 각 모듈 docstring.
+
 ## 미해결 (알려진 한계·다음 단계)
 
 > §66~§68 감사에서 검토했으나 미반영한 항목·기대효과 %·위치·판단 근거는

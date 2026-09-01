@@ -69,6 +69,7 @@ class TestAgentEffort(unittest.TestCase):
 
 
 class TestTranscriptActual(unittest.TestCase):
+    # §76 전체 hitl 모델(hitl_compact=False)을 명시해서 검산 — §85부터 기본은 축약.
     def test_type_based_review(self):
         # 검토 방식은 산출물이 정한다: 코드=동작 확인, 문서=정독, 보고=결론만 정독
         import json, tempfile, os
@@ -91,7 +92,7 @@ class TestTranscriptActual(unittest.TestCase):
             for ln in lines:
                 f.write(json.dumps(ln, ensure_ascii=False) + "\n")
         try:
-            m = actual_effort_minutes(parse_actions(p))
+            m = actual_effort_minutes(parse_actions(p), hitl_compact=False)
             # §50 턴 확인 + §63 코드/문서 요율 분리:
             #   동작 확인 1회 2.0 + 코드 500×0.005 + 문서 250×0.0025
             #   + 문서·기타 파일당 표본 확인 2×0.5
@@ -152,7 +153,7 @@ class TestTranscriptActual(unittest.TestCase):
                 for ln in lines:
                     f.write(json.dumps(ln, ensure_ascii=False) + "\n")
             try:
-                return actual_effort_minutes(parse_actions(p))
+                return actual_effort_minutes(parse_actions(p), hitl_compact=False)
             finally:
                 os.unlink(p)
 
@@ -184,7 +185,7 @@ class TestTranscriptActual(unittest.TestCase):
             for ln in lines:
                 f.write(json.dumps(ln, ensure_ascii=False) + "\n")
         try:
-            m = actual_effort_minutes(parse_actions(p))
+            m = actual_effort_minutes(parse_actions(p), hitl_compact=False)
             # 검토 = 확인 시점(세션 끝) 1회 2.0 + 코드 70단어×0.005 = 2.35
             # (§63 코드 요율 0.002 → 0.005)
             self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 2.35,
@@ -218,7 +219,7 @@ class TestTranscriptActual(unittest.TestCase):
         try:
             c = parse_actions(p)
             self.assertEqual(len(c["code_check_events"]), 2)  # 턴 + 세션 끝
-            m = actual_effort_minutes(c)
+            m = actual_effort_minutes(c, hitl_compact=False)
             # 검토 = 동작 확인 2회×2.0 + 코드 20단어×0.005 = 4.10 (§63)
             self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 4.10,
                                    places=2)
@@ -251,7 +252,7 @@ class TestTranscriptActual(unittest.TestCase):
             for ln in lines:
                 f.write(json.dumps(ln, ensure_ascii=False) + "\n")
         try:
-            m = actual_effort_minutes(parse_actions(p))
+            m = actual_effort_minutes(parse_actions(p), hitl_compact=False)
             # ratio 1 × 검증분율 1/2 → eff = 2.0 − 1.7×0.5 = 1.15,
             # saved = 0.85 (전판 검증이었으면 1.7)
             self.assertAlmostEqual(m["automation_saved_min"], 0.85, places=2)
@@ -331,7 +332,7 @@ class TestTranscriptActual(unittest.TestCase):
             self.assertEqual(c["interrupts"], 1)
             # §49: interrupt 직후 첫 지시("제목 바꿔줘") = 교정성 지시 표시
             self.assertEqual(c["corrective_instructions"], 1)
-            m = actual_effort_minutes(c)
+            m = actual_effort_minutes(c, hitl_compact=False)
             # machine = 1×0.3 + 100×0.0005 + 20×0.002 = 0.39
             # hitl = 지시 2건×(0.5+0.05×2단어) + 검토(결론 20단어×정독 0.005 §71
             #        + 문서 파일 표본 확인 0.5, 내용물 0단어)
@@ -339,7 +340,7 @@ class TestTranscriptActual(unittest.TestCase):
             self.assertAlmostEqual(m["machine_min"], 0.39, places=2)
             self.assertAlmostEqual(m["hitl_min"], 5.8, places=2)
             self.assertEqual(m["total_min"],
-                             actual_effort_minutes(parse_actions(p))["total_min"])
+                             actual_effort_minutes(parse_actions(p), hitl_compact=False)["total_min"])
         finally:
             os.unlink(p)
 
@@ -524,6 +525,23 @@ class TestHitlCompact(unittest.TestCase):
         _, m0 = self._run(lines, compact=False)
         self.assertAlmostEqual(m0["breakdown"]["hitl"]["review"], 0.75, places=2)
         self.assertFalse(m0["hitl_compact"])
+
+    def test_compact_is_default(self):
+        # §85: 아무 옵션 없이 부르면 축약 모드 — 명시 True와 같고 False와 다르다
+        lines = [
+            {"type": "user", "message": {"role": "user", "content": "고쳐줘 " * 6}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Write",
+                 "input": {"file_path": "a.py", "content": "x " * 500}},
+                {"type": "text", "text": "끝 " * 20}]}},
+        ]
+        from transcript_actual import actual_effort_minutes
+        c, m_true = self._run(lines, compact=True)
+        _, m_false = self._run(lines, compact=False)
+        m_default = actual_effort_minutes(c)
+        self.assertTrue(m_default["hitl_compact"])
+        self.assertEqual(m_default["hitl_min"], m_true["hitl_min"])
+        self.assertNotEqual(m_default["hitl_min"], m_false["hitl_min"])
 
     def test_no_correct_in_compact(self):
         # interrupt는 축약 모드에서 과금 없음, 기본 모드는 4.0

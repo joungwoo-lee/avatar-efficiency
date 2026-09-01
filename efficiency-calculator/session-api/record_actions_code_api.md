@@ -419,13 +419,13 @@ AI 시간 = Σ(턴)  Σ(그 턴의 AI 기록 사이 간격, 단 간격 하나당
 | 검증 위임 강등 | 확인 시점의 테스트 상태가 통과면 그 시점의 동작 확인 2.0 → "결과 서명" 0.3으로, 커버리지(또는 통과 수÷기대 수) 비례 강등 (§19). 마지막 테스트 결과 **이후 수정된** 파일은 검증 분율에서 제외 (§49) | seed |
 | correct (교정) | 사용자 중단(interrupt)당 4.0분. 정의: 끊고 다시 방향 잡는 **재정향 추가 비용** — 새 지시 작성은 instruct가 별도 계상(중복 아님, 상호배타 감지). **불확실 요율** — 민감도 항목(§49). interrupt 직후 첫 지시는 corrective_instructions로 표시만(과금 없음) | seed |
 
-#### 4.3.1 hitl 축약 모드 (§79, 기본 OFF)
+#### 4.3.1 hitl 축약 모드 (§79, **§85부터 기본 ON**)
 
-`measure(..., hitl_compact=True)` / CLI `--hitl-compact` / 전 세션 리포트
-`--hitl-compact`. 분자는 그대로, **분모의 사람 확인만** 바꾼다
+아무 옵션 없이 돌리면 축약 모드다. §76 전체 모델은 `measure(..., hitl_compact=False)`
+/ CLI `--hitl-full` / 전 세션 리포트 `--hitl-full`. 분자는 그대로, **분모의 사람 확인만** 바꾼다
 (`rates.json hitl_compact_model`):
 
-| 항목 | 기본 모드 | 축약 모드 |
+| 항목 | 전체 모델(§76, --hitl-full) | 축약 모드(기본) |
 |---|---|---|
 | 파일 확인 | 코드 동작 확인 2.0/시점 + 코드 0.005/단어 + 문서 0.0025/단어 + 문서·기타 파일당 0.5 | 확인 시점에 파일 쓰기 있으면 유형 무관 1건 = `min(2.0, 0.5 × ln(1 + 구간 쓴 단어/100))` — 200단어 0.55, 1,000단어 1.20, 5,300단어+ 2.0 |
 | 검증 위임 | 테스트 통과면 동작 확인 2.0 → 0.3 비례 강등 | 테스트 통과면 그 **이전에 쓴 코드 파일을 확인 단어에서 제외** (테스트 뒤 고친 파일·코드 아닌 파일은 남음), 차이 = `automation_saved_min` |
@@ -500,7 +500,7 @@ r["window"]  # {"start": A, "end": B, "as_of": T}   (epoch 초; 없으면 None)
 ```
 python record_actions_code_api.py session.jsonl --from 2026-09-01T10:00 --to 2026-09-01T12:30
 python record_actions_code_api.py session.jsonl --as-of 2026-09-01T12:30
-python record_actions_code_api.py session.jsonl --as-of ... --from ... --to ... [--norw] [--noact] [--hitl-compact] [--json]
+python record_actions_code_api.py session.jsonl --as-of ... --from ... --to ... [--norw] [--noact] [--hitl-full] [--json]
 ```
 
 시각 인자: ISO 8601(`2026-09-01T10:00`, `...Z`, `...+09:00`) 또는 epoch 초.

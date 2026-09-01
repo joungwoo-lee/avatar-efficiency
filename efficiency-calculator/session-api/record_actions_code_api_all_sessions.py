@@ -11,7 +11,7 @@ LLM 0회로 측정해 마크다운 리포트를 만든다:
     python report_all_sessions.py                     # 기본 루트, stdout 출력
     python report_all_sessions.py --out report.md     # 파일로 저장
     python report_all_sessions.py D:\\other\\projects  # 루트 지정
-    python report_all_sessions.py --hitl-compact      # §79 hitl 축약 모드로 분모
+    python report_all_sessions.py --hitl-full         # §76 전체 hitl 모델로 분모 (기본은 §79 축약)
 """
 import glob
 import json
@@ -60,7 +60,7 @@ def is_ai_invoked(jsonl_path):
     return False
 
 
-def collect(root, hitl_compact=False):
+def collect(root, hitl_compact=True):
     import time
     files = [f for f in glob.glob(os.path.join(root, "**", "*.jsonl"),
                                   recursive=True)
@@ -133,7 +133,7 @@ def histogram(series):
 
 
 def render(rows, n_excl, n_err, n_excl_suspect, n_active, n_ai, root,
-           hitl_compact=False):
+           hitl_compact=True):
     n = len(rows)
     if not n:
         return f"측정 가능한 세션 없음 (제외 {n_excl}, 실패 {n_err})"
@@ -151,7 +151,8 @@ def render(rows, n_excl, n_err, n_excl_suspect, n_active, n_ai, root,
 
     out = [
         f"# 세션 효율 리포트 — record-actions w/o LLM (휴먼화 2축 4조합)"
-        + (" — **hitl 축약 모드** (§79)" if hitl_compact else ""),
+        + (" — hitl 축약 모드 (§79, 기본)" if hitl_compact
+           else " — **hitl 전체 모델** (§76, --hitl-full)"),
         "",
         f"- 측정일: {date.today().isoformat()}  |  루트: `{root}`",
         f"- 측정 {n}세션 (초소형 제외 {n_excl}, 진행 중 제외 {n_active}, "
@@ -257,8 +258,8 @@ def main(argv):
         i = argv.index("--out")
         out_path = argv[i + 1]
         argv = argv[:i] + argv[i + 2:]
-    compact = "--hitl-compact" in argv
-    argv = [a for a in argv if a != "--hitl-compact"]
+    compact = "--hitl-full" not in argv   # §85 축약이 기본
+    argv = [a for a in argv if a not in ("--hitl-full", "--hitl-compact")]
     root = argv[0] if argv else DEFAULT_ROOT
     report = render(*collect(root, hitl_compact=compact), root=root,
                     hitl_compact=compact)

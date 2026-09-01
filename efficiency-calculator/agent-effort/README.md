@@ -116,8 +116,8 @@ agent_min = agent_human_min(사람 협업자의 에포트, hitl)
    승격·테스트 상태·확인 시점·파일 첫 쓰기)은 기록 전체, 계상은 사건 시각이
    구간 안인 것만(지시·도구·AI 시간 조각·결론·확인 사건·산출물 단어).
    세션 API `measure(as_of=, window=)`의 분모 몫. 방법서 §5.0.
-   **hitl 축약 모드 (§79, 기본 OFF)** — `actual_effort_minutes(hitl_compact=True)`
-   / `measure(hitl_compact=True)` / CLI `--hitl-compact`. 파일 확인을 "확인
+   **hitl 축약 모드 (§79, §85부터 기본 ON)** — `actual_effort_minutes(hitl_compact=False)`
+   / `measure(hitl_compact=False)` / CLI `--hitl-full` 이 §76 전체 모델. 파일 확인을 "확인
    시점에 파일 쓰기 있으면 유형 무관 1건 = min(2.0, 0.5×ln(1+구간 단어/100))"
    로, 테스트 통과 파일은 확인 단어에서 제외, correct 미계상. 이 PC 67세션
    6.09배 → 7.74배. `rates.json hitl_compact_model`.

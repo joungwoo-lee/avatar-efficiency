@@ -36,7 +36,8 @@ rates.json의 agent/hitl 카드 요율을 곱한다.
                아니라…")은 결정론으로 못 갈라 미계상 — 알려진 과소.
                interrupt 직후 첫 지시는 corrective_instructions로 표시만)
 
-hitl 축약 모드 (§79, actual_effort_minutes(hitl_compact=True), 기본 OFF):
+hitl 축약 모드 (§79, actual_effort_minutes(hitl_compact=True), §85부터 기본 ON —
+    hitl_compact=False 가 §76 전체 모델):
     review의 파일 몫을 통째로 바꾼다 — 확인 시점(실질 지시 턴·세션 끝)에
     그 구간에 파일 생성·수정이 있으면 유형 무관 1건
     min(cap, a·ln(1 + 구간 쓴 단어/b)) (hitl_compact_model.file_check, 기본
@@ -502,12 +503,13 @@ def parse_actions(jsonl_path, count_window=None):
     return counts
 
 
-def actual_effort_minutes(counts, rates=None, hitl_compact=False):
+def actual_effort_minutes(counts, rates=None, hitl_compact=True):
     """동작 카운트 × rates.json 요율 → 분. 반환:
     {machine_min, hitl_min, total_min, breakdown{...}}
 
     hitl_compact: §79 hitl 축약 모드 — 파일 확인을 확인 시점당 로그·상한
-    1건으로, 테스트 통과 파일 제외, correct 미계상. 기본 False(§76 모델).
+    1건으로, 테스트 통과 파일 제외, correct 미계상. §85부터 기본 True;
+    False 는 §76 전체 모델.
     """
     r = rates or load_rates(DEFAULT_RATES_PATH)
     a, h = r["agent"], r["hitl"]

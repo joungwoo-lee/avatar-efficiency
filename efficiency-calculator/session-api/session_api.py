@@ -93,7 +93,7 @@ def is_trivial_session(record_stats, span_min=None):
 
 
 def measure_agent_actual(jsonl_path, rates=None, include_subagents=False,
-                         hitl_compact=False, count_window=None):
+                         hitl_compact=True, count_window=None):
     """분모만: 트랜스크립트 실측 agent_min. LLM 미사용, 결정론적.
 
     측정 기조: 분모 = "AI를 쓰는 사람의 에포트" + "AI가 실제 소모한 시간".
@@ -102,7 +102,7 @@ def measure_agent_actual(jsonl_path, rates=None, include_subagents=False,
     - 서브에이전트는 메인 타임라인과 **병렬**로 돌므로 실제 소모 시간에
       가산하지 않는다(기본 False). include_subagents=True는 자원량 참고용.
     - hitl_compact: §79 hitl 축약 모드(파일 확인 로그·상한, 테스트 통과
-      파일 제외, correct 미계상). 기본 False.
+      파일 제외, correct 미계상). §85부터 기본 True; False = §76 전체 모델.
     - count_window: §80 구간 계상 (start, end) epoch 초 — parse_actions 참조.
     """
     rates = rates or load_rates()

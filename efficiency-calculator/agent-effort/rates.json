@@ -223,7 +223,7 @@
     "source_type": "measured+seed"
   },
   "hitl_compact_model": {
-    "_comment": "hitl 축약 모드 (§79, actual_effort_minutes(hitl_compact=True) / measure(hitl_compact=True) / CLI --hitl-compact). 기본 OFF. review의 파일 몫을 통째로 바꾼다: 확인 시점(실질 지시 턴·세션 끝)에 그 구간에 파일 생성·수정이 있으면 유형 무관 1건 = min(cap_min, a_min × ln(1 + 구간 쓴 단어/b_words)). 확인 시점의 마지막 테스트가 통과면 그 이전에 쓴 코드 파일은 구간 단어에서 제외(automation_saved_min). correct(interrupt × 4.0)는 계상 안 함(instruct와 이중). 대화 확인(report_deep/report_skim)은 hitl_review_model 값을 그대로 쓴다. 근거: 사람은 수단(생성 스크립트)이 아니라 결과물을 보고, 실측(§63, 짝 233개)은 확인 비용이 변경 규모와 거의 무관(1~200단어 7.5분 → 4,000단어+ 3.6분). 이 PC 67세션: 기본 6.09배 → 축약 7.74배.",
+    "_comment": "hitl 축약 모드 (§79; §85부터 기본 ON — hitl_compact=False / CLI --hitl-full 이 §76 전체 모델). review의 파일 몫을 통째로 바꾼다: 확인 시점(실질 지시 턴·세션 끝)에 그 구간에 파일 생성·수정이 있으면 유형 무관 1건 = min(cap_min, a_min × ln(1 + 구간 쓴 단어/b_words)). 확인 시점의 마지막 테스트가 통과면 그 이전에 쓴 코드 파일은 구간 단어에서 제외(automation_saved_min). correct(interrupt × 4.0)는 계상 안 함(instruct와 이중). 대화 확인(report_deep/report_skim)은 hitl_review_model 값을 그대로 쓴다. 근거: 사람은 수단(생성 스크립트)이 아니라 결과물을 보고, 실측(§63, 짝 233개)은 확인 비용이 변경 규모와 거의 무관(1~200단어 7.5분 → 4,000단어+ 3.6분). 이 PC 67세션: 기본 6.09배 → 축약 7.74배.",
     "file_check": {
       "a_min": 0.5,
       "b_words": 100,

@@ -51,8 +51,8 @@
     r = measure("session.jsonl", humanize=False)        # 구 인터페이스 호환
     r["speedup"], r["human"]["min"], r["human"]["breakdown"]
 
-hitl 축약 모드 (§79, 기본 OFF): measure(..., hitl_compact=True) /
-    CLI --hitl-compact. 분모의 사람 확인을 "파일 쓰기 있는 확인 시점당
+hitl 축약 모드 (§79, §85부터 기본 ON): measure(..., hitl_compact=False) /
+    CLI --hitl-full 이 §76 전체 모델. 분모의 사람 확인을 "파일 쓰기 있는 확인 시점당
     min(2.0, 0.5·ln(1+구간 단어/100)), 테스트 통과 파일 제외, correct 없음"
     으로 바꾼다(transcript_actual.actual_effort_minutes 참조). 분자 불변.
 
@@ -70,7 +70,7 @@ hitl 축약 모드 (§79, 기본 OFF): measure(..., hitl_compact=True) /
 
 CLI:
     python record_actions_code_api.py <session.jsonl> [...]
-        [--norw] [--noact] [--nothink] [--hitl-compact] [--json]
+        [--norw] [--noact] [--nothink] [--hitl-full] [--json]
         [--as-of T] [--from A] [--to B]
         (--raw, --rawrecord는 구 호환)
 """
@@ -562,7 +562,7 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
 
 def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
             include_subagents=False, force=False, humanize=None,
-            include_think=True, subagent_paths=None, hitl_compact=False,
+            include_think=True, subagent_paths=None, hitl_compact=True,
             as_of=None, window=None):
     """세션 1개 → LLM 0회 분자·분모·speedup. 반환 구조는 measure_session 동일.
 
@@ -574,7 +574,8 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
     include_think: 생각 계상 (§53·§59, collect_strategy_thinking 참조).
               기본 ON — 휴먼화 2축과 독립(모든 조합에 동일 가산이라 §43
               단조성 불변). False로 구(생각 미계상) 동작.
-    hitl_compact: §79 hitl 축약 모드 — 분모의 사람 확인만 바꾼다(기본 OFF).
+    hitl_compact: §79 hitl 축약 모드 — 분모의 사람 확인만 바꾼다(§85부터
+        기본 ON; False = §76 전체 모델).
     as_of / window: §80 구간 측정 (모듈 docstring). as_of=T면 T 이후 기록을
               잘라낸 사본으로 잰다(slice_session). window=(start, end)면
               판정은 기록 전체(as_of까지), 계상은 사건 시각이 구간 안인 것만
@@ -758,7 +759,7 @@ def main(argv):
     paths = [a for a in argv if not a.startswith("--")]
     if not paths:
         print("usage: python record_actions_code_api.py <session.jsonl> [...] "
-              "[--norw] [--noact] [--nothink] [--hitl-compact] [--json] "
+              "[--norw] [--noact] [--nothink] [--hitl-full] [--json] "
               "[--as-of T] [--from A] [--to B]   "
               "(--raw=--norw, --rawrecord=--norw --noact 호환; T/A/B = ISO 8601 "
               "또는 epoch 초, tz 없으면 로컬)",
@@ -767,7 +768,7 @@ def main(argv):
     rw = not ("--norw" in argv or "--raw" in argv or "--rawrecord" in argv)
     act = not ("--noact" in argv or "--rawrecord" in argv)
     think = "--nothink" not in argv
-    compact = "--hitl-compact" in argv
+    compact = "--hitl-full" not in argv   # §85 축약이 기본, --hitl-full=§76 전체 모델
     window = None
     if "--from" in opts or "--to" in opts:
         window = (opts.get("--from", 0), opts.get("--to"))
