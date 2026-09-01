@@ -1590,7 +1590,7 @@ ON/ON 6.01 → 6.07배, OFF/OFF 8.54 → 8.62배. 결론 대부분이 200~300단
   `SAVINGS_FLOOR=None`이면 끔. `speedup`도 바닥 적용된 `h_min` 기준(≥ 0.667).
 - **회귀**: 이 PC 67세션 중 바닥에 걸리는 세션 1(a8138f7a: 분자 실측 12.1분·agent 20.1분 → 절감율 −66% → −50%로 받침, 분자 13.4분). 나머지 66세션 수치 불변.
 
-## 77. 파일 확인 — 확인 시점당 로그·상한 2.0분, correct 폐지
+## 77. 파일 확인 — 확인 시점당 로그·상한 2.0분, correct 폐지 (→ §79에서 축약 모드로 이관, 기본 복원)
 
 - **문제 1 (확인 모델이 거꾸로)**: 사람은 AI가 만든 **수단**(엑셀을 뽑는 생성
   스크립트)이 아니라 **결과물**(엑셀)을 본다. 종전 모델은 스크립트(.py)에
@@ -1629,7 +1629,7 @@ ON/ON 6.01 → 6.07배, OFF/OFF 8.54 → 8.62배. 결론 대부분이 200~300단
   `test_deterministic_hand_check` 기대값 갱신, 강등 테스트 2종 제거.
   문서: 방법서 §4.3·§2·§6·§7.2, agent-effort README 3항.
 
-## 78. 검증 위임 — 테스트 통과면 그 파일은 확인 대상에서 제외
+## 78. 검증 위임 — 테스트 통과면 그 파일은 확인 대상에서 제외 (→ §79에서 축약 모드로 이관)
 
 - **배경**: §77이 "코드 돌려보기 2.0 → 결과 서명 0.3" 강등을 기반 항목과
   함께 뺐다. 자동 검증이 사람 확인을 대신한다는 논리는 코드 결과물에 여전히
@@ -1644,6 +1644,29 @@ ON/ON 6.01 → 6.07배, OFF/OFF 8.54 → 8.62배. 결론 대부분이 200~300단
   7.70 → 7.74배. 확인 사건 654건 중 통과 상태 241건.
 - 테스트: `test_verified_files_excluded_only` 신규, `test_file_check_log_cap`
   통과/실패 분기 갱신. 문서: 방법서 §4.3·§2·§7.2, README 3항.
+
+## 79. hitl 축약 모드 분리 — §77·§78을 옵션으로, 기본 모델은 §76으로 복원
+
+- **결정**: §77(파일 확인 로그·상한 2.0, correct 폐지)·§78(테스트 통과 파일
+  제외)을 **기본값에서 빼고** `hitl_compact` 옵션으로 묶는다. 기본 경로는
+  §76 모델(코드 동작 확인 2.0·규모 비례 대조·문서 훑기·표본 확인·비례 강등·
+  correct 4.0) 그대로 — rates.json `hitl_review_model`·`hitl.correct`·문서·
+  테스트를 `0ef9177` 상태로 복원.
+- **인터페이스**: `transcript_actual.actual_effort_minutes(counts, rates,
+  hitl_compact=False)` → `session_api.measure_agent_actual(..., hitl_compact)`
+  → `record_actions_code_api.measure(..., hitl_compact=False)` / CLI
+  `--hitl-compact` / `record_actions_code_api_all_sessions.py --hitl-compact`
+  (리포트 제목에 모드 표기). 결과 `agent.hitl_compact`·
+  `agent.automation_saved_min` 필드 추가. 요율은 `rates.json hitl_compact_model.
+  file_check {a_min 0.5, b_words 100, cap_min 2.0}`.
+- **파싱 확장은 공통** (`_flush_check_event`): 확인 사건이 코드 외 파일만 쓴
+  구간에도 생기고 `all_files`·`verified_files`·`words`·`words_raw`를 기록한다.
+  기본 모드는 `files == 0` 사건을 건너뛰어 값이 §76과 **비트 단위 동일**
+  (이 PC 67세션 13,253분·6.09배 재현 확인).
+- **회귀 (이 PC 67세션)**: 기본 6.09배(13,253분) / 축약 7.74배(10,418분).
+- 테스트: agent-effort `TestHitlCompact` 5건 신규(로그·상한, 검증 제외, dirty·
+  비코드 잔존, 비코드 구간 기본값 불변, correct 유무), 기존 15건 복원 통과.
+  문서: 방법서 §4.3.1·§7.2, README 3항.
 
 ## 미해결 (알려진 한계·다음 단계)
 

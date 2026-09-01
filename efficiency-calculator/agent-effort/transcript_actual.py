@@ -25,19 +25,28 @@ rates.json의 agent/hitl 카드 요율을 곱한다.
   사람(hitl) — 동작 카운트는 실측이나 요율은 추정이므로 hitl_min은
   "실제 비용"이 아니라 **추정 감독 비용**이다 (instruct만 실측 보정, §49):
     instruct = 사용자 텍스트 메시지 수       × hitl.instruct (instruction_count)
-    review   = §50 턴 확인 모델 — 확인 시점(실질 지시 턴·세션 끝)마다
-               결론 정독(건별 200단어 상한) + 진행 보고 훑기 + **파일 확인**
-               (§77: 그 구간에 파일 생성·수정이 있으면 1건 —
-               min(cap, a·ln(1 + 구간 쓴 단어/b)), 기본 cap 2.0분.
-               코드/문서/기타 구분·동작 확인·규모 비례 대조는 §77에서
-               폐지 — 실측(§63)이 "확인 비용은 규모와 거의 무관"이었고,
-               사람은 수단(생성 스크립트)이 아니라 결과물을 본다.
-               §78: 확인 시점의 마지막 테스트가 통과면 그 테스트 이전에 쓴
-               코드 파일은 확인 대상에서 제외 — 테스트가 대신 봤다)
-    correct  = §77에서 폐지. interrupt 뒤 다시 친 지시는 이미 instruct로
-               세고, instruct 요율 자체가 "직전 응답→지시 간격" 실측이라
-               재정향 시간을 포함 — 이중 계상이었다. interrupts 카운트는
-               감사용으로 남긴다(corrective_instructions 표시 포함).
+    review   = assistant 텍스트 단어수      × hitl.review   (word_count)
+               (사람이 읽어야 하는 AI 출력. §50 턴 확인 모델: 확인
+               시점마다 결론 정독 + 진행 보고 훑기 + 코드 동작 확인
+               (+ 변경 규모 비례 확인, §61)
+               1회 — 전량 정독 아님. 파일당 과금 폐지 §49→§50)
+    correct  = 사용자 중단(interrupt) 횟수  × hitl.correct  (correction_count)
+               (정의: 끊고 다시 방향 잡는 **재정향 추가 비용** — 새 지시
+               작성 노동은 instruct가 별도 계상. 발화형 교정("아니 그게
+               아니라…")은 결정론으로 못 갈라 미계상 — 알려진 과소.
+               interrupt 직후 첫 지시는 corrective_instructions로 표시만)
+
+hitl 축약 모드 (§79, actual_effort_minutes(hitl_compact=True), 기본 OFF):
+    review의 파일 몫을 통째로 바꾼다 — 확인 시점(실질 지시 턴·세션 끝)에
+    그 구간에 파일 생성·수정이 있으면 유형 무관 1건
+    min(cap, a·ln(1 + 구간 쓴 단어/b)) (hitl_compact_model.file_check, 기본
+    cap 2.0분). 확인 시점의 마지막 테스트가 통과면 그 테스트 이전에 쓴 코드
+    파일은 구간 단어에서 제외(테스트가 대신 봤다, automation_saved_min).
+    correct는 계상하지 않는다(interrupt 뒤 재지시는 instruct가 세고 instruct
+    요율이 "직전 응답→지시 간격" 실측이라 이중 계상). 근거: 사람은 수단(생성
+    스크립트)이 아니라 결과물을 보고, 실측(§63)은 확인 비용이 규모와 거의
+    무관했다. 기본 모드의 코드 동작 확인·규모 비례 대조·문서 훑기·표본
+    확인·비례 강등은 축약 모드에서 쓰지 않는다.
 
 집계 제외: thinking 블록(사용자 비노출), meta·snapshot 라인, tool_result만 있는
 user 턴(사람 발화 아님). sidechain(서브에이전트)은 기계 동작으로 포함.
@@ -215,18 +224,19 @@ def parse_actions(jsonl_path):
     seq = 0             # 도구 사건 순번 (§49 쓰기↔테스트 선후 판정용)
     after_interrupt = False  # 직전 사람 발화가 interrupt였는가 (§49)
     seg_code = {}       # 이번 확인 구간에 변경된 코드 파일 {fp: 마지막 seq}
-    seg_files = {}      # §77 이번 구간에 생성·수정된 파일 {fp: 쓴 단어 누적}
+    seg_files = {}      # §79 이번 구간에 생성·수정된 파일 {fp: 쓴 단어 누적}
 
     def _flush_check_event():
-        """확인 시점 도달: 구간에 파일 생성·수정이 있으면 사건 기록 (§50·§77)."""
+        """확인 시점 도달: 구간에 파일 생성·수정이 있으면 사건 기록 (§50·§79)."""
         if not seg_files:
             return
         lt = counts["last_test_seq"]
         dirty = (sum(1 for s in seg_code.values() if s > lt)
                  if lt is not None else 0)
-        # §78 검증 위임: 확인 시점의 마지막 테스트가 통과 상태면, 그 테스트
-        # 이전에 쓴 코드 파일은 확인 대상에서 **뺀다**(테스트가 대신 봤다).
-        # 테스트 뒤에 또 고친 파일(dirty)·코드 아닌 파일은 남는다.
+        # §79 축약 모드용 검증 위임: 확인 시점의 마지막 테스트가 통과 상태면
+        # 그 테스트 이전에 쓴 코드 파일은 확인 단어에서 **뺀다**(테스트가 대신
+        # 봤다). 테스트 뒤에 또 고친 파일(dirty)·코드 아닌 파일은 남는다.
+        # 기본 모드는 words를 쓰지 않는다(files·dirty·테스트 상태만).
         verified = (lt is not None and not counts["last_test_failed"])
         excluded = {fp for fp, sq in seg_code.items()
                     if verified and sq <= lt}
@@ -238,8 +248,8 @@ def parse_actions(jsonl_path):
             "tests_passed": counts["tests_passed_last"],
             "test_failed": counts["last_test_failed"],
             "coverage": counts["coverage_pct"],
-            # §77 파일 확인 입력: 구간에 쓴 파일 수·단어 (코드 외 포함).
-            # words = 검증 제외 후, words_raw = 제외 전 (§78)
+            # §79 축약 모드 입력: 구간에 쓴 파일 수·단어 (코드 외 포함).
+            # words = 검증 제외 후, words_raw = 제외 전
             "all_files": len(seg_files), "verified_files": len(excluded),
             "words": words, "words_raw": words_raw})
         seg_code.clear()
@@ -312,7 +322,7 @@ def parse_actions(jsonl_path):
                                 cls[fp] = _words(body)
                             else:                # 부분 수정 — 누적
                                 cls[fp] = cls.get(fp, 0) + _words(body)
-                            seg_files[fp] = (seg_files.get(fp, 0)   # §77
+                            seg_files[fp] = (seg_files.get(fp, 0)   # §79
                                              + _words(body))
                             if acls == "code":   # §49 마지막 쓰기 순번
                                 counts["code_write_seq"][fp] = seq
@@ -417,9 +427,12 @@ def parse_actions(jsonl_path):
     return counts
 
 
-def actual_effort_minutes(counts, rates=None):
+def actual_effort_minutes(counts, rates=None, hitl_compact=False):
     """동작 카운트 × rates.json 요율 → 분. 반환:
     {machine_min, hitl_min, total_min, breakdown{...}}
+
+    hitl_compact: §79 hitl 축약 모드 — 파일 확인을 확인 시점당 로그·상한
+    1건으로, 테스트 통과 파일 제외, correct 미계상. 기본 False(§76 모델).
     """
     r = rates or load_rates(DEFAULT_RATES_PATH)
     a, h = r["agent"], r["hitl"]
@@ -449,13 +462,17 @@ def actual_effort_minutes(counts, rates=None):
     else:  # 폴백: 건당 평균 요율
         instruct_min = counts["user_instructions"] * h["instruct"]["min_per_unit"]
     rm = r.get("hitl_review_model")
-    fc = (rm or {}).get("file_check")
-    if fc:  # §77 파일 확인 — 확인 시점당 로그·상한, 유형 무관
+    fc = (r.get("hitl_compact_model") or {}).get("file_check") \
+        if hitl_compact else None
+    if hitl_compact and not (rm and fc):
+        raise ValueError("hitl_compact=True needs rates.hitl_compact_model."
+                         "file_check and hitl_review_model")
+    if fc:  # §79 축약 모드: 파일 확인 — 확인 시점당 로그·상한, 유형 무관
         # 사람은 만든 수단(스크립트)이 아니라 결과물을 본다. 실측(§63)은
         # 확인 비용이 변경 규모와 거의 무관(20배 커져도 7.5→3.6분)이라
         # 선형 대신 로그 + 상한: 구간에 파일 쓰기가 있으면
         # min(cap, a·ln(1 + 구간 쓴 단어/b)). 코드/문서/기타 구분, 동작 확인
-        # 2.0, 규모 비례 대조는 폐지. §78: 확인 시점의 테스트가 통과면 그 이전에
+        # 2.0, 규모 비례 대조는 안 쓴다. 확인 시점의 테스트가 통과면 그 이전에
         # 쓴 코드 파일은 확인 대상에서 제외(automation_saved_min = 그 차이).
         cap = rm.get("report_deep_word_cap")
         cl = counts.get("conclusion_word_list")
@@ -481,7 +498,7 @@ def actual_effort_minutes(counts, rates=None):
         review_min = (check_min
                       + concl * rm["report_deep_min_per_word"]
                       + progress * rm["report_skim_min_per_word"])
-    elif rm:  # 구식(§50~§76): 유형별 검토 — 코드=동작 확인, 문서=정독
+    elif rm:  # 기본(§50~§76): 유형별 검토 — 코드=동작 확인, 문서=정독
         af = counts.get("artifact_files") or {}
         code_files = af.get("code") or {}
         doc_files = af.get("doc") or {}
@@ -521,6 +538,8 @@ def actual_effort_minutes(counts, rates=None):
                        "coverage": counts.get("coverage_pct")}] if n_code else []
         check_min = 0.0
         for ev in events:
+            if not ev.get("files"):  # 코드 변경 없는 구간(§79 파싱 확장) — 기본 모드는 동작 확인 없음
+                continue
             rate = run_rate
             if (floor is not None and ev.get("has_test")
                     and not ev.get("test_failed") and ev.get("files")):
@@ -554,10 +573,12 @@ def actual_effort_minutes(counts, rates=None):
     else:  # 폴백: 보고 전량 × 단일 요율 (구식)
         review_min = counts["assistant_words"] * h["review"]["min_per_unit"]
         automation_saved = 0.0
-    hitl = {  # §77: correct(중단 × 4.0) 폐지 — instruct와 이중 계상
+    hitl = {
         "instruct": instruct_min,
         "review": review_min,
     }
+    if not hitl_compact:  # §79 축약 모드는 correct 미계상(instruct와 이중)
+        hitl["correct"] = counts["interrupts"] * h["correct"]["min_per_unit"]
     machine_min = round(sum(machine.values()), 2)
     hitl_min = round(sum(hitl.values()), 2)
     return {
@@ -565,6 +586,7 @@ def actual_effort_minutes(counts, rates=None):
         "hitl_min": hitl_min,
         "total_min": round(machine_min + hitl_min, 2),
         "automation_saved_min": automation_saved,  # 자동 검증이 없앤 사람 노동
+        "hitl_compact": hitl_compact,              # §79 축약 모드 여부
         "breakdown": {
             "machine": {k: (round(v, 2) if isinstance(v, (int, float)) else v)
                         for k, v in machine.items()},

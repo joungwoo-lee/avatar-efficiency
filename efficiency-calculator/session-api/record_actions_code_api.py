@@ -51,9 +51,14 @@
     r = measure("session.jsonl", humanize=False)        # 구 인터페이스 호환
     r["speedup"], r["human"]["min"], r["human"]["breakdown"]
 
+hitl 축약 모드 (§79, 기본 OFF): measure(..., hitl_compact=True) /
+    CLI --hitl-compact. 분모의 사람 확인을 "파일 쓰기 있는 확인 시점당
+    min(2.0, 0.5·ln(1+구간 단어/100)), 테스트 통과 파일 제외, correct 없음"
+    으로 바꾼다(transcript_actual.actual_effort_minutes 참조). 분자 불변.
+
 CLI:
     python record_actions_code_api.py <session.jsonl> [...]
-        [--norw] [--noact] [--nothink] [--json]
+        [--norw] [--noact] [--nothink] [--hitl-compact] [--json]
         (--raw, --rawrecord는 구 호환)
 """
 import json
@@ -454,7 +459,7 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
 
 def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
             include_subagents=False, force=False, humanize=None,
-            include_think=True, subagent_paths=None):
+            include_think=True, subagent_paths=None, hitl_compact=False):
     """세션 1개 → LLM 0회 분자·분모·speedup. 반환 구조는 measure_session 동일.
 
     humanize_rw / humanize_act: 휴먼화 2축 (build_actions 참조, §40).
@@ -465,6 +470,7 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
     include_think: 생각 계상 (§53·§59, collect_strategy_thinking 참조).
               기본 ON — 휴먼화 2축과 독립(모든 조합에 동일 가산이라 §43
               단조성 불변). False로 구(생각 미계상) 동작.
+    hitl_compact: §79 hitl 축약 모드 — 분모의 사람 확인만 바꾼다(기본 OFF).
     """
     if humanize is not None:  # 구 인터페이스 호환 (§39 이전 소비자)
         if humanize == RAW_RECORD:
@@ -479,7 +485,8 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
     stats = collect_record_stats(jsonl_path, subagent_paths=subs)
     suspect, suspect_why = suspect_output_channel(stats)
     # §64 초소형 제외: 세션 러닝타임(첫~마지막 기록)이 5분 이하면 측정 안 함
-    actual = measure_agent_actual(jsonl_path, rates, include_subagents)
+    actual = measure_agent_actual(jsonl_path, rates, include_subagents,
+                                  hitl_compact=hitl_compact)
     span = actual["counts"].get("session_span_min") or None
     if is_trivial_session(stats, span) and not force:
         return {"session": Path(jsonl_path).name, "excluded": True,
@@ -572,6 +579,8 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
                   "hitl_min": actual["hitl_min"],
                   "total_min": actual["total_min"],
                   "breakdown": actual["breakdown"],
+                  "automation_saved_min": actual.get("automation_saved_min", 0.0),
+                  "hitl_compact": hitl_compact,
                   "subagent_files": actual["subagent_files"]},
         "speedup": speedup(h_min, actual["total_min"]),
         "speedup_vs_hitl": speedup(h_min, actual["hitl_min"]),
@@ -598,15 +607,16 @@ def main(argv):
     paths = [a for a in argv if not a.startswith("--")]
     if not paths:
         print("usage: python record_actions_code_api.py <session.jsonl> [...] "
-              "[--norw] [--noact] [--nothink] [--json]   "
+              "[--norw] [--noact] [--nothink] [--hitl-compact] [--json]   "
               "(--raw=--norw, --rawrecord=--norw --noact 호환)",
               file=sys.stderr)
         return 2
     rw = not ("--norw" in argv or "--raw" in argv or "--rawrecord" in argv)
     act = not ("--noact" in argv or "--rawrecord" in argv)
     think = "--nothink" not in argv
+    compact = "--hitl-compact" in argv
     rows = measure_batch(paths, humanize_rw=rw, humanize_act=act,
-                         include_think=think)
+                         include_think=think, hitl_compact=compact)
     if "--json" in argv:
         print(json.dumps(rows, ensure_ascii=False, indent=1))
         return 0

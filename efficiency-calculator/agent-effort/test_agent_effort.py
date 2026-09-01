@@ -70,7 +70,7 @@ class TestAgentEffort(unittest.TestCase):
 
 class TestTranscriptActual(unittest.TestCase):
     def test_type_based_review(self):
-        # §77: 파일 확인은 유형 무관 확인 시점당 1건(로그·상한), 보고=결론만 정독
+        # 검토 방식은 산출물이 정한다: 코드=동작 확인, 문서=정독, 보고=결론만 정독
         import json, tempfile, os
         from transcript_actual import parse_actions, actual_effort_minutes
         lines = [
@@ -92,13 +92,13 @@ class TestTranscriptActual(unittest.TestCase):
                 f.write(json.dumps(ln, ensure_ascii=False) + "\n")
         try:
             m = actual_effort_minutes(parse_actions(p))
-            # §77 파일 확인(유형 무관, 확인 시점 1회): 구간 쓴 단어
-            #   500+250+1 = 751 → 0.5×ln(1+7.51) = 1.071
+            # §50 턴 확인 + §63 코드/문서 요율 분리:
+            #   동작 확인 1회 2.0 + 코드 500×0.005 + 문서 250×0.0025
+            #   + 문서·기타 파일당 표본 확인 2×0.5
             #   + 결론 100×0.005 + 진행 100×0.00222 (§71 분자 동속)
-            #   = 1.071 + 0.5 + 0.222 = 1.793
-            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 1.793,
+            #   = 2 + 2.5 + 0.625 + 1 + 0.5 + 0.222 = 6.847
+            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 6.847,
                                    places=2)
-            self.assertEqual(m["automation_saved_min"], 0.0)
             # §52 기계 draft = (답변 200 + 파일 본문 500+250+1)×0.002
             #                = 1.902, execute 3×0.3 → machine 2.80
             self.assertAlmostEqual(m["machine_min"], 2.80, places=2)
@@ -128,18 +128,19 @@ class TestTranscriptActual(unittest.TestCase):
         finally:
             os.unlink(p)
 
-    def test_file_check_log_cap(self):
-        # §77: 파일 확인 = min(2.0, 0.5×ln(1 + 구간 쓴 단어/100)) — 규모가
-        # 커져도 상한 2.0분. (테스트 실패 상태 = 검증 제외 없음, §78)
+    def test_automation_discount(self):
+        # 검증 위임 강등: 통과 테스트 규모에 비례, 형식 테스트는 할인 미미
         import json, tempfile, os
         from transcript_actual import parse_actions, actual_effort_minutes
 
-        def session(words, test_output="2 failed, 3 passed"):
+        def session(test_output):
             lines = [
                 {"type": "user", "message": {"role": "user", "content": "고쳐줘"}},
                 {"type": "assistant", "message": {"role": "assistant", "content": [
                     {"type": "tool_use", "name": "Edit",
-                     "input": {"file_path": "a.py", "new_string": "x " * words}},
+                     "input": {"file_path": "a.py", "new_string": "x " * 100}},
+                    {"type": "tool_use", "name": "Edit",
+                     "input": {"file_path": "b.py", "new_string": "y " * 100}},
                     {"type": "tool_use", "id": "t1", "name": "Bash",
                      "input": {"command": "pytest tests/"}}]}},
                 {"type": "user", "message": {"role": "user", "content": [
@@ -155,23 +156,20 @@ class TestTranscriptActual(unittest.TestCase):
             finally:
                 os.unlink(p)
 
-        # 200단어 → 0.5×ln(3) = 0.549 / 1,000 → 0.5×ln(11) = 1.199
-        self.assertAlmostEqual(session(200)["breakdown"]["hitl"]["review"],
-                               0.549, places=2)
-        self.assertAlmostEqual(session(1000)["breakdown"]["hitl"]["review"],
-                               1.199, places=2)
-        # 20,000단어 → 상한 2.0
-        self.assertAlmostEqual(session(20000)["breakdown"]["hitl"]["review"],
-                               2.0, places=2)
-        # §78: 테스트 통과 → 그 이전에 쓴 코드 파일은 확인 대상 제외 → 0,
-        # 줄어든 만큼 automation_saved_min
-        m = session(1000, "12 passed in 1.2s")
-        self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 0.0, places=2)
-        self.assertAlmostEqual(m["automation_saved_min"], 1.2, places=2)
+        # 충분한 테스트(12 passed, 기대 2파일×3=6) → ratio 1 → 에피소드
+        # 기본비 2.0→0.3 (§49: 강등은 파일당이 아니라 에피소드 기본비에 적용)
+        m = session("============ 12 passed in 1.2s ============")
+        self.assertAlmostEqual(m["automation_saved_min"], 1.7, places=2)
+        # 형식 테스트(1 passed) → ratio 1/6 → 할인 미미 (saved = 1.7×1/6)
+        m = session("1 passed in 0.1s")
+        self.assertAlmostEqual(m["automation_saved_min"], 0.28, places=2)
+        # 실패 상태로 종료 → 강등 0
+        m = session("2 failed, 3 passed")
+        self.assertEqual(m["automation_saved_min"], 0.0)
 
     def test_code_review_turn_billing(self):
-        # §50·§77: 파일 확인은 확인 시점(턴)당 1회 — 같은 변경을 7파일로
-        # 쪼개도 확인비가 7배가 되지 않는다(구간 단어 합만 본다)
+        # §50: 코드 동작 확인은 확인 시점(턴)당 1회 — 같은 변경을 7파일로
+        # 쪼개도 확인비가 7배가 되지 않고, 파일 수는 훑기 단어로만 반영
         import json, tempfile, os
         from transcript_actual import parse_actions, actual_effort_minutes
         lines = [
@@ -187,15 +185,16 @@ class TestTranscriptActual(unittest.TestCase):
                 f.write(json.dumps(ln, ensure_ascii=False) + "\n")
         try:
             m = actual_effort_minutes(parse_actions(p))
-            # §77: 확인 시점(세션 끝) 1회, 구간 70단어 → 0.5×ln(1.7) = 0.265 → 0.27
-            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 0.27,
+            # 검토 = 확인 시점(세션 끝) 1회 2.0 + 코드 70단어×0.005 = 2.35
+            # (§63 코드 요율 0.002 → 0.005)
+            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 2.35,
                                    places=2)
         finally:
             os.unlink(p)
 
     def test_code_check_per_real_turn(self):
-        # §50·§77: 실질 지시 턴(5단어+)이 확인 시점 — 파일 쓰기가 있는 구간마다
-        # 파일 확인 1회. 2구간 = 2회. 짧은 이어가기 턴은 확인 시점 아님.
+        # §50: 실질 지시 턴(5단어+)이 확인 시점 — 코드 변경이 있는 구간마다
+        # 동작 확인 1회. 2구간 = 2회. 짧은 이어가기 턴은 확인 시점 아님.
         import json, tempfile, os
         from transcript_actual import parse_actions, actual_effort_minutes
 
@@ -220,24 +219,24 @@ class TestTranscriptActual(unittest.TestCase):
             c = parse_actions(p)
             self.assertEqual(len(c["code_check_events"]), 2)  # 턴 + 세션 끝
             m = actual_effort_minutes(c)
-            # §77: 확인 2회 × 0.5×ln(1.1) = 2×0.0477 = 0.095 → 0.10 (반올림)
-            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 0.10,
+            # 검토 = 동작 확인 2회×2.0 + 코드 20단어×0.005 = 4.10 (§63)
+            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 4.10,
                                    places=2)
         finally:
             os.unlink(p)
 
-    def test_verified_files_excluded_only(self):
-        # §78: 통과 테스트 **이전**에 쓴 코드 파일만 제외. 테스트 뒤 다시 고친
-        # 파일(dirty)과 코드 아닌 파일은 확인 대상에 남는다.
+    def test_demotion_excludes_files_edited_after_test(self):
+        # §49: 마지막 테스트 결과 이후 수정된 파일은 검증 분율에서 제외 —
+        # 테스트 후 2파일 중 1파일을 더 고치면 강등 폭이 절반
         import json, tempfile, os
         from transcript_actual import parse_actions, actual_effort_minutes
         lines = [
             {"type": "user", "message": {"role": "user", "content": "고쳐줘"}},
             {"type": "assistant", "message": {"role": "assistant", "content": [
                 {"type": "tool_use", "name": "Edit",
-                 "input": {"file_path": "a.py", "new_string": "x " * 500}},
-                {"type": "tool_use", "name": "Write",
-                 "input": {"file_path": "out.csv", "content": "a,b " * 100}},
+                 "input": {"file_path": "a.py", "new_string": "x " * 100}},
+                {"type": "tool_use", "name": "Edit",
+                 "input": {"file_path": "b.py", "new_string": "y " * 100}},
                 {"type": "tool_use", "id": "t1", "name": "Bash",
                  "input": {"command": "pytest tests/"}}]}},
             {"type": "user", "message": {"role": "user", "content": [
@@ -245,49 +244,17 @@ class TestTranscriptActual(unittest.TestCase):
                  "content": "12 passed in 1.2s"}]}},
             {"type": "assistant", "message": {"role": "assistant", "content": [
                 {"type": "tool_use", "name": "Edit",
-                 "input": {"file_path": "b.py", "new_string": "z " * 100}}]}},
+                 "input": {"file_path": "b.py", "new_string": "z " * 10}}]}},
         ]
         fd, p = tempfile.mkstemp(suffix=".jsonl")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             for ln in lines:
                 f.write(json.dumps(ln, ensure_ascii=False) + "\n")
         try:
-            c = parse_actions(p)
-            ev = c["code_check_events"][0]
-            self.assertEqual(ev["verified_files"], 1)          # a.py만
-            self.assertEqual(ev["words_raw"], 700)
-            self.assertEqual(ev["words"], 200)                 # csv 100 + b.py 100
-            m = actual_effort_minutes(c)
-            # 0.5×ln(3) = 0.549 / 제외 전 0.5×ln(8) = 1.040 → saved 0.49
-            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 0.549,
-                                   places=2)
-            self.assertAlmostEqual(m["automation_saved_min"], 0.49, places=2)
-        finally:
-            os.unlink(p)
-
-    def test_file_check_counts_non_code_files(self):
-        # §77: 코드가 아닌 파일(데이터·문서)만 만든 구간도 파일 확인 1건 —
-        # 사람은 결과물을 본다. 100단어 → 0.5×ln(2) = 0.347
-        import json, tempfile, os
-        from transcript_actual import parse_actions, actual_effort_minutes
-        lines = [
-            {"type": "user", "message": {"role": "user", "content": "표 만들어"}},
-            {"type": "assistant", "message": {"role": "assistant", "content": [
-                {"type": "tool_use", "name": "Write",
-                 "input": {"file_path": "data.csv", "content": "a,b " * 100}}]}},
-        ]
-        fd, p = tempfile.mkstemp(suffix=".jsonl")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            for ln in lines:
-                f.write(json.dumps(ln, ensure_ascii=False) + "\n")
-        try:
-            c = parse_actions(p)
-            self.assertEqual(len(c["code_check_events"]), 1)
-            self.assertEqual(c["code_check_events"][0]["words"], 100)
-            self.assertEqual(c["code_check_events"][0]["files"], 0)  # 코드 0
-            m = actual_effort_minutes(c)
-            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 0.347,
-                                   places=2)
+            m = actual_effort_minutes(parse_actions(p))
+            # ratio 1 × 검증분율 1/2 → eff = 2.0 − 1.7×0.5 = 1.15,
+            # saved = 0.85 (전판 검증이었으면 1.7)
+            self.assertAlmostEqual(m["automation_saved_min"], 0.85, places=2)
         finally:
             os.unlink(p)
 
@@ -367,11 +334,10 @@ class TestTranscriptActual(unittest.TestCase):
             m = actual_effort_minutes(c)
             # machine = 1×0.3 + 100×0.0005 + 20×0.002 = 0.39
             # hitl = 지시 2건×(0.5+0.05×2단어) + 검토(결론 20단어×정독 0.005 §71
-            #        + 파일 확인 0.5×ln(1+0/100) = 0, 내용물 0단어)
-            #        + 교정 0 (§77 폐지) = 1.2 + 0.1 = 1.3
+            #        + 문서 파일 표본 확인 0.5, 내용물 0단어)
+            #        + 교정 1×4.0 = 1.2 + 0.6 + 4.0 = 5.8
             self.assertAlmostEqual(m["machine_min"], 0.39, places=2)
-            self.assertAlmostEqual(m["hitl_min"], 1.3, places=2)
-            self.assertNotIn("correct", m["breakdown"]["hitl"])
+            self.assertAlmostEqual(m["hitl_min"], 5.8, places=2)
             self.assertEqual(m["total_min"],
                              actual_effort_minutes(parse_actions(p))["total_min"])
         finally:
@@ -416,6 +382,119 @@ class TestTranscriptActual(unittest.TestCase):
             self.assertLessEqual(c["ai_wall_min"], span)
         finally:
             os.unlink(p)
+
+
+
+class TestHitlCompact(unittest.TestCase):
+    """§79 hitl 축약 모드 — actual_effort_minutes(hitl_compact=True)."""
+
+    @staticmethod
+    def _run(lines, compact=True):
+        import json, tempfile, os
+        from transcript_actual import parse_actions, actual_effort_minutes
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            c = parse_actions(p)
+            return c, actual_effort_minutes(c, hitl_compact=compact)
+        finally:
+            os.unlink(p)
+
+    @staticmethod
+    def _edit_then_test(words, test_output):
+        return [
+            {"type": "user", "message": {"role": "user", "content": "고쳐줘"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Edit",
+                 "input": {"file_path": "a.py", "new_string": "x " * words}},
+                {"type": "tool_use", "id": "t1", "name": "Bash",
+                 "input": {"command": "pytest tests/"}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1",
+                 "content": test_output}]}},
+        ]
+
+    def test_file_check_log_cap(self):
+        # 파일 확인 = min(2.0, 0.5×ln(1 + 구간 쓴 단어/100)) — 상한 2.0분
+        # (테스트 실패 상태 = 검증 제외 없음)
+        rev = lambda w: self._run(self._edit_then_test(
+            w, "2 failed, 3 passed"))[1]["breakdown"]["hitl"]["review"]
+        self.assertAlmostEqual(rev(200), 0.549, places=2)   # 0.5×ln(3)
+        self.assertAlmostEqual(rev(1000), 1.199, places=2)  # 0.5×ln(11)
+        self.assertAlmostEqual(rev(20000), 2.0, places=2)   # 상한
+
+    def test_verified_file_excluded(self):
+        # 테스트 통과 → 그 이전에 쓴 코드 파일은 확인 대상 제외 → 0,
+        # 줄어든 만큼 automation_saved_min
+        c, m = self._run(self._edit_then_test(1000, "12 passed in 1.2s"))
+        self.assertEqual(c["code_check_events"][0]["verified_files"], 1)
+        self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 0.0, places=2)
+        self.assertAlmostEqual(m["automation_saved_min"], 1.2, places=2)
+        self.assertTrue(m["hitl_compact"])
+
+    def test_verified_exclusion_keeps_dirty_and_non_code(self):
+        # 통과 테스트 **이전**에 쓴 코드 파일만 제외. 테스트 뒤 다시 고친
+        # 파일(dirty)과 코드 아닌 파일은 남는다.
+        lines = [
+            {"type": "user", "message": {"role": "user", "content": "고쳐줘"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Edit",
+                 "input": {"file_path": "a.py", "new_string": "x " * 500}},
+                {"type": "tool_use", "name": "Write",
+                 "input": {"file_path": "out.csv", "content": "a,b " * 100}},
+                {"type": "tool_use", "id": "t1", "name": "Bash",
+                 "input": {"command": "pytest tests/"}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1",
+                 "content": "12 passed in 1.2s"}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Edit",
+                 "input": {"file_path": "b.py", "new_string": "z " * 100}}]}},
+        ]
+        c, m = self._run(lines)
+        ev = c["code_check_events"][0]
+        self.assertEqual(ev["words_raw"], 700)
+        self.assertEqual(ev["words"], 200)            # csv 100 + b.py 100
+        # 0.5×ln(3) = 0.549 / 제외 전 0.5×ln(8) = 1.040 → saved 0.49
+        self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 0.549, places=2)
+        self.assertAlmostEqual(m["automation_saved_min"], 0.49, places=2)
+
+    def test_non_code_only_segment_counts(self):
+        # 코드 아닌 파일만 만든 구간도 파일 확인 1건 — 100단어 → 0.5×ln(2)
+        lines = [
+            {"type": "user", "message": {"role": "user", "content": "표 만들어"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Write",
+                 "input": {"file_path": "data.csv", "content": "a,b " * 100}}]}},
+        ]
+        c, m = self._run(lines)
+        self.assertEqual(len(c["code_check_events"]), 1)
+        self.assertEqual(c["code_check_events"][0]["files"], 0)
+        self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 0.347, places=2)
+        # 기본 모드: 코드 없는 구간은 동작 확인 없음 — 문서 표본 확인 0.5 +
+        # 문서 100단어×0.0025 = 0.75 (§79 파싱 확장이 기본값을 안 바꿈)
+        _, m0 = self._run(lines, compact=False)
+        self.assertAlmostEqual(m0["breakdown"]["hitl"]["review"], 0.75, places=2)
+        self.assertFalse(m0["hitl_compact"])
+
+    def test_no_correct_in_compact(self):
+        # interrupt는 축약 모드에서 과금 없음, 기본 모드는 4.0
+        lines = [
+            {"type": "user", "message": {"role": "user", "content": "보고서 만들어줘"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "네 " * 10}]}},
+            {"type": "user", "message": {"role": "user",
+                                         "content": "[Request interrupted by user]"}},
+            {"type": "user", "message": {"role": "user", "content": "제목 바꿔줘"}},
+        ]
+        c, m = self._run(lines)
+        self.assertEqual(c["interrupts"], 1)
+        self.assertNotIn("correct", m["breakdown"]["hitl"])
+        _, m0 = self._run(lines, compact=False)
+        self.assertAlmostEqual(m0["breakdown"]["hitl"]["correct"], 4.0, places=2)
+        self.assertAlmostEqual(m0["hitl_min"] - m["hitl_min"], 4.0, places=2)
 
 
 if __name__ == "__main__":
