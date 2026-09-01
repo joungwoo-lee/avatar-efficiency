@@ -632,6 +632,195 @@ class TestSessionApi(unittest.TestCase):
                          .complete_json("p", 10), {"ok": 1})
 
 
+import record_actions_code_api as m  # noqa: E402 (§80 구간 측정 테스트)
+
+
+class TestWindowMeasure(unittest.TestCase):
+    """§80 구간 측정 — as_of(어느 시점의 눈) · window(어느 사건을 더하나)."""
+
+    T0 = 1_788_000_000  # 2026-08-xx 임의 epoch
+
+    @classmethod
+    def _iso(cls, off):
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(cls.T0 + off, tz=timezone.utc) \
+            .isoformat().replace("+00:00", "Z")
+
+    @classmethod
+    def _session(cls):
+        """3턴. 턴1(0~100s): a.py 500단어 작성. 턴2(200~300s): a.py를 다른
+        500단어로 **엎음** + b.md 300단어 읽기. 턴3(400~500s): b.md 편집(→
+        b.md 기여 승격) + 셸 실행."""
+        I = cls._iso
+        A = "x " * 500
+        B = "y " * 500
+        bmd = "alpha beta gamma delta epsilon zeta " * 50   # 300단어
+        rows = [
+            {"type": "user", "timestamp": I(0), "message": {"role": "user",
+             "content": "첫 번째 파일을 만들어 주세요 지금"}},
+            {"type": "assistant", "timestamp": I(10), "message": {"role": "assistant",
+             "content": [{"type": "tool_use", "id": "w1", "name": "Write",
+                          "input": {"file_path": "a.py", "content": A}}]}},
+            {"type": "user", "timestamp": I(20), "message": {"role": "user",
+             "content": [{"type": "tool_result", "tool_use_id": "w1", "content": "ok"}]}},
+            {"type": "assistant", "timestamp": I(30), "message": {"role": "assistant",
+             "content": [{"type": "text", "text": "첫 파일 완료 " * 10}]}},
+            {"type": "user", "timestamp": I(200), "message": {"role": "user",
+             "content": "그 파일을 전부 다시 써 주세요 그리고 b 문서도"}},
+            {"type": "assistant", "timestamp": I(210), "message": {"role": "assistant",
+             "content": [{"type": "tool_use", "id": "w2", "name": "Write",
+                          "input": {"file_path": "a.py", "content": B}},
+                         {"type": "tool_use", "id": "r1", "name": "Read",
+                          "input": {"file_path": "b.md"}}]}},
+            {"type": "user", "timestamp": I(220), "message": {"role": "user",
+             "content": [{"type": "tool_result", "tool_use_id": "w2", "content": "ok"},
+                         {"type": "tool_result", "tool_use_id": "r1", "content": bmd}]}},
+            {"type": "assistant", "timestamp": I(230), "message": {"role": "assistant",
+             "content": [{"type": "text", "text": "다시 썼습니다 " * 10}]}},
+            {"type": "user", "timestamp": I(400), "message": {"role": "user",
+             "content": "이제 b 문서를 고치고 테스트를 돌려 주세요"}},
+            {"type": "assistant", "timestamp": I(410), "message": {"role": "assistant",
+             "content": [{"type": "tool_use", "id": "e1", "name": "Edit",
+                          "input": {"file_path": "b.md",
+                                    "old_string": "alpha beta gamma",
+                                    "new_string": "alpha beta gamma new words here"}},
+                         {"type": "tool_use", "id": "x1", "name": "Bash",
+                          "input": {"command": "python run_all_checks.py --verbose"}}]}},
+            {"type": "user", "timestamp": I(430), "message": {"role": "user",
+             "content": [{"type": "tool_result", "tool_use_id": "e1", "content": "ok"},
+                         {"type": "tool_result", "tool_use_id": "x1",
+                          "content": "line " * 400}]}},
+            {"type": "assistant", "timestamp": I(500), "message": {"role": "assistant",
+             "content": [{"type": "text", "text": "모두 끝났습니다 " * 20}]}},
+        ]
+        return rows
+
+    def _write(self, rows):
+        import json, tempfile, os
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for r in rows:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        return p
+
+    @staticmethod
+    def _counts(r):
+        return {b["primitive"]: b["count"] for b in r["human"]["breakdown"]}
+
+    def test_additivity_over_turn_windows(self):
+        import os
+        p = self._write(self._session())
+        floor = m.SAVINGS_FLOOR
+        m.SAVINGS_FLOOR = None   # §76 절감율 하한은 구간마다 걸리므로 끄고 대조
+        try:
+            T = self.T0
+            whole = m.measure(p, force=True)
+            wins = [(T, T + 150), (T + 150, T + 350), (T + 350, T + 600)]
+            parts = [m.measure(p, window=w) for w in wins]
+            cw = self._counts(whole)
+            for prim in ("read", "draft", "edit"):
+                s = sum(self._counts(x).get(prim, 0) for x in parts)
+                self.assertAlmostEqual(s, cw.get(prim, 0), places=0, msg=prim)
+            # 실행 4토막은 분(minute) 단위로 가산
+            ex_w = next((b["minutes"] for b in whole["human"]["breakdown"]
+                         if b["primitive"] == "execute"), 0)
+            ex_s = sum(next((b["minutes"] for b in x["human"]["breakdown"]
+                             if b["primitive"] == "execute"), 0) for x in parts)
+            self.assertAlmostEqual(ex_s, ex_w, places=1)
+            # 분모: 기계 시간·지시·확인 가산
+            for k in ("machine_min", "total_min"):
+                self.assertAlmostEqual(sum(x["agent"][k] for x in parts),
+                                       whole["agent"][k], places=1, msg=k)
+            hb = lambda x: x["agent"]["breakdown"]["hitl"]
+            for k in ("instruct", "review"):
+                self.assertAlmostEqual(sum(hb(x)[k] for x in parts),
+                                       hb(whole)[k], places=1, msg=k)
+            # 사람 시간: verify(구간마다 1건 하한)만 예외 → 그 몫 빼면 일치
+            vmin = lambda x: sum(b["minutes"] for b in x["human"]["breakdown"]
+                                 if b["primitive"] == "verify")
+            self.assertAlmostEqual(
+                sum(x["human"]["min"] - vmin(x) for x in parts),
+                whole["human"]["min"] - vmin(whole), places=0)
+            for x in parts:
+                self.assertIn("window", x)
+        finally:
+            m.SAVINGS_FLOOR = floor
+            os.unlink(p)
+
+    def test_overwritten_work_attributed_to_rewriter(self):
+        # 턴1이 쓴 500단어는 턴2가 엎었다 → 전체 순계 500은 턴2 몫, 턴1은 0.
+        # 빼기(전체 − 앞구간)였다면 턴2가 0으로 나왔을 값.
+        import os
+        p = self._write(self._session())
+        try:
+            T = self.T0
+            d = lambda r: next((b["detail"].get("code", 0)
+                                for b in r["human"]["breakdown"]
+                                if b["primitive"] == "draft"), 0)
+            whole = m.measure(p, force=True)
+            self.assertEqual(d(whole), 500)
+            t1 = m.measure(p, window=(T, T + 150))
+            t2 = m.measure(p, window=(T + 150, T + 350))
+            self.assertEqual(d(t1), 0)
+            self.assertEqual(d(t2), 500)
+            # 그 시점의 눈(as_of=턴1 끝)으로는 턴1의 500이 살아있다
+            asof = m.measure(p, as_of=T + 150)
+            self.assertEqual(d(asof), 500)
+            self.assertEqual(asof["window"]["as_of"], T + 150)
+        finally:
+            os.unlink(p)
+
+    def test_as_of_equals_physically_truncated_file(self):
+        # as_of=T 측정값 = T 뒤를 지운 파일을 통째로 잰 값 (그 시점 재연)
+        import os
+        rows = self._session()
+        p = self._write(rows)
+        q = self._write([r for r in rows
+                         if m.parse_time(r["timestamp"]) <= self.T0 + 350])
+        try:
+            a = m.measure(p, as_of=self.T0 + 350)
+            b = m.measure(q, force=True)
+            self.assertAlmostEqual(a["human"]["min"], b["human"]["min"], places=2)
+            self.assertAlmostEqual(a["agent"]["total_min"], b["agent"]["total_min"],
+                                   places=2)
+            self.assertEqual(a["session"], os.path.basename(p))
+        finally:
+            os.unlink(p)
+            os.unlink(q)
+
+    def test_read_credit_stays_at_read_time_with_full_judgment(self):
+        # b.md는 턴2에서 읽고 턴3에서 편집(기여 신호①). 판정은 전체로 하므로
+        # 턴2 구간에서 b.md 읽기가 정독으로 계상되고(§75 하한 200), 턴3 구간
+        # 읽기엔 b.md 몫이 없다. 자르기(구간 독립)였다면 턴2는 훑기였을 값.
+        import os
+        p = self._write(self._session())
+        try:
+            T = self.T0
+            t2 = m.measure(p, window=(T + 150, T + 350))
+            t3 = m.measure(p, window=(T + 350, T + 600))
+            rd = lambda r: self._counts(r).get("read", 0)
+            # 턴2 읽기 = 지시 9단어 + b.md 정독 ≥ 200
+            self.assertGreaterEqual(rd(t2), 200)
+            # 턴3 읽기 = 지시 단어 + 실행 출력 판독(별도 execute 항목) → b.md 없음
+            self.assertLess(rd(t3), 50)
+        finally:
+            os.unlink(p)
+
+    def test_window_validation(self):
+        import os
+        p = self._write(self._session())
+        try:
+            with self.assertRaises(ValueError):
+                m.measure(p, window=(self.T0 + 100, self.T0 + 50))
+            with self.assertRaises(ValueError):
+                m.measure(p, as_of=self.T0 + 100, window=(self.T0, self.T0 + 200))
+            # ISO 문자열도 받는다
+            r = m.measure(p, window=(self._iso(150), self._iso(350)))
+            self.assertEqual(self._counts(r).get("draft", 0) > 0, True)
+        finally:
+            os.unlink(p)
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")

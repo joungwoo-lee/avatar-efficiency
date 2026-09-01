@@ -112,6 +112,10 @@ agent_min = agent_human_min(사람 협업자의 에포트, hitl)
    비례 — 형식 테스트 1건으로는 거의 강등되지 않고, 실패 상태면 0.
    없앤 노동은 `automation_saved_min` 필드로 출력된다. 못 재는 것: 테스트의
    실질성(assert 없는 스모크 100개는 통과) — 개수·커버리지는 근사다.
+   **구간 계상 (§80)** — `parse_actions(count_window=(A, B))`: 판정(결론
+   승격·테스트 상태·확인 시점·파일 첫 쓰기)은 기록 전체, 계상은 사건 시각이
+   구간 안인 것만(지시·도구·AI 시간 조각·결론·확인 사건·산출물 단어).
+   세션 API `measure(as_of=, window=)`의 분모 몫. 방법서 §5.0.
    **hitl 축약 모드 (§79, 기본 OFF)** — `actual_effort_minutes(hitl_compact=True)`
    / `measure(hitl_compact=True)` / CLI `--hitl-compact`. 파일 확인을 "확인
    시점에 파일 쓰기 있으면 유형 무관 1건 = min(2.0, 0.5×ln(1+구간 단어/100))"

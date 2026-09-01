@@ -56,13 +56,30 @@ hitl 축약 모드 (§79, 기본 OFF): measure(..., hitl_compact=True) /
     min(2.0, 0.5·ln(1+구간 단어/100)), 테스트 통과 파일 제외, correct 없음"
     으로 바꾼다(transcript_actual.actual_effort_minutes 참조). 분자 불변.
 
+구간 측정 (§80): measure(..., as_of=T, window=(start, end)) / CLI
+    --as-of T --from A --to B (ISO 8601 또는 epoch 초; tz 없는 ISO는 로컬).
+    as_of = "어느 시점의 눈으로" — T 이후 기록을 잘라내고(서브에이전트 포함)
+    판정(기여 등급·쓰기 순계·명령 신원·결론·확인 시점)을 그 지식으로만 한다.
+    window = "어느 사건을 더하나" — 사건 시각이 [A, B]인 것만 계상.
+    기본 as_of = 기록 끝, window = (0, as_of). start ≤ end ≤ as_of.
+    · 그 시점에 잰 값 재연: as_of=T (window 생략)
+    · 구간이 최종 결과에 기여한 몫: window=(A, B) (as_of 생략)
+    가산성: 같은 as_of 아래 구간을 나눠 더하면 전체와 같다 — 건수 하한
+    (검색 턴당 1·실행 1·verify 1)·절감율 하한(§76)은 구간마다 적용되어 예외.
+    엎어진 앞 작업은 어느 구간에도 안 실린다(전체 순계와 같은 원칙).
+
 CLI:
     python record_actions_code_api.py <session.jsonl> [...]
         [--norw] [--noact] [--nothink] [--hitl-compact] [--json]
+        [--as-of T] [--from A] [--to B]
         (--raw, --rawrecord는 구 호환)
 """
 import json
+import os
+import shutil
 import sys
+import tempfile
+from datetime import datetime
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -172,7 +189,7 @@ _THINK_DEFAULT_SPEC = {"unit": "word_count", "min_per_unit": 0.005}
 #                      # (§57 분자 정독과 동속 — 200wpm 상당)
 
 
-def collect_strategy_thinking(jsonl_path, subagent_paths=()):
+def collect_strategy_thinking(jsonl_path, subagent_paths=(), count_window=None):
     """지시 직후 첫 응답의 생각(=전략 생각)만 **계상**. 결정론, LLM 0회.
 
     §68: 서브에이전트 기록(subagent_paths)도 같은 규칙으로 훑는다 — 서브의
@@ -210,7 +227,8 @@ def collect_strategy_thinking(jsonl_path, subagent_paths=()):
                 continue
             raise
         with fh:
-            _r = _scan_strategy_thinking(fh, skip_sidechain=not _is_sub)
+            _r = _scan_strategy_thinking(fh, skip_sidechain=not _is_sub,
+                                         count_window=count_window)
         points += _r[0]; tokens += _r[1]; fallback += _r[2]
         mid_points += _r[3]; mid_tokens += _r[4]
         if _is_sub:
@@ -222,13 +240,16 @@ def collect_strategy_thinking(jsonl_path, subagent_paths=()):
             "sub_fallback_points": sub_fallback}
 
 
-def _scan_strategy_thinking(fh, skip_sidechain=True):
+def _scan_strategy_thinking(fh, skip_sidechain=True, count_window=None):
     """기록 1파일의 전략/중간 생각 집계 → (points, tokens, fallback, mid_points,
-    mid_tokens). 서브 파일은 전 기록이 isSidechain이라 skip_sidechain=False."""
+    mid_tokens). 서브 파일은 전 기록이 isSidechain이라 skip_sidechain=False.
+    count_window: §80 — 생각은 그 응답 레코드의 시각으로 귀속."""
     points = tokens = fallback = 0
     mid_tokens = mid_points = 0
     seen = set()
     awaiting = False
+    win = tuple(count_window) if count_window else None
+    last_tw = 0.0
     if True:
         for line in fh:
             try:
@@ -237,6 +258,9 @@ def _scan_strategy_thinking(fh, skip_sidechain=True):
                 continue
             if skip_sidechain and rec.get("isSidechain"):
                 continue
+            _tw = _ts_epoch(rec.get("timestamp")) or last_tw
+            last_tw = _tw
+            inw = win is None or (win[0] <= _tw <= win[1])
             t = rec.get("type")
             if t == "user":
                 content = (rec.get("message") or {}).get("content")
@@ -260,10 +284,10 @@ def _scan_strategy_thinking(fh, skip_sidechain=True):
                 has_block = any(
                     isinstance(b, dict) and b.get("type") == "thinking"
                     for b in (msg.get("content") or []))
-                if tt:
+                if tt and inw:
                     points += 1
                     tokens += tt
-                elif has_block:
+                elif has_block and inw:
                     points += 1
                     fallback += 1
                 awaiting = False
@@ -278,10 +302,92 @@ def _scan_strategy_thinking(fh, skip_sidechain=True):
                 det = ((msg.get("usage") or {}).get("output_tokens_details")
                        or {})
                 tt = det.get("thinking_tokens") or 0
-                if tt:
+                if tt and inw:
                     mid_points += 1
                     mid_tokens += tt
     return points, tokens, fallback, mid_points, mid_tokens
+
+
+# ---------------------------------------------------------------- §80 구간 측정
+
+def _ts_epoch(x):
+    """ISO 타임스탬프 → epoch 초 (없거나 깨지면 None)."""
+    if not x:
+        return None
+    try:
+        return datetime.fromisoformat(str(x).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+def parse_time(x):
+    """CLI/API 시각 인자 → epoch 초. 숫자(문자열 포함)는 epoch, ISO 8601은
+    파싱(tz 없으면 로컬 시각으로 해석). None은 None."""
+    if x is None:
+        return None
+    if isinstance(x, (int, float)):
+        return float(x)
+    s = str(x).strip()
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.astimezone()          # 로컬 시각으로 해석
+    return dt.timestamp()
+
+
+def slice_session(jsonl_path, as_of, subagent_paths=None):
+    """T(as_of) 이후 레코드를 잘라낸 임시 세션 사본 → (main, subs, tmpdir).
+
+    "그 시점의 눈으로" 재연: 판정 규칙(기여 등급·쓰기 순계·명령 신원·결론
+    승격·확인 시점)이 세션 전체를 보고 정해지므로, T 시점 값을 재연하려면
+    T 뒤 기록이 없어야 한다. 시각 없는 레코드는 직전 시각을 물려받아 판정.
+    서브에이전트 기록도 같은 T로 자르고 `<stem>/subagents/`에 둬 자동 탐색
+    (find_subagent_files·measure_agent_actual)이 그대로 동작한다.
+    호출자가 tmpdir를 지운다(shutil.rmtree)."""
+    as_of = float(as_of)
+    if subagent_paths is None:
+        subagent_paths = find_subagent_files(jsonl_path)
+    tmpdir = tempfile.mkdtemp(prefix="asof_")
+    stem = Path(jsonl_path).stem
+
+    def _cut(src, dst):
+        last = 0.0
+        n = 0
+        with open(src, encoding="utf-8", errors="replace") as fi, \
+                open(dst, "w", encoding="utf-8") as fo:
+            for line in fi:
+                s = line.strip()
+                if not s:
+                    continue
+                try:
+                    rec = json.loads(s)
+                except json.JSONDecodeError:
+                    continue
+                t = _ts_epoch(rec.get("timestamp")) if isinstance(rec, dict) \
+                    else None
+                if t is None:
+                    t = last
+                last = t
+                if t <= as_of:
+                    fo.write(line if line.endswith("\n") else line + "\n")
+                    n += 1
+        return n
+    main = os.path.join(tmpdir, stem + ".jsonl")
+    _cut(jsonl_path, main)
+    subs = []
+    if subagent_paths:
+        sd = os.path.join(tmpdir, stem, "subagents")
+        os.makedirs(sd, exist_ok=True)
+        for sp in subagent_paths:
+            dst = os.path.join(sd, Path(sp).name)
+            if _cut(sp, dst):
+                subs.append(dst)
+            else:
+                os.unlink(dst)
+    return main, subs, tmpdir
 
 
 def write_minutes(kind_words, rates, is_edit=False):
@@ -459,7 +565,8 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
 
 def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
             include_subagents=False, force=False, humanize=None,
-            include_think=True, subagent_paths=None, hitl_compact=False):
+            include_think=True, subagent_paths=None, hitl_compact=False,
+            as_of=None, window=None):
     """세션 1개 → LLM 0회 분자·분모·speedup. 반환 구조는 measure_session 동일.
 
     humanize_rw / humanize_act: 휴먼화 2축 (build_actions 참조, §40).
@@ -471,22 +578,56 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
               기본 ON — 휴먼화 2축과 독립(모든 조합에 동일 가산이라 §43
               단조성 불변). False로 구(생각 미계상) 동작.
     hitl_compact: §79 hitl 축약 모드 — 분모의 사람 확인만 바꾼다(기본 OFF).
+    as_of / window: §80 구간 측정 (모듈 docstring). as_of=T면 T 이후 기록을
+              잘라낸 사본으로 잰다(slice_session). window=(start, end)면
+              판정은 기록 전체(as_of까지), 계상은 사건 시각이 구간 안인 것만
+              (collect_record_stats·parse_actions의 count_window). as_of나
+              window가 있으면 초소형 제외(§64)는 건너뛴다(force와 동일).
     """
     if humanize is not None:  # 구 인터페이스 호환 (§39 이전 소비자)
         if humanize == RAW_RECORD:
             humanize_rw, humanize_act = False, False
         else:
             humanize_rw, humanize_act = bool(humanize), True
+    as_of = parse_time(as_of)
+    if window is not None:
+        window = (parse_time(window[0]) or 0.0, parse_time(window[1]))
+        if window[1] is None:
+            window = (window[0], as_of if as_of is not None else float("inf"))
+        if window[0] > window[1]:
+            raise ValueError(f"window start > end: {window}")
+        if as_of is not None and window[1] > as_of:
+            raise ValueError(f"window end {window[1]} > as_of {as_of}")
+        force = True
+    if as_of is not None:
+        force = True   # 시점·구간 측정은 초소형 제외(§64)를 건너뛴다
+        src_name = Path(jsonl_path).name
+        main, subs_cut, tmpdir = slice_session(jsonl_path, as_of, subagent_paths)
+        try:
+            r = measure(main, humanize_rw=humanize_rw, humanize_act=humanize_act,
+                        rates=rates, include_subagents=include_subagents,
+                        force=force, include_think=include_think,
+                        subagent_paths=subs_cut, hitl_compact=hitl_compact,
+                        as_of=None, window=window)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        r["session"] = src_name
+        r["window"] = {"start": window[0] if window else None,
+                       "end": window[1] if window else None,
+                       "as_of": as_of}
+        return r
     rates = rates or load_rates()
     # 분자는 서브에이전트 몫을 포함한다 (§59 규칙1: 병렬은 분모만) —
     # subagent_paths=[]로 끄면 구 동작(전량 0원). 감사·기여도 분해용.
     subs = (list(subagent_paths) if subagent_paths is not None
             else find_subagent_files(jsonl_path))
-    stats = collect_record_stats(jsonl_path, subagent_paths=subs)
+    stats = collect_record_stats(jsonl_path, subagent_paths=subs,
+                                 count_window=window)
     suspect, suspect_why = suspect_output_channel(stats)
     # §64 초소형 제외: 세션 러닝타임(첫~마지막 기록)이 5분 이하면 측정 안 함
     actual = measure_agent_actual(jsonl_path, rates, include_subagents,
-                                  hitl_compact=hitl_compact)
+                                  hitl_compact=hitl_compact,
+                                  count_window=window)
     span = actual["counts"].get("session_span_min") or None
     if is_trivial_session(stats, span) and not force:
         return {"session": Path(jsonl_path).name, "excluded": True,
@@ -513,7 +654,7 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
         breakdown.append(row)
     think_info = None
     if include_think:  # 전략 생각 (§53) — 휴먼화 축과 독립, 기본 ON
-        st = collect_strategy_thinking(jsonl_path, subs)
+        st = collect_strategy_thinking(jsonl_path, subs, count_window=window)
         spec = card.get("think") or _THINK_DEFAULT_SPEC
         # 구 포맷 지점은 건당 고정 분(§58) — 요율에 무관하게 같은 시간이
         # 되도록 분을 단어로 역환산해 더한다(breakdown 단위 일관성 유지).
@@ -586,6 +727,8 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
         "speedup_vs_hitl": speedup(h_min, actual["hitl_min"]),
         "channel_audit": audit,
         "notes": notes,
+        **({"window": {"start": window[0], "end": window[1], "as_of": None}}
+           if window else {}),
     }
 
 
@@ -604,19 +747,36 @@ def measure_batch(jsonl_paths, **kw):
 def main(argv):
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+    opts = {}
+    rest = []
+    i = 0
+    while i < len(argv):   # §80 값 있는 옵션
+        if argv[i] in ("--as-of", "--from", "--to") and i + 1 < len(argv):
+            opts[argv[i]] = argv[i + 1]
+            i += 2
+            continue
+        rest.append(argv[i])
+        i += 1
+    argv = rest
     paths = [a for a in argv if not a.startswith("--")]
     if not paths:
         print("usage: python record_actions_code_api.py <session.jsonl> [...] "
-              "[--norw] [--noact] [--nothink] [--hitl-compact] [--json]   "
-              "(--raw=--norw, --rawrecord=--norw --noact 호환)",
+              "[--norw] [--noact] [--nothink] [--hitl-compact] [--json] "
+              "[--as-of T] [--from A] [--to B]   "
+              "(--raw=--norw, --rawrecord=--norw --noact 호환; T/A/B = ISO 8601 "
+              "또는 epoch 초, tz 없으면 로컬)",
               file=sys.stderr)
         return 2
     rw = not ("--norw" in argv or "--raw" in argv or "--rawrecord" in argv)
     act = not ("--noact" in argv or "--rawrecord" in argv)
     think = "--nothink" not in argv
     compact = "--hitl-compact" in argv
+    window = None
+    if "--from" in opts or "--to" in opts:
+        window = (opts.get("--from", 0), opts.get("--to"))
     rows = measure_batch(paths, humanize_rw=rw, humanize_act=act,
-                         include_think=think, hitl_compact=compact)
+                         include_think=think, hitl_compact=compact,
+                         as_of=opts.get("--as-of"), window=window)
     if "--json" in argv:
         print(json.dumps(rows, ensure_ascii=False, indent=1))
         return 0

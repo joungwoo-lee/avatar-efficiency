@@ -167,11 +167,21 @@ def _result_words(block):
     return _words(_result_text(block))
 
 
-def parse_actions(jsonl_path):
+def parse_actions(jsonl_path, count_window=None):
     """트랜스크립트 1개 → 동작 카운트. 반환 dict:
     tool_calls, tool_result_words, assistant_words, user_instructions,
     user_words, interrupts, session_id, first_ts, last_ts
+
+    count_window=(start, end) (epoch 초, 닫힌 구간) — §80 구간 계상. 판정
+    (결론 승격·테스트 상태·확인 시점·파일 첫 쓰기)은 기록 전체로, 계상은
+    사건 시각이 구간 안인 것만: 지시·중단·도구 호출·결과 단어·AI 시간 조각·
+    결론(답변 시각)·확인 사건(확인 시점 시각)·산출물 단어(쓰기 시각).
+    시각 없는 레코드는 직전 시각을 물려받는다. None이면 종전과 동일.
     """
+    win = tuple(count_window) if count_window else None
+
+    def _inw(t):
+        return win is None or (win[0] <= (t or 0.0) <= win[1])
     counts = {"tool_calls": 0, "tool_result_words": 0, "assistant_words": 0,
               "user_instructions": 0, "user_words": 0, "interrupts": 0,
               "instruction_word_list": [],
@@ -225,8 +235,12 @@ def parse_actions(jsonl_path):
     after_interrupt = False  # 직전 사람 발화가 interrupt였는가 (§49)
     seg_code = {}       # 이번 확인 구간에 변경된 코드 파일 {fp: 마지막 seq}
     seg_files = {}      # §79 이번 구간에 생성·수정된 파일 {fp: 쓴 단어 누적}
+    last_tw = 0.0       # §80 직전 시각(시각 없는 레코드가 물려받음)
+    last_answer_t = 0.0 # 직전 assistant 발언 시각 (결론 귀속용, §80)
+    art_ops = {}        # fp → [(t, words)] 쓰기 사건 (Write는 목록 초기화, §80)
+    art_first_t = {}    # fp → 첫 쓰기 시각 (파일당 항목 귀속, §80)
 
-    def _flush_check_event():
+    def _flush_check_event(t=None):
         """확인 시점 도달: 구간에 파일 생성·수정이 있으면 사건 기록 (§50·§79)."""
         if not seg_files:
             return
@@ -251,7 +265,8 @@ def parse_actions(jsonl_path):
             # §79 축약 모드 입력: 구간에 쓴 파일 수·단어 (코드 외 포함).
             # words = 검증 제외 후, words_raw = 제외 전
             "all_files": len(seg_files), "verified_files": len(excluded),
-            "words": words, "words_raw": words_raw})
+            "words": words, "words_raw": words_raw,
+            "t": t if t is not None else last_tw})   # §80 확인 시점 시각
         seg_code.clear()
         seg_files.clear()
     with open(jsonl_path, encoding="utf-8", errors="replace") as f:
@@ -267,6 +282,9 @@ def parse_actions(jsonl_path):
                 continue
             counts["session_id"] = counts["session_id"] or rec.get("sessionId")
             rec_t = _epoch(rec.get("timestamp"))
+            tw = rec_t if rec_t else last_tw   # §80 귀속 시각(물려받기)
+            last_tw = tw
+            inw = _inw(tw)
             ts = rec.get("timestamp")
             if ts:
                 counts["first_ts"] = counts["first_ts"] or ts
@@ -282,15 +300,17 @@ def parse_actions(jsonl_path):
             if rtype == "assistant":
                 if turn_start is not None and rec_t and turn_prev:
                     # §65 간격마다 상한 적용 — 방치는 안 센다
-                    counts["ai_wall_min"] += min(max(0.0, rec_t - turn_prev),
-                                                 _AI_GAP_CAP_SEC) / 60
+                    if inw:  # §80 시간 조각은 끝나는 레코드 시각에 귀속
+                        counts["ai_wall_min"] += min(
+                            max(0.0, rec_t - turn_prev), _AI_GAP_CAP_SEC) / 60
                     turn_prev = rec_t
                 ans_w = 0
                 for b in blocks:
                     if not isinstance(b, dict):
                         continue
                     if b.get("type") == "tool_use":
-                        counts["tool_calls"] += 1
+                        if inw:
+                            counts["tool_calls"] += 1
                         if b.get("id") and rec_t:
                             pending_calls[b["id"]] = rec_t
                         seq += 1
@@ -308,20 +328,22 @@ def parse_actions(jsonl_path):
                             pending_tests[b["id"]] = True
                         fp = inp.get("file_path")
                         name = b.get("name")
-                        if name in ("Agent", "Task"):  # §52 서브에이전트 지시문
+                        if name in ("Agent", "Task") and inw:  # §52 서브 지시문
                             counts["tool_input_draft_words"] += _words(
                                 inp.get("prompt") or "")
                         if fp and name in ("Write", "Edit", "NotebookEdit"):
                             body = (inp.get("content")
                                     or inp.get("new_string")
                                     or inp.get("new_source") or "")
-                            counts["tool_input_draft_words"] += _words(body)
+                            if inw:
+                                counts["tool_input_draft_words"] += _words(body)
                             acls = _artifact_class(fp)
-                            cls = counts["artifact_files"][acls]
+                            art_first_t.setdefault(fp, tw)
                             if name == "Write":  # 전체 재작성 — 마지막 판만
-                                cls[fp] = _words(body)
+                                art_ops[fp] = [(tw, _words(body), acls)]
                             else:                # 부분 수정 — 누적
-                                cls[fp] = cls.get(fp, 0) + _words(body)
+                                art_ops.setdefault(fp, []).append(
+                                    (tw, _words(body), acls))
                             seg_files[fp] = (seg_files.get(fp, 0)   # §79
                                              + _words(body))
                             if acls == "code":   # §49 마지막 쓰기 순번
@@ -329,9 +351,11 @@ def parse_actions(jsonl_path):
                                 seg_code[fp] = seq  # §50 이번 구간 코드 변경
                     elif b.get("type") == "text":
                         ans_w += _words(b.get("text", ""))
-                counts["assistant_words"] += ans_w
+                if inw:
+                    counts["assistant_words"] += ans_w
                 if ans_w:
                     last_answer_w = ans_w
+                    last_answer_t = tw
                 continue
 
             # §62 AI 구간 경계: tool_result가 아닌 user 레코드는 무엇이든
@@ -342,7 +366,8 @@ def parse_actions(jsonl_path):
                        for b in blocks):
                 if turn_start is not None and turn_prev is not None \
                         and turn_prev > turn_start:
-                    counts["ai_turns"] += 1
+                    if _inw(turn_start):
+                        counts["ai_turns"] += 1
                 if rec_t:
                     turn_start = rec_t
                     turn_prev = rec_t
@@ -357,14 +382,16 @@ def parse_actions(jsonl_path):
                     continue
                 if b.get("type") == "tool_result":
                     if turn_start is not None and rec_t and turn_prev:
-                        counts["ai_wall_min"] += min(
-                            max(0.0, rec_t - turn_prev),
-                            _AI_GAP_CAP_SEC) / 60          # §65
+                        if inw:
+                            counts["ai_wall_min"] += min(
+                                max(0.0, rec_t - turn_prev),
+                                _AI_GAP_CAP_SEC) / 60      # §65
                         turn_prev = rec_t
-                    counts["tool_result_words"] += _result_words(b)
+                    if inw:
+                        counts["tool_result_words"] += _result_words(b)
                     seq += 1
                     t0 = pending_calls.pop(b.get("tool_use_id"), None)
-                    if t0 and rec_t and 0 <= rec_t - t0 < 3600:
+                    if t0 and rec_t and 0 <= rec_t - t0 < 3600 and inw:
                         # 문턱 초과분만 실측으로 (§59): 건당 고정 요율이
                         # 짧은 호출을 이미 과금하므로 이중계상 방지
                         over = (rec_t - t0) - _WAIT_THRESHOLD_SEC
@@ -392,16 +419,20 @@ def parse_actions(jsonl_path):
             human_text = human_text.strip()
             if human_text:
                 if human_text.startswith("[Request interrupted"):
-                    counts["interrupts"] += 1
+                    if inw:
+                        counts["interrupts"] += 1
                     after_interrupt = True
                 else:
-                    counts["user_instructions"] += 1
+                    if inw:
+                        counts["user_instructions"] += 1
                     if after_interrupt:  # §49 교정성 지시 표시 (과금 없음)
-                        counts["corrective_instructions"] += 1
+                        if inw:
+                            counts["corrective_instructions"] += 1
                         after_interrupt = False
                     w = _words(human_text)
-                    counts["user_words"] += w
-                    counts["instruction_word_list"].append(w)
+                    if inw:
+                        counts["user_words"] += w
+                        counts["instruction_word_list"].append(w)
                     # 새 사용자 발화 = 직전 답변이 그 턴의 결론(정독 대상).
                     # 단, 짧은 이어가기("계속해" 등, 문턱 미만)는 승격 안 함
                     # (§49) — 직전 답변은 유지되어 다음 답변이 나오면 진행
@@ -409,18 +440,34 @@ def parse_actions(jsonl_path):
                     # 같은 문턱이 산출물 확인 시점(§50)도 정한다 — 실질
                     # 지시 턴 = 사람이 멈춰서 결과를 살펴본 시점.
                     if w >= _CONCL_PROMOTE_MIN_WORDS:
-                        if last_answer_w:
+                        if last_answer_w and _inw(last_answer_t):  # §80 답변 시각
                             counts["conclusion_words"] += last_answer_w
                             counts["conclusion_word_list"].append(last_answer_w)
                         last_answer_w = 0
-                        _flush_check_event()
+                        _flush_check_event(tw)
     if turn_start is not None and turn_prev is not None \
             and turn_prev > turn_start:                      # §62 마지막 턴
-        counts["ai_turns"] += 1
-    if last_answer_w:  # 마지막 턴 결론
+        if _inw(turn_start):
+            counts["ai_turns"] += 1
+    if last_answer_w and _inw(last_answer_t):  # 마지막 턴 결론
         counts["conclusion_words"] += last_answer_w
         counts["conclusion_word_list"].append(last_answer_w)
-    _flush_check_event()  # 세션 끝 = 마지막 확인 시점 (§50)
+    _flush_check_event(last_tw)  # 세션 끝 = 마지막 확인 시점 (§50)
+    # §80 구간 계상 마무리: 확인 사건은 확인 시점 시각으로, 산출물 단어는
+    # 쓰기 사건 시각으로, 파일당 항목(표본 확인)은 첫 쓰기 시각으로 귀속
+    counts["code_check_events_all"] = counts["code_check_events"]
+    counts["code_check_events"] = [ev for ev in counts["code_check_events"]
+                                   if _inw(ev.get("t"))]
+    first_files = {"code": 0, "doc": 0, "other": 0}
+    for fp, ops in art_ops.items():
+        acls = ops[-1][2]
+        w = sum(n for t, n, _c in ops if _inw(t))
+        if w or any(_inw(t) for t, _n, _c in ops):
+            counts["artifact_files"][acls][fp] = w
+        if _inw(art_first_t.get(fp)):
+            first_files[acls] += 1
+    counts["artifact_first_files"] = first_files
+    counts["count_window"] = list(win) if win else None
     f0 = _epoch(counts.get("first_ts")); f1 = _epoch(counts.get("last_ts"))
     if f0 and f1 and f1 >= f0:
         counts["session_span_min"] = (f1 - f0) / 60      # §64
@@ -562,11 +609,14 @@ def actual_effort_minutes(counts, rates=None, hitl_compact=False):
         # 문서는 code_run(동작 확인)이 안 붙으므로 이 항이 확인의 전부다.
         code_rate = rm["code_skim_min_per_word"]
         doc_rate = rm.get("doc_skim_min_per_word", code_rate)
+        _ff = counts.get("artifact_first_files")   # §80 파일당 항목 = 첫 쓰기 구간
+        n_sample_files = ((_ff.get("doc", 0) + _ff.get("other", 0)) if _ff
+                          else (len(doc_files) + len(other_files)))
         review_min = (
             check_min
             + sum(code_files.values()) * code_rate
             + sum(doc_files.values()) * doc_rate
-            + (len(doc_files) + len(other_files))
+            + n_sample_files
             * rm["other_check_min_per_file"]
             + concl * rm["report_deep_min_per_word"]
             + progress * rm["report_skim_min_per_word"])

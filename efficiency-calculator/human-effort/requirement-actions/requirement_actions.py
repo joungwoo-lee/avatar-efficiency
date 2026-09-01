@@ -549,61 +549,108 @@ def replay_write_net(write_seq, failed_tool_ids=()):
       으로 폐기. 부분 겹침은 놓치는 보수적(덜 깎는) 근사. 순계를 수정
       (edit)으로 분류.
     """
+    artifact, out_draft, out_edit, _d, _e = replay_write_net_attrib(
+        write_seq, failed_tool_ids)
+    return artifact, out_draft, out_edit
+
+
+def replay_write_net_attrib(write_seq, failed_tool_ids):
+    """replay_write_net + **출처 귀속** (§80): 살아남은 단어마다 그 단어를
+    넣은 쓰기 사건의 시각(op의 5번째 원소 t, 없으면 0)을 붙인다.
+
+    반환: (artifact, out_draft, out_edit, draft_by_t, edit_by_t)
+      draft_by_t / edit_by_t: fp → {t: 단어수}. 파일 합 = out_draft/out_edit.
+    · 만든 파일(Write 기점): 본문과 나란히 문자 단위 출처 배열을 재생 —
+      Write는 전부 그 사건, Edit는 old 자리를 new 길이만큼 그 사건으로 치환,
+      폴백 덧붙임도 그 사건. 최종본의 단어는 첫 글자의 출처를 따른다.
+      엎어진 앞 판의 단어는 어느 사건에도 안 실린다(전체 순계와 같은 원칙).
+    · 기존 파일(Edit 기점): 생존 문구가 자기 사건 t를 지니고 다닌다."""
     artifact = {}
     out_draft = {}
     out_edit = {}
+    draft_by_t = {}
+    edit_by_t = {}
     failed = set(failed_tool_ids)
+
+    def _t(op):
+        return op[4] if len(op) > 4 and op[4] is not None else 0.0
     for fp, seq in write_seq.items():
         seq = [op for op in seq if not (op[3] and op[3] in failed)]
         if not seq:
             continue
         if seq[0][0] == "write":
             content = None
-            for kind, old, new, _id in seq:
+            prov = []                                  # 문자별 사건 시각
+            for op in seq:
+                kind, old, new = op[0], op[1], op[2]
+                t = _t(op)
                 if kind == "write":
                     content = new                      # 재작성 = 이전 판 폐기
+                    prov = [t] * len(new)
                 elif old and content is not None and old in content:
-                    content = content.replace(old, new, 1)
+                    i = content.find(old)
+                    content = content[:i] + new + content[i + len(old):]
+                    prov = prov[:i] + [t] * len(new) + prov[i + len(old):]
                 else:
-                    content = (content or "") + "\n" + new  # 폴백: 덧붙임(과대 방향)
-            net = len((content or "").split())
+                    add = ("\n" if content is not None else "") + new
+                    content = (content or "") + add    # 폴백: 덧붙임(과대 방향)
+                    prov = prov + [t] * len(add)
+            content = content or ""
+            by_t = {}
+            for m in re.finditer(r"\S+", content):
+                by_t[prov[m.start()]] = by_t.get(prov[m.start()], 0) + 1
+            net = sum(by_t.values())
             if net:
                 artifact[fp] = net
                 out_draft[fp] = net
+                draft_by_t[fp] = by_t
         else:
-            # 생존 문구 [본문, 계상 단어수, 신규여부]. 계상 단어수는 new_string
-            # 전량이 아니라 edit_delta의 added(앵커 제외, §66). removed == 0
-            # (순수 추가)면 draft, 아니면 edit — OFF 총량과 같은 분류 원리.
+            # 생존 문구 [본문, 계상 단어수, 신규여부, 사건 시각]. 계상 단어수는
+            # new_string 전량이 아니라 edit_delta의 added(앵커 제외, §66).
+            # removed == 0(순수 추가)면 draft, 아니면 edit — OFF 총량과 같은
+            # 분류 원리.
             live = []
-            for kind, old, new, _id in seq:
+            for op in seq:
+                kind, old, new = op[0], op[1], op[2]
+                t = _t(op)
                 if kind == "write":
-                    live = [[new, len(new.split()), True]]
+                    live = [[new, len(new.split()), True, t]]
                     continue
                 added, removed, _anchor = edit_delta(old, new)
                 kept = []
                 for ent in live:
-                    text, w, is_draft = ent
+                    text, w, is_draft, et = ent
                     if text and old and (text in old or old in text):
                         if old in text and len(text) > len(old):
                             rem = text.replace(old, "", 1)
                             frac = (len(rem.split())
                                     / max(1, len(text.split())))
-                            kept.append([rem, w * frac, is_draft])
+                            kept.append([rem, w * frac, is_draft, et])
                         # 전부 덮어쓰임 → 왕복, 폐기
                     else:
                         kept.append(ent)
                 if new and added:
-                    kept.append([new, added, removed == 0])
+                    kept.append([new, added, removed == 0, t])
                 live = kept
-            d = sum(w for _t, w, is_d in live if is_d)
-            e = sum(w for _t, w, is_d in live if not is_d)
+            d = sum(w for _x, w, is_d, _et in live if is_d)
+            e = sum(w for _x, w, is_d, _et in live if not is_d)
             if d:
                 out_draft[fp] = d
+                dt = {}
+                for _x, w, is_d, et in live:
+                    if is_d:
+                        dt[et] = dt.get(et, 0) + w
+                draft_by_t[fp] = dt
             if e:
                 out_edit[fp] = e
+                etd = {}
+                for _x, w, is_d, et in live:
+                    if not is_d:
+                        etd[et] = etd.get(et, 0) + w
+                edit_by_t[fp] = etd
             if d or e:
                 artifact[fp] = d + e
-    return artifact, out_draft, out_edit
+    return artifact, out_draft, out_edit, draft_by_t, edit_by_t
 
 
 _CODE_EXT = {".py", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".sh",
@@ -690,11 +737,19 @@ def _iter_session_records(jsonl_path, subagent_paths=()):
                 merged.append((t, len(merged), rec, is_sub))
     merged.sort(key=lambda x: (x[0], x[1]))
     for _t, _i, rec, is_sub in merged:
-        yield rec, is_sub
+        yield rec, is_sub, _t
 
 
-def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
+def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
+                         count_window=None):
     """트랜스크립트에서 닻용 실측치 수집 (LLM 미사용, 결정론적).
+
+    count_window=(start, end) (epoch 초, 닫힌 구간) — §80 구간 계상:
+      **판정은 기록 전체**(기여 등급·쓰기 순계·명령 신원·착지·결론)로 하고,
+      **계상만** 사건 시각이 구간 안인 것을 더한다. 시각 없는 레코드는 직전
+      시각을 물려받는다(_iter_session_records). 구간을 나눠 합치면 전체와
+      같다(가산성) — 단, 건수 하한(검색 턴당 1·실행 1·verify 1)은 구간마다
+      적용된다. None이면 종전과 동일(전 구간).
 
     반환: {reviewed_words, artifact_words, input_words,
            contributed_docs, scanned_docs, waste_docs}
@@ -771,27 +826,57 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
     write_seq = {}           # fp → [(kind, old, new, tool_id)] 쓰기 순서열 (§31 재생용)
     failed_tool_ids = set()  # 툴 에러가 난 호출 id — 적용 안 된 편집 제외
     exec_hard_failed = set() # 실행 중 환경·타이핑 실수·거부로 무효인 호출 id (§69)
+    # ---- §80 구간 계상 재료: 판정 구조는 위 그대로(전체), 아래는 시각 꼬리표
+    win = tuple(count_window) if count_window else None
+
+    def _inw(t):
+        return win is None or (win[0] <= (t or 0.0) <= win[1])
+    turn_t = 0.0             # 이 턴의 시작 시각 (지시 레코드)
+    landing_t = {}           # 착지 파일 → 착지한 턴의 시각
+    region_t = {}            # (fp, offset) → 그 구간 단어를 집계한 읽기 시각
+    answer_t = []            # answers[i]의 시각
+    final_answer_t = 0.0
+    tool_report_t = 0.0
+    tool_calls_in = 0        # 구간 안 도구 호출 수
+    search_calls_in = 0
+    exec_calls_in = 0
+    search_turns_in = 0
+    assistant_text_w_in = 0
+    sub_report_w_in = 0
+    reviewed_in = 0
+    input_w_in = 0
+    search_out_deep_in = search_out_skim_in = 0
+    image_blocks_in = 0
+    unrec_write_in = {}
+    exec_seq_in = []         # (신원, tool_id, inw)
 
     def _end_turn():
         # 사용자 턴 경계: 신호④를 이 턴 안에서만 판정, 턴 마무리 답변 보관
         nonlocal turn_search_i, turn_reads, final_answer, search_turns
+        nonlocal search_turns_in
         if turn_search_i is not None:
             search_turns += 1
+            if _inw(turn_t):
+                search_turns_in += 1
             post = [(fp, rg) for fp, i, rg in turn_reads if i > turn_search_i]
             if post:
                 signal4.add(post[0][0])  # 착지 = 검색 멈춘 뒤 처음 연 파일만
                 landing_regions.add(post[0][1])
+                landing_t.setdefault(post[0][0], turn_t)
         if turn_reads:
             all_turns.append(turn_reads)
         turn_search_i = None
         turn_reads = []
         if final_answer:
             answers.append(final_answer)
+            answer_t.append(final_answer_t)
             final_answer = ""
     if subagent_paths is None:
         subagent_paths = find_subagent_files(jsonl_path)
     if True:
-        for rec, is_sub in _iter_session_records(jsonl_path, subagent_paths):
+        for rec, is_sub, rec_tw in _iter_session_records(jsonl_path,
+                                                         subagent_paths):
+            inw = _inw(rec_tw)
             if rec.get("isMeta") or rec.get("isCompactSummary") \
                     or rec.get("isVisibleInTranscriptOnly") \
                     or (rec.get("isSidechain") and not is_sub):
@@ -810,6 +895,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                         and not _is_system_text(b.get("text", ""))
                         for b in blocks):
                     _end_turn()  # 실제 사용자 발화 = 새 턴 시작
+                    turn_t = rec_tw
                 for b in blocks:
                     if not isinstance(b, dict):
                         continue
@@ -819,20 +905,26 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                         t = "" if is_sub else b.get("text", "")
                         if t and not _is_system_text(t):
                             input_w += len(t.split())
+                            if inw:
+                                input_w_in += len(t.split())
                     elif b.get("type") == "tool_result":
                         if b.get("is_error") and b.get("tool_use_id"):
                             failed_tool_ids.add(b["tool_use_id"])
                         rc = b.get("content")
                         if isinstance(rc, list):
-                            image_blocks += sum(
-                                1 for c in rc if isinstance(c, dict)
-                                and c.get("type") == "image")
+                            _ib = sum(1 for c in rc if isinstance(c, dict)
+                                      and c.get("type") == "image")
+                            image_blocks += _ib
+                            if inw:
+                                image_blocks_in += _ib
                         parts = ([rc] if isinstance(rc, str) else
                                  [c.get("text", "") for c in rc
                                   if isinstance(c, dict) and c.get("type") == "text"]
                                  if isinstance(rc, list) else [])
                         text = " ".join(parts)
                         reviewed += len(text.split())
+                        if inw:
+                            reviewed_in += len(text.split())
                         if b.get("tool_use_id") in pending_search:
                             # §73: 검색 결과(Grep/Glob/셸 grep·MCP 검색)를 읽는
                             # 시간 — 실행 출력과 같은 눈금(앞 200 정독·나머지 훑기)
@@ -840,9 +932,12 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                             _sw = len(text.split())
                             search_out_deep += min(_sw, _DEEP_BLOCK_WORDS)
                             search_out_skim += max(0, _sw - _DEEP_BLOCK_WORDS)
+                            if inw:
+                                search_out_deep_in += min(_sw, _DEEP_BLOCK_WORDS)
+                                search_out_skim_in += max(0, _sw - _DEEP_BLOCK_WORDS)
                         pe = pending_exec.pop(b.get("tool_use_id"), None)
                         if pe:
-                            _canon, _cw, _t0 = pe
+                            _canon, _cw, _t0, _tw = pe
                             _d = ((rec_t - _t0)
                                   if (rec_t and _t0 and 0 <= rec_t - _t0 < 3600)
                                   else 0.0)
@@ -856,7 +951,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                                 {"canon": _canon, "cmd_words": _cw,
                                  "out_words": len(text.split()),
                                  "wait_sec": _d,
-                                 "failed": _hard})
+                                 "failed": _hard, "t": _tw})
                         pr = pending_read.pop(b.get("tool_use_id"), None)
                         pq = (None if pr else
                               pending_query.pop(b.get("tool_use_id"), None))
@@ -889,6 +984,9 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                             if in_w >= _QUERY_READ_MIN_WORDS:
                                 unrec_write[pq[0]] = (
                                     unrec_write.get(pq[0], 0) + in_w)
+                                if inw:
+                                    unrec_write_in[pq[0]] = (
+                                        unrec_write_in.get(pq[0], 0) + in_w)
                         if pr:
                             fp, region = pr
                             # 파일별 실측 단어수 — 같은 구간 재읽기는 1회만
@@ -897,6 +995,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                                 file_read_words[fp] = (file_read_words.get(fp, 0)
                                                        + len(text.split()))
                                 region_texts[region] = text  # 구간 분해용
+                                region_t[region] = rec_tw    # §80 귀속 시각
                             # 읽기 내용 보관 (신호⑤, 파일당 2만 단어 상한)
                             old = read_content.get(fp, "")
                             if len(old.split()) < 20000:
@@ -913,16 +1012,25 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                         # 계상한다(위임 여부에 값이 흔들리지 않게).
                         if is_sub:
                             sub_report_w += len(b.get("text", "").split())
+                            if inw:
+                                sub_report_w_in += len(b.get("text", "").split())
                         else:
                             texts.append(b.get("text", ""))
                             assistant_text_w += len(b.get("text", "").split())
+                            if inw:
+                                assistant_text_w_in += len(
+                                    b.get("text", "").split())
                     if b.get("type") != "tool_use":
                         continue
                     name = b.get("name")
                     tool_i += 1
+                    if inw:
+                        tool_calls_in += 1
                     if name in _SEARCH_TOOLS:
                         turn_search_i = tool_i
                         search_calls += 1
+                        if inw:
+                            search_calls_in += 1
                         if b.get("id"):
                             pending_search.add(b["id"])
                     if name in ("Bash", "PowerShell"):
@@ -932,6 +1040,8 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                         if kind == "search":         # §47: 셸 grep·find류
                             turn_search_i = tool_i   # = 탐색 신호(착지 로직)
                             search_calls += 1
+                            if inw:
+                                search_calls_in += 1
                             if b.get("id"):
                                 pending_search.add(b["id"])
                         elif kind == "read" and b.get("id"):
@@ -942,16 +1052,20 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                                 "shell", {"command": canon}, tool_i)
                         else:
                             exec_calls += 1
+                            if inw:
+                                exec_calls_in += 1
                             exec_seq.append((canon, b.get("id")))
+                            exec_seq_in.append((canon, b.get("id"), inw))
                             if b.get("id"):
                                 pending_exec[b["id"]] = (
-                                    canon, len(cmd.split()), rec_t)
+                                    canon, len(cmd.split()), rec_t, rec_tw)
                     inp = b.get("input") or {}
                     if name == "StructuredOutput":
                         # 구조화 보고 채널 (§33): 워크플로 에이전트의 최종
                         # 산출물이 텍스트 답변 대신 이 도구 입력으로 나간다 —
                         # 마지막 호출의 텍스트 단어수 = 보고 실측
                         tool_report_w = _json_text_words(inp)
+                        tool_report_t = rec_tw
                         continue
                     fp = inp.get("file_path")
                     if not fp:
@@ -962,6 +1076,8 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                         if _QUERY_SEARCH_RE.search(name or ""):
                             turn_search_i = tool_i  # 검색형 조회 = 탐색 신호
                             search_calls += 1
+                            if inw:
+                                search_calls_in += 1
                             if b.get("id"):
                                 pending_search.add(b["id"])
                             continue
@@ -987,7 +1103,8 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                     elif name == "Write":
                         edited_files.add(fp)
                         write_seq.setdefault(fp, []).append(
-                            ("write", "", inp.get("content") or "", b.get("id")))
+                            ("write", "", inp.get("content") or "", b.get("id"),
+                             rec_tw))
                         # Write 전체 본문은 편집 증거로 안 쓴다 — 파일을 통째로
                         # 다시 쓰면 모든 블록이 정독으로 물들어 구간 분해가 무효화됨.
                         # 핵심 위치 증거는 Edit의 원문(old_string)만 (§26)
@@ -1006,15 +1123,17 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                             new = new if isinstance(new, str) else ""
                             if old_s or new:  # 삭제(new="")도 순계에 반영
                                 write_seq.setdefault(fp, []).append(
-                                    ("edit", old_s, new, b.get("id")))
+                                    ("edit", old_s, new, b.get("id"), rec_tw))
                             # 편집 원문 위치가 사람이 정독해야 했던 핵심 구간
                             edit_texts[fp] = (edit_texts.get(fp, "")
                                               + " " + old_s + " " + new)
                 if texts:
                     final_answer = " ".join(texts)
-    for _canon, _cw, _t0 in pending_exec.values():
+                    final_answer_t = rec_tw
+    for _canon, _cw, _t0, _tw in pending_exec.values():
         exec_events.append({"canon": _canon, "cmd_words": _cw,
-                            "out_words": 0, "wait_sec": 0.0, "failed": False})
+                            "out_words": 0, "wait_sec": 0.0, "failed": False,
+                            "t": _tw})
     _end_turn()  # 마지막 턴 마감
 
     # 신호⑤ 준비: 턴별 마무리 답변들의 6단어 연속 조각·식별자 집합
@@ -1084,7 +1203,19 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
     #             마무리 답변·그 파일의 편집 원문/수정문과 겹침
     deep_w = skim_w = 0
     file_split = {}
+    # §80: 정독/훑기를 읽기 구간(region) 단위로 갈라 그 구간의 읽기 시각에
+    # 귀속. 파일 단위 규칙(§75 앞 200 하한)은 가장 이른 구간에 얹는다.
+    # 구간이 없으면(None) 종전과 같은 합.
+    file_regions = {}
+    for region in region_texts:
+        file_regions.setdefault(region[0], []).append(region)
+    for f in file_regions:
+        file_regions[f].sort(key=lambda r: (region_t.get(r, 0.0), str(r[1])))
+
+    def _rwords(region):
+        return len(region_texts[region].split())
     for f in contributed:
+        regs = file_regions.get(f, [])
         if f in query_files or (f in range_files and f not in whole_files):
             # §70: 조회형(셸 cat/sed -n·MCP 조회)은 AI가 범위를 이미 집어서 본
             # 출력 — 후보 훑기가 아니라 목적 읽기. 기여 판정이면 전량 정독.
@@ -1092,17 +1223,17 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
             # 다르다고 달리 취급하지 않는다(통째 읽기가 섞였으면 블록 규칙).
             _fw = file_read_words.get(f, 0)
             file_split[f] = (_fw, 0)
-            deep_w += _fw
+            deep_w += sum(_rwords(r) for r in regs if _inw(region_t.get(r)))
             continue
         ev_words = (edit_texts.get(f, "") + " " + ans_text).lower().split()
         ev_shingles = ({" ".join(ev_words[i:i + 6])
                         for i in range(len(ev_words) - 5)}
                        if len(ev_words) >= 6 else set())
         f_deep = f_skim = 0
-        for region, rtext in region_texts.items():
-            if region[0] != f:
-                continue
-            words = rtext.split()
+        reg_split = {}
+        for region in regs:
+            words = region_texts[region].split()
+            r_deep = r_skim = 0
             # 착지·재방문은 파일 승격 신호일 뿐 — 그 구간 안에서도 사람은
             # 핵심 블록만 정독한다. 통째 정독 경로 없음 (§26 재실측 근거)
             for i in range(0, len(words), _DEEP_BLOCK_WORDS):
@@ -1115,22 +1246,51 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
                        or any(" ".join(bl[j:j + 6]) in ev_shingles
                               for j in range(len(bl) - 5)))
                 if hit:
-                    f_deep += len(blk)
+                    r_deep += len(blk)
                 else:
-                    f_skim += len(blk)
+                    r_skim += len(blk)
+            reg_split[region] = [r_deep, r_skim]
+            f_deep += r_deep
+            f_skim += r_skim
         # §75: 기여 판정된 파일은 최소 앞 200단어는 읽은 것으로 — 실행 출력·
         # 검색 결과·hitl 결론과 같은 "열었으면 앞부분은 읽는다" 규칙. 기여
         # 파일인데 정독 0단어(실측 70%)는 결과에 쓰고도 한 글자도 안 읽었다는
-        # 뜻이라 어색했다.
-        f_deep = max(f_deep, min(_DEEP_BLOCK_WORDS, file_read_words.get(f, 0)))
-        f_deep = min(f_deep, file_read_words.get(f, 0))
-        file_split[f] = (f_deep, max(file_read_words.get(f, 0) - f_deep, 0))
-        deep_w += file_split[f][0]
-        skim_w += file_split[f][1]
-    skim_w += sum(file_read_words.get(f, 0) for f in skim)
-    waste_w = sum(file_read_words.get(f, 0) for f in waste)
+        # 뜻이라 어색했다. 하한으로 늘어난 정독은 가장 이른 구간부터 채운다.
+        fw = file_read_words.get(f, 0)
+        floor = min(_DEEP_BLOCK_WORDS, fw)
+        need = floor - f_deep
+        for region in regs:
+            if need <= 0:
+                break
+            take = min(need, reg_split[region][1])
+            reg_split[region][0] += take
+            reg_split[region][1] -= take
+            need -= take
+        f_deep = min(max(f_deep, floor), fw)
+        file_split[f] = (f_deep, max(fw - f_deep, 0))
+        for region in regs:
+            if _inw(region_t.get(region)):
+                deep_w += reg_split[region][0]
+                skim_w += reg_split[region][1]
+    skim_w += sum(_rwords(r) for f in skim for r in file_regions.get(f, [])
+                  if _inw(region_t.get(r)))
+    waste_w = sum(_rwords(r) for f in waste for r in file_regions.get(f, [])
+                  if _inw(region_t.get(r)))
 
-    artifact, out_draft, out_edit = replay_write_net(write_seq, failed_tool_ids)
+    artifact_all, out_draft_all, out_edit_all, draft_by_t, edit_by_t = \
+        replay_write_net_attrib(write_seq, failed_tool_ids)
+    if win is None:
+        artifact, out_draft, out_edit = artifact_all, out_draft_all, out_edit_all
+    else:  # §80: 살아남은 단어를 넣은 사건의 시각이 구간 안인 것만
+        out_draft = {fp: sum(w for t, w in d.items() if _inw(t))
+                     for fp, d in draft_by_t.items()}
+        out_edit = {fp: sum(w for t, w in d.items() if _inw(t))
+                    for fp, d in edit_by_t.items()}
+        out_draft = {fp: w for fp, w in out_draft.items() if w}
+        out_edit = {fp: w for fp, w in out_edit.items() if w}
+        artifact = {}
+        for fp in set(out_draft) | set(out_edit):
+            artifact[fp] = out_draft.get(fp, 0) + out_edit.get(fp, 0)
 
     # 총량(로레코드 rw OFF용, 실패 포함) — §66에서 분류를 도구명→**파일 출처**
     # 기준으로 통일: 세션이 만든 파일(Write 기점)은 이후 Edit로 써넣은 단어도
@@ -1146,13 +1306,15 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
         _k = write_kind(_fp)
         _created = seq[0][0] == "write"
         writes = [op for op in seq if op[0] == "write"]
-        if writes:
+        if writes and _inw(writes[-1][4] if len(writes[-1]) > 4 else None):
             _w = len(writes[-1][2].split())
             gross_d += _w
             gross_draft_kind[_k] += _w
             write_tool_raw += _w
         for op in seq:
             if op[0] != "edit":
+                continue
+            if not _inw(op[4] if len(op) > 4 else None):
                 continue
             write_tool_raw += len(op[2].split())
             _added, _removed, _anchor = edit_delta(op[1], op[2])
@@ -1179,31 +1341,49 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
     ex_deep = ex_skim = 0
     ex_wait = 0.0
     for ev in exec_events:
-        ex_compose_gross += ev["cmd_words"]
-        ex_out += ev["out_words"]
-        # 출력 판독도 파일 읽기와 같은 눈금: 호출마다 앞 200단어 정독,
-        # 나머지 훑기 (호출별로 갈라야 한다 — 합계에 상한을 걸면 큰 로그
-        # 하나가 전체 상한을 먹는다)
-        ex_deep += min(ev["out_words"], _DEEP_BLOCK_WORDS)
-        ex_skim += max(0, ev["out_words"] - _DEEP_BLOCK_WORDS)
-        ex_wait += ev["wait_sec"]
+        ev_in = _inw(ev.get("t"))
+        if ev_in:
+            ex_compose_gross += ev["cmd_words"]
+            ex_out += ev["out_words"]
+            # 출력 판독도 파일 읽기와 같은 눈금: 호출마다 앞 200단어 정독,
+            # 나머지 훑기 (호출별로 갈라야 한다 — 합계에 상한을 걸면 큰 로그
+            # 하나가 전체 상한을 먹는다)
+            ex_deep += min(ev["out_words"], _DEEP_BLOCK_WORDS)
+            ex_skim += max(0, ev["out_words"] - _DEEP_BLOCK_WORDS)
+            ex_wait += ev["wait_sec"]
         if ev["canon"] not in ex_seen and not ev["failed"]:
-            ex_seen.add(ev["canon"])
-            ex_compose_net += ev["cmd_words"]
+            ex_seen.add(ev["canon"])          # 신원 판정은 전체 순서로 (§80)
+            if ev_in:
+                ex_compose_net += ev["cmd_words"]
+    # §80: 실행 신원 순계 — 신원의 첫 유효 호출이 구간 안인 것만
+    _net_seen = set()
+    exec_net_in = 0
+    for c, tid, ev_in in exec_seq_in:
+        if tid and tid in exec_hard_failed:
+            continue
+        if c in _net_seen:
+            continue
+        _net_seen.add(c)
+        if ev_in:
+            exec_net_in += 1
 
-    out = {"reviewed_words": reviewed, "input_words": input_w,
+    # §80: 마무리 답변·보고는 그 사건의 시각으로 귀속 (마지막 답변 = 기록
+    # 전체(as_of)의 마지막 — 판정은 전체, 계상은 구간)
+    _last_ans_w = (len(answers[-1].split())
+                   if answers and _inw(answer_t[-1]) else 0)
+    _last_ans_w_all = len(answers[-1].split()) if answers else 0
+    _rep_w = tool_report_w if _inw(tool_report_t) else 0
+    out = {"reviewed_words": reviewed_in, "input_words": input_w_in,
            "artifact_words": sum(artifact.values()),
            # 보고 실측 — 보고형 세션의 쓰기 상한 닻 재료. 채널 2개 중 큰 쪽:
            # 마지막 턴 마무리 답변 / StructuredOutput 도구 입력 (§33 —
            # 워크플로 에이전트는 답변 텍스트 0, 보고가 도구 입력으로 나감)
-           "answer_words": max(len(answers[-1].split()) if answers else 0,
-                               tool_report_w),
+           "answer_words": max(_last_ans_w, _rep_w),
            # §73: 메인 진행 나레이션 = assistant 텍스트 전량 − 마무리 답변(위)
-           "narration_words": max(0, assistant_text_w
-                                  - (len(answers[-1].split()) if answers else 0)),
+           "narration_words": max(0, assistant_text_w_in - _last_ans_w),
            # §73: 검색 결과 판독 재료 (rw ON 전용 — OFF는 reviewed에 이미 포함)
-           "search_out_deep_words": search_out_deep,
-           "search_out_skim_words": search_out_skim,
+           "search_out_deep_words": search_out_deep_in,
+           "search_out_skim_words": search_out_skim_in,
            "out_draft_words": sum(out_draft.values()),
            "out_edit_words": sum(out_edit.values()),
            "contributed_docs": len(contributed),
@@ -1213,20 +1393,20 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
            "deep_words": deep_w,
            "skim_words": skim_w,
            "waste_words": waste_w,
-           "tool_calls": tool_i,
-           "search_calls": search_calls,
-           "search_turns": search_turns,   # §70 검색한 지시 턴 수
-           "exec_calls": exec_calls,
+           "tool_calls": tool_calls_in,
+           "search_calls": search_calls_in,
+           "search_turns": search_turns_in,   # §70 검색한 지시 턴 수
+           "exec_calls": exec_calls_in,
            # 행동 순계 재료 (§46): 검색 = 착지-기여 문서 수(신호④∩DEEP —
            # 항해·헛검색은 착지에 흡수/자동 0), 실행 = 명령 신원 수.
            # 무효 호출(§69: 환경·타이핑 실수·거부)은 순계 제외(§48) — 전 판
            # 무효 신원은 탈락(하한 1은 build_actions 클램프 몫). 종료코드≠0
            # 만으로는 제외 안 함. 로레코드 exec_calls는 불변
-           "search_landing_docs": len(signal4 & contributed),
-           "exec_net_calls": len({c for c, tid in exec_seq
-                                  if not (tid and tid in exec_hard_failed)}),
-           "unrec_write_tools": unrec_write,
-           "unrec_write_words": sum(unrec_write.values()),
+           "search_landing_docs": sum(1 for f in (signal4 & contributed)
+                                      if _inw(landing_t.get(f))),
+           "exec_net_calls": exec_net_in,
+           "unrec_write_tools": unrec_write_in,
+           "unrec_write_words": sum(unrec_write_in.values()),
            "gross_draft_words": gross_d,
            "gross_edit_words": gross_e,
            # 쓰기 종류별 순계·총량 (§59 — 요율 3분할용)
@@ -1244,19 +1424,20 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None):
            "exec_out_skim_words": ex_skim,
            "exec_wait_min": round(ex_wait / 60, 3),
            "subagent_files": len(subagent_paths),
-           "image_blocks": image_blocks,
-           "sub_report_words": sub_report_w,
+           "image_blocks": image_blocks_in,
+           "sub_report_words": sub_report_w_in,
+           "count_window": list(win) if win else None,   # §80
            # 채널 결산 (§59 규칙2) — 세션에서 나간/들어온 글이 어느 축으로
            # 갔는지 감사용. 어느 축에도 안 잡히는 양이 크면 구멍이다.
            "channels": {
                "write_tool_words": write_tool_raw,
                "shell_cmd_words": ex_compose_gross,
                "exec_out_words": ex_out,
-               "tool_result_words": reviewed,
-               "user_input_words": input_w,
-               "unrec_write_words": sum(unrec_write.values()),
-               "image_blocks": image_blocks,
-               "sub_report_words": sub_report_w,
+               "tool_result_words": reviewed_in,
+               "user_input_words": input_w_in,
+               "unrec_write_words": sum(unrec_write_in.values()),
+               "image_blocks": image_blocks_in,
+               "sub_report_words": sub_report_w_in,
                "subagent_files": len(subagent_paths)}}
     if detail:  # 감사·검증용: 등급별 파일 목록(+실측 단어수·기여 파일 분해)
         out["files"] = {"deep": sorted(contributed), "skim": sorted(skim),
