@@ -29,9 +29,11 @@ rates.json의 agent/hitl 카드 요율을 곱한다.
                결론 정독(건별 200단어 상한) + 진행 보고 훑기 + **파일 확인**
                (§77: 그 구간에 파일 생성·수정이 있으면 1건 —
                min(cap, a·ln(1 + 구간 쓴 단어/b)), 기본 cap 2.0분.
-               코드/문서/기타 구분·동작 확인·규모 비례 대조·테스트 강등은
-               §77에서 폐지 — 실측(§63)이 "확인 비용은 규모와 거의 무관"
-               이었고, 사람은 수단(생성 스크립트)이 아니라 결과물을 본다)
+               코드/문서/기타 구분·동작 확인·규모 비례 대조는 §77에서
+               폐지 — 실측(§63)이 "확인 비용은 규모와 거의 무관"이었고,
+               사람은 수단(생성 스크립트)이 아니라 결과물을 본다.
+               §78: 확인 시점의 마지막 테스트가 통과면 그 테스트 이전에 쓴
+               코드 파일은 확인 대상에서 제외 — 테스트가 대신 봤다)
     correct  = §77에서 폐지. interrupt 뒤 다시 친 지시는 이미 instruct로
                세고, instruct 요율 자체가 "직전 응답→지시 간격" 실측이라
                재정향 시간을 포함 — 이중 계상이었다. interrupts 카운트는
@@ -213,28 +215,35 @@ def parse_actions(jsonl_path):
     seq = 0             # 도구 사건 순번 (§49 쓰기↔테스트 선후 판정용)
     after_interrupt = False  # 직전 사람 발화가 interrupt였는가 (§49)
     seg_code = {}       # 이번 확인 구간에 변경된 코드 파일 {fp: 마지막 seq}
-    seg_files = set()   # §77 이번 구간에 생성·수정된 파일 전부 (유형 무관)
-    seg_words = 0       # §77 이번 구간에 파일로 쓴 단어 합 (Write·Edit 본문)
+    seg_files = {}      # §77 이번 구간에 생성·수정된 파일 {fp: 쓴 단어 누적}
 
     def _flush_check_event():
         """확인 시점 도달: 구간에 파일 생성·수정이 있으면 사건 기록 (§50·§77)."""
-        nonlocal seg_words
         if not seg_files:
             return
         lt = counts["last_test_seq"]
         dirty = (sum(1 for s in seg_code.values() if s > lt)
                  if lt is not None else 0)
+        # §78 검증 위임: 확인 시점의 마지막 테스트가 통과 상태면, 그 테스트
+        # 이전에 쓴 코드 파일은 확인 대상에서 **뺀다**(테스트가 대신 봤다).
+        # 테스트 뒤에 또 고친 파일(dirty)·코드 아닌 파일은 남는다.
+        verified = (lt is not None and not counts["last_test_failed"])
+        excluded = {fp for fp, sq in seg_code.items()
+                    if verified and sq <= lt}
+        words_raw = sum(seg_files.values())
+        words = sum(w for fp, w in seg_files.items() if fp not in excluded)
         counts["code_check_events"].append({
             "files": len(seg_code), "dirty": dirty,
             "has_test": lt is not None,
             "tests_passed": counts["tests_passed_last"],
             "test_failed": counts["last_test_failed"],
             "coverage": counts["coverage_pct"],
-            # §77 파일 확인 입력: 구간에 쓴 파일 수·단어 (코드 외 포함)
-            "all_files": len(seg_files), "words": seg_words})
+            # §77 파일 확인 입력: 구간에 쓴 파일 수·단어 (코드 외 포함).
+            # words = 검증 제외 후, words_raw = 제외 전 (§78)
+            "all_files": len(seg_files), "verified_files": len(excluded),
+            "words": words, "words_raw": words_raw})
         seg_code.clear()
         seg_files.clear()
-        seg_words = 0
     with open(jsonl_path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -303,8 +312,8 @@ def parse_actions(jsonl_path):
                                 cls[fp] = _words(body)
                             else:                # 부분 수정 — 누적
                                 cls[fp] = cls.get(fp, 0) + _words(body)
-                            seg_files.add(fp)               # §77 파일 확인
-                            seg_words += _words(body)
+                            seg_files[fp] = (seg_files.get(fp, 0)   # §77
+                                             + _words(body))
                             if acls == "code":   # §49 마지막 쓰기 순번
                                 counts["code_write_seq"][fp] = seq
                                 seg_code[fp] = seq  # §50 이번 구간 코드 변경
@@ -446,7 +455,8 @@ def actual_effort_minutes(counts, rates=None):
         # 확인 비용이 변경 규모와 거의 무관(20배 커져도 7.5→3.6분)이라
         # 선형 대신 로그 + 상한: 구간에 파일 쓰기가 있으면
         # min(cap, a·ln(1 + 구간 쓴 단어/b)). 코드/문서/기타 구분, 동작 확인
-        # 2.0, 규모 비례 대조, 테스트 강등은 폐지(automation_saved_min=0).
+        # 2.0, 규모 비례 대조는 폐지. §78: 확인 시점의 테스트가 통과면 그 이전에
+        # 쓴 코드 파일은 확인 대상에서 제외(automation_saved_min = 그 차이).
         cap = rm.get("report_deep_word_cap")
         cl = counts.get("conclusion_word_list")
         if cap and cl is not None:
@@ -456,14 +466,18 @@ def actual_effort_minutes(counts, rates=None):
         concl = min(concl, counts["assistant_words"])
         progress = counts["assistant_words"] - concl
         events = counts.get("code_check_events") or []
-        check_min = 0.0
-        for ev in events:
-            w = ev.get("words")
+
+        def _fc(w):
             if w is None:  # 구 counts 호환 — 단어 미기록이면 상한
-                w = float("inf")
-            check_min += min(fc["cap_min"],
-                             fc["a_min"] * math.log1p(w / fc["b_words"]))
-        automation_saved = 0.0
+                return fc["cap_min"]
+            return min(fc["cap_min"], fc["a_min"] * math.log1p(w / fc["b_words"]))
+        check_min = 0.0
+        automation_saved = 0.0  # §78 테스트가 대신 본 파일만큼 줄어든 확인비
+        for ev in events:
+            m = _fc(ev.get("words"))
+            check_min += m
+            automation_saved += _fc(ev.get("words_raw", ev.get("words"))) - m
+        automation_saved = round(automation_saved, 2)
         review_min = (check_min
                       + concl * rm["report_deep_min_per_word"]
                       + progress * rm["report_skim_min_per_word"])

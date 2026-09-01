@@ -130,11 +130,11 @@ class TestTranscriptActual(unittest.TestCase):
 
     def test_file_check_log_cap(self):
         # §77: 파일 확인 = min(2.0, 0.5×ln(1 + 구간 쓴 단어/100)) — 규모가
-        # 커져도 상한 2.0분. 테스트 통과 여부는 더 이상 확인비를 바꾸지 않는다.
+        # 커져도 상한 2.0분. (테스트 실패 상태 = 검증 제외 없음, §78)
         import json, tempfile, os
         from transcript_actual import parse_actions, actual_effort_minutes
 
-        def session(words, test_output="12 passed in 1.2s"):
+        def session(words, test_output="2 failed, 3 passed"):
             lines = [
                 {"type": "user", "message": {"role": "user", "content": "고쳐줘"}},
                 {"type": "assistant", "message": {"role": "assistant", "content": [
@@ -163,10 +163,11 @@ class TestTranscriptActual(unittest.TestCase):
         # 20,000단어 → 상한 2.0
         self.assertAlmostEqual(session(20000)["breakdown"]["hitl"]["review"],
                                2.0, places=2)
-        # 테스트 실패 상태여도 동일 (강등 폐지)
-        m = session(1000, "2 failed, 3 passed")
-        self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 1.199, places=2)
-        self.assertEqual(m["automation_saved_min"], 0.0)
+        # §78: 테스트 통과 → 그 이전에 쓴 코드 파일은 확인 대상 제외 → 0,
+        # 줄어든 만큼 automation_saved_min
+        m = session(1000, "12 passed in 1.2s")
+        self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 0.0, places=2)
+        self.assertAlmostEqual(m["automation_saved_min"], 1.2, places=2)
 
     def test_code_review_turn_billing(self):
         # §50·§77: 파일 확인은 확인 시점(턴)당 1회 — 같은 변경을 7파일로
@@ -222,6 +223,45 @@ class TestTranscriptActual(unittest.TestCase):
             # §77: 확인 2회 × 0.5×ln(1.1) = 2×0.0477 = 0.095 → 0.10 (반올림)
             self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 0.10,
                                    places=2)
+        finally:
+            os.unlink(p)
+
+    def test_verified_files_excluded_only(self):
+        # §78: 통과 테스트 **이전**에 쓴 코드 파일만 제외. 테스트 뒤 다시 고친
+        # 파일(dirty)과 코드 아닌 파일은 확인 대상에 남는다.
+        import json, tempfile, os
+        from transcript_actual import parse_actions, actual_effort_minutes
+        lines = [
+            {"type": "user", "message": {"role": "user", "content": "고쳐줘"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Edit",
+                 "input": {"file_path": "a.py", "new_string": "x " * 500}},
+                {"type": "tool_use", "name": "Write",
+                 "input": {"file_path": "out.csv", "content": "a,b " * 100}},
+                {"type": "tool_use", "id": "t1", "name": "Bash",
+                 "input": {"command": "pytest tests/"}}]}},
+            {"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1",
+                 "content": "12 passed in 1.2s"}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [
+                {"type": "tool_use", "name": "Edit",
+                 "input": {"file_path": "b.py", "new_string": "z " * 100}}]}},
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+        try:
+            c = parse_actions(p)
+            ev = c["code_check_events"][0]
+            self.assertEqual(ev["verified_files"], 1)          # a.py만
+            self.assertEqual(ev["words_raw"], 700)
+            self.assertEqual(ev["words"], 200)                 # csv 100 + b.py 100
+            m = actual_effort_minutes(c)
+            # 0.5×ln(3) = 0.549 / 제외 전 0.5×ln(8) = 1.040 → saved 0.49
+            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 0.549,
+                                   places=2)
+            self.assertAlmostEqual(m["automation_saved_min"], 0.49, places=2)
         finally:
             os.unlink(p)
 
