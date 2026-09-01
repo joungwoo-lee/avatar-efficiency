@@ -194,13 +194,12 @@ class TestSessionApi(unittest.TestCase):
 
     def test_savings_floor_clamps_human_min(self):
         # §76: 절감율 1−agent/human 이 SAVINGS_FLOOR(−50%) 밑으로 못 내려가게
-        # 분자 바닥 = agent_total × 2/3. 바닥 미만이면 floored=True + notes.
+        # 분자 바닥 = agent_total × 2/3. 바닥 미만이면 raw_min != min + notes.
         import record_actions_code_api as m
         from unittest import mock
         with tempfile.TemporaryDirectory() as d:
             p = _make_jsonl(d)
             r = m.measure(p)
-            self.assertIn("floored", r["human"])
             self.assertIn("raw_min", r["human"])
             self.assertLessEqual(r["human"]["raw_min"], r["human"]["min"])
             agent = r["agent"]["total_min"]
@@ -214,7 +213,7 @@ class TestSessionApi(unittest.TestCase):
                 return x
             with mock.patch.object(m, "measure_agent_actual", fat):
                 r2 = m.measure(p)
-            self.assertTrue(r2["human"]["floored"])
+            self.assertLess(r2["human"]["raw_min"], r2["human"]["min"])
             self.assertAlmostEqual(
                 r2["human"]["min"],
                 round(r2["agent"]["total_min"] * m.HUMAN_FLOOR_RATIO, 2), 2)
@@ -225,7 +224,6 @@ class TestSessionApi(unittest.TestCase):
             # 끄면 바닥 없음
             with mock.patch.object(m, "measure_agent_actual", fat),                     mock.patch.object(m, "SAVINGS_FLOOR", None):
                 r3 = m.measure(p)
-            self.assertFalse(r3["human"]["floored"])
             self.assertEqual(r3["human"]["min"], r3["human"]["raw_min"])
 
     def test_think_includes_subagent_report_and_thinking(self):

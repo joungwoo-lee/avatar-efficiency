@@ -145,8 +145,9 @@ THINK_FALLBACK_MIN = 1.5      # 구 포맷(토큰 미기록) 전략 생각 지�
 # 아래로는 한계가 없어(agent가 human의 3배면 −200%) 세션별 평균이 음수
 # 하나에 끌려간다. 분자에 바닥을 깔아 절감율이 SAVINGS_FLOOR 밑으로 못
 # 내려가게 한다:  절감율 ≥ F  ⇔  human ≥ agent / (1 − F).
-# F = −0.5 → human ≥ agent × 2/3. 바닥에 걸린 세션은 human.floored=True
-# + notes 로 표시(실측 아닌 인위적 바닥임을 숨기지 않는다). None 이면 끔.
+# F = −0.5 → human ≥ agent × 2/3. 바닥에 걸린 세션은 human.raw_min(원값)
+# != human.min + notes 로 드러난다(실측 아닌 인위적 바닥임을 숨기지 않는다).
+# None 이면 끔.
 SAVINGS_FLOOR = -0.5
 HUMAN_FLOOR_RATIO = 1.0 / (1.0 - SAVINGS_FLOOR)   # = 0.6667
 #                              (§58) 구 기록은 생각 블록의 존재만 남고 양이 없다.
@@ -542,11 +543,9 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
     notes = [suspect_why] if suspect else []
     # §76 절감율 하한 — 분자 바닥 = agent_total × HUMAN_FLOOR_RATIO
     h_raw = h_min
-    floored = False
     if SAVINGS_FLOOR is not None:
         h_floor = round(actual["total_min"] * HUMAN_FLOOR_RATIO, 2)
         if h_min < h_floor:
-            floored = True
             h_min = h_floor
             notes.append(
                 f"절감율 하한 {SAVINGS_FLOOR * 100:.0f}% 적용 — 분자 실측 "
@@ -562,7 +561,7 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
         "session_id": actual["counts"].get("session_id"),
         "suspect_output_channel": suspect,
         "human": {"min": h_min, "method": "record-actions-code",
-                  "raw_min": h_raw, "floored": floored,
+                  "raw_min": h_raw,  # 바닥 전 실측 원값 (§76; != min 이면 바닥 적용)
                   "humanize_rw": humanize_rw, "humanize_act": humanize_act,
                   "include_think": include_think,
                   **({"think": think_info} if think_info else {}),
