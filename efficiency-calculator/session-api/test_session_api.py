@@ -223,7 +223,10 @@ class TestSessionApi(unittest.TestCase):
             # 끄면 바닥 없음
             with mock.patch.object(m, "measure_agent_actual", fat),                     mock.patch.object(m, "SAVINGS_FLOOR", None):
                 r3 = m.measure(p)
-            self.assertEqual(r3["human"]["min"], r["human"]["min"])
+            # §83 이후 분자가 작아져 r도 바닥에 걸릴 수 있음 → 바닥 없는 기준과 비교
+            with mock.patch.object(m, "SAVINGS_FLOOR", None):
+                r0 = m.measure(p)
+            self.assertEqual(r3["human"]["min"], r0["human"]["min"])
             self.assertFalse(any("절감율 하한" in n for n in r3["notes"]))
 
     def test_think_includes_subagent_report_and_thinking(self):
@@ -434,9 +437,9 @@ class TestSessionApi(unittest.TestCase):
         bd_raw = {b["primitive"]: b["count"] for b in raw["human"]["breakdown"]}
         self.assertEqual(bd_base["execute"], 1)   # 순계: 같은 명령 6회 = 신원 1건
         self.assertEqual(bd_raw["execute"], 6)    # 궤적 재연: 기록 그대로
-        # §43: 마무리 verify는 두 모드 공통 — 소형 세션에서 천장<바닥 역전 방지
-        self.assertEqual(bd_base.get("verify"), 1)
-        self.assertEqual(bd_raw.get("verify"), 1)
+        # §83: 마무리 verify는 양 모드 공통 제거 (한쪽에만 있을 때만 역전)
+        self.assertIsNone(bd_base.get("verify"))
+        self.assertIsNone(bd_raw.get("verify"))
         self.assertFalse(raw["human"]["humanize_act"])
         self.assertEqual(raw["human"]["humanize"], "rawrecord")  # 호환 표현
         self.assertEqual(legacy["human"]["min"], raw["human"]["min"])
@@ -735,12 +738,12 @@ class TestWindowMeasure(unittest.TestCase):
             for k in ("instruct", "review"):
                 self.assertAlmostEqual(sum(hb(x)[k] for x in parts),
                                        hb(whole)[k], places=1, msg=k)
-            # 사람 시간 전체 일치 — verify도 세션에 1번(마지막 쓰기 구간, §82)
+            # 사람 시간 전체 일치 (verify는 §83에서 제거 — 구간마다 쌓일 항목 없음)
             self.assertAlmostEqual(sum(x["human"]["min"] for x in parts),
                                    whole["human"]["min"], places=0)
-            vcnt = lambda x: sum(1 for b in x["human"]["breakdown"]
-                                 if b["primitive"] == "verify")
-            self.assertEqual([vcnt(x) for x in parts], [0, 0, 1])
+            self.assertFalse(any(b["primitive"] == "verify"
+                                 for x in parts + [whole]
+                                 for b in x["human"]["breakdown"]))
             for x in parts:
                 self.assertIn("window", x)
         finally:

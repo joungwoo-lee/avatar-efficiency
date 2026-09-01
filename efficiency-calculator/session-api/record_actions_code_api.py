@@ -21,7 +21,7 @@
       search  = 착지-기여 문서당 1건, 검색한 지시 턴당 최소 1건 (§46·§70)
       execute = 4토막 — 구성(첫 신원만) + 실측 대기 + 판독 + 조작 (§59);
                 무효는 환경·타이핑 실수·거부 서명일 때만 (§69)
-      verify  = 산출물 있으면 1건
+      verify  = 없음 (§83에서 제거 — 종전 산출물 있으면 1건 3.0분)
       think   = 전략 생각 (§53) — 지시 직후 첫 응답의 생각 토큰 × 요율
                 (정독과 동속 0.005, §57), 서브에이전트 기록 포함 (§68).
                 (구 포맷은 토큰 수가 없어 건당 1.5분 고정, §58)
@@ -65,7 +65,7 @@ hitl 축약 모드 (§79, 기본 OFF): measure(..., hitl_compact=True) /
     · 그 시점에 잰 값 재연: as_of=T (window 생략)
     · 구간이 최종 결과에 기여한 몫: window=(A, B) (as_of 생략)
     가산성: 같은 as_of 아래 구간을 나눠 더하면 전체와 같다 — 건수 하한
-    (검색 턴당 1·실행 1·verify 1)·절감율 하한(§76)은 구간마다 적용되어 예외.
+    (검색 턴당 1·실행 1)·절감율 하한(§76)은 구간마다 적용되어 예외.
     엎어진 앞 작업은 어느 구간에도 안 실린다(전체 순계와 같은 원칙).
 
 CLI:
@@ -466,7 +466,7 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
                      행동 횟수를 세션 기록 그대로(search=검색 호출 수,
                      execute=실행 호출 수). "AI가 한 행동을 사람이 똑같이
                      했다면"의 자.
-                     마무리 verify 1건(산출물 있을 때)은 두 모드 공통(§43).
+                     마무리 verify는 §83에서 양 모드 공통 제거.
     기본(둘 다 ON) = 바닥 자. 구 humanize=True/False/"rawrecord"는
     measure()의 호환 인자로만 남음.
     """
@@ -553,14 +553,10 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
     ex = exec_item(stats, rates, humanize_act)   # 실행 4토막 (§59)
     if ex:
         items.append(ex)
-    if (draft_w or edit_w) and stats.get("verify_here", True):
-        # §82: 구간 측정에서는 세션 마지막 쓰기가 속한 구간에만 1건
-        # 마무리 확인 1건 — 두 모드 공통 (§43). 초기 §39는 "기록에 대응
-        # 행동 없음"이라며 로레코드에서 verify를 뺐는데, 그 결과 도구 호출이
-        # 1~2회뿐인 소형 세션에서 궤적 천장이 바닥 자보다 낮아지는 모순이
-        # 실측 43/91건 발생. 궤적을 재연하는 사람도 산출물 확인은 하므로
-        # 공통 계상 — 이로써 건수형이 항목별로 OFF ≥ ON 보장.
-        items.append({"primitive": "verify", "count": 1})
+    # §83: 마무리 verify 1건(3.0분, seed)은 양 모드에서 뺐다. §43의 역전은
+    # "ON에만 있고 OFF엔 없어서" 생긴 것이라 양쪽 다 빼면 항목별 ON ≤ OFF
+    # 불변식은 유지된다. 세션당 3분(분자 0.25%)이고, 구간·델타 측정에서
+    # 구간 수만큼 쌓이는 유일한 실측 원인이었다. 분자 과소 방향(의도적 생략).
     return items
 
 
