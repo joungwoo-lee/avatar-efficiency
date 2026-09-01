@@ -1703,6 +1703,20 @@ ON/ON 6.01 → 6.07배, OFF/OFF 8.54 → 8.62배. 결론 대부분이 200~300단
   작업의 재작성 구간 귀속(빼기였다면 0), as_of = 물리 절단 파일과 동일,
   읽기 크레딧은 읽은 시각·판정은 전체, 인자 검증/ISO.
 
+## 81. human-effort/__init__.py 삭제 — 폴더 분리 뒤 남은 죽은 패키지 파일
+
+- **문제**: `human-effort/__init__.py`가 `.estimator`·`.transcript_requirements`를
+  폴더 바로 아래서 찾는데, 두 파일은 분자 3방식 폴더 분리(5ba4010) 때
+  `requirement-based/`·`shared/`로 옮겨졌다. 패키지 import는 그때부터 죽어
+  있었고, 남은 효과는 pytest가 이 폴더를 패키지로 잡으려다 53건 수집 에러
+  (`attempted relative import with no known parent package`)를 내는 것뿐.
+  `python test_estimator.py`(스크립트 실행)만 됐다.
+- **수정**: 파일 삭제. 소비자는 전부 sys.path 방식(README·session-api·
+  각 테스트)이라 영향 없음. 이제 `python -m pytest efficiency-calculator`
+  한 번에 207 passed.
+- 발견 경위: 다른 저장소(PM-Meter) 작업 세션이 pytest 실패로 이 파일을
+  지목했다가 되돌린 사건 — 진단은 맞았다.
+
 ## 미해결 (알려진 한계·다음 단계)
 
 > §66~§68 감사에서 검토했으나 미반영한 항목·기대효과 %·위치·판단 근거는
