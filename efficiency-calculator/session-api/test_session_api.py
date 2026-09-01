@@ -192,6 +192,42 @@ class TestSessionApi(unittest.TestCase):
         # 결정론: 같은 입력 → 같은 결과
         self.assertEqual(r_again["human"]["min"], r_on["human"]["min"])
 
+    def test_savings_floor_clamps_human_min(self):
+        # §76: 절감율 1−agent/human 이 SAVINGS_FLOOR(−50%) 밑으로 못 내려가게
+        # 분자 바닥 = agent_total × 2/3. 바닥 미만이면 floored=True + notes.
+        import record_actions_code_api as m
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            p = _make_jsonl(d)
+            r = m.measure(p)
+            self.assertIn("floored", r["human"])
+            self.assertIn("raw_min", r["human"])
+            self.assertLessEqual(r["human"]["raw_min"], r["human"]["min"])
+            agent = r["agent"]["total_min"]
+            savings = 1 - agent / r["human"]["min"]
+            self.assertGreaterEqual(savings, m.SAVINGS_FLOOR - 1e-9)
+            # 분모를 인위적으로 키워 바닥에 걸리게 한다
+            real = m.measure_agent_actual
+            def fat(*a, **k):
+                x = real(*a, **k)
+                x["total_min"] = r["human"]["raw_min"] * 10
+                return x
+            with mock.patch.object(m, "measure_agent_actual", fat):
+                r2 = m.measure(p)
+            self.assertTrue(r2["human"]["floored"])
+            self.assertAlmostEqual(
+                r2["human"]["min"],
+                round(r2["agent"]["total_min"] * m.HUMAN_FLOOR_RATIO, 2), 2)
+            self.assertAlmostEqual(
+                1 - r2["agent"]["total_min"] / r2["human"]["min"],
+                m.SAVINGS_FLOOR, 2)
+            self.assertTrue(any("절감율 하한" in n for n in r2["notes"]))
+            # 끄면 바닥 없음
+            with mock.patch.object(m, "measure_agent_actual", fat),                     mock.patch.object(m, "SAVINGS_FLOOR", None):
+                r3 = m.measure(p)
+            self.assertFalse(r3["human"]["floored"])
+            self.assertEqual(r3["human"]["min"], r3["human"]["raw_min"])
+
     def test_think_includes_subagent_report_and_thinking(self):
         # §68: 서브 보고문 전량 + 서브의 전략 생각 토큰이 think 행에 들어간다
         # (draft 아님). 양 모드 동일 → ON ≤ OFF 불변.

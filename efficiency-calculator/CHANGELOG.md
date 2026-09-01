@@ -1577,6 +1577,20 @@ ON/ON 6.01 → 6.07배, OFF/OFF 8.54 → 8.62배. 결론 대부분이 200~300단
 테스트: session-api `test_range_read_full_deep_and_contributed_floor` 신규.
 문서: 방법서 §2.1·§7.1.
 
+## 76. 절감율 하한 −50% — 분자 바닥 = agent_total × 2/3
+
+- **문제**: 절감율 = 1 − agent/human 은 위로 100%에서 막히지만 아래로는 한계가
+  없다(agent가 human의 3배면 −200%). 세션별 절감율을 평균하면 음수 세션 하나가
+  전체를 끌어내린다. 실측(이 PC 66세션, rw ON·act ON)은 최소 −1.0%(speedup
+  0.99) 하나뿐이지만, seed 요율 2×·초소형 포함 시 더 생길 수 있다.
+- **수정**: `record_actions_code_api.measure()`에서 `h_min` 확정 직후
+  `h_floor = agent_total × HUMAN_FLOOR_RATIO`(= 1/(1−SAVINGS_FLOOR) = 0.667)
+  미만이면 바닥으로 올린다. 절감율 ≥ F ⇔ human ≥ agent/(1−F).
+- **투명성**: 바닥에 걸린 세션은 `human.floored=True`, `human.raw_min`(실측
+  원값) 보존, `notes`에 "절감율 하한 −50% 적용 — 분자 실측 X분 → 바닥 Y분".
+  `SAVINGS_FLOOR=None`이면 끔. `speedup`도 바닥 적용된 `h_min` 기준(≥ 0.667).
+- **회귀**: 이 PC 67세션 중 바닥에 걸리는 세션 1(a8138f7a: 분자 실측 12.1분·agent 20.1분 → 절감율 −66% → −50%로 받침, 분자 13.4분). 나머지 66세션 수치 불변.
+
 ## 미해결 (알려진 한계·다음 단계)
 
 > §66~§68 감사에서 검토했으나 미반영한 항목·기대효과 %·위치·판단 근거는
