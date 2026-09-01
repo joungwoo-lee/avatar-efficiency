@@ -194,14 +194,13 @@ class TestSessionApi(unittest.TestCase):
 
     def test_savings_floor_clamps_human_min(self):
         # §76: 절감율 1−agent/human 이 SAVINGS_FLOOR(−50%) 밑으로 못 내려가게
-        # 분자 바닥 = agent_total × 2/3. 바닥 미만이면 raw_min != min + notes.
+        # 분자 바닥 = agent_total × 2/3. 바닥 미만이면 notes 한 줄. 출력 필드는 안 늘린다.
         import record_actions_code_api as m
         from unittest import mock
         with tempfile.TemporaryDirectory() as d:
             p = _make_jsonl(d)
             r = m.measure(p)
-            self.assertIn("raw_min", r["human"])
-            self.assertLessEqual(r["human"]["raw_min"], r["human"]["min"])
+            self.assertNotIn("raw_min", r["human"])  # 출력 필드 불변
             agent = r["agent"]["total_min"]
             savings = 1 - agent / r["human"]["min"]
             self.assertGreaterEqual(savings, m.SAVINGS_FLOOR - 1e-9)
@@ -209,11 +208,11 @@ class TestSessionApi(unittest.TestCase):
             real = m.measure_agent_actual
             def fat(*a, **k):
                 x = real(*a, **k)
-                x["total_min"] = r["human"]["raw_min"] * 10
+                x["total_min"] = r["human"]["min"] * 10
                 return x
             with mock.patch.object(m, "measure_agent_actual", fat):
                 r2 = m.measure(p)
-            self.assertLess(r2["human"]["raw_min"], r2["human"]["min"])
+            self.assertGreater(r2["human"]["min"], r["human"]["min"])
             self.assertAlmostEqual(
                 r2["human"]["min"],
                 round(r2["agent"]["total_min"] * m.HUMAN_FLOOR_RATIO, 2), 2)
@@ -224,7 +223,8 @@ class TestSessionApi(unittest.TestCase):
             # 끄면 바닥 없음
             with mock.patch.object(m, "measure_agent_actual", fat),                     mock.patch.object(m, "SAVINGS_FLOOR", None):
                 r3 = m.measure(p)
-            self.assertEqual(r3["human"]["min"], r3["human"]["raw_min"])
+            self.assertEqual(r3["human"]["min"], r["human"]["min"])
+            self.assertFalse(any("절감율 하한" in n for n in r3["notes"]))
 
     def test_think_includes_subagent_report_and_thinking(self):
         # §68: 서브 보고문 전량 + 서브의 전략 생각 토큰이 think 행에 들어간다

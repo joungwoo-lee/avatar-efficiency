@@ -1586,8 +1586,7 @@ ON/ON 6.01 → 6.07배, OFF/OFF 8.54 → 8.62배. 결론 대부분이 200~300단
 - **수정**: `record_actions_code_api.measure()`에서 `h_min` 확정 직후
   `h_floor = agent_total × HUMAN_FLOOR_RATIO`(= 1/(1−SAVINGS_FLOOR) = 0.667)
   미만이면 바닥으로 올린다. 절감율 ≥ F ⇔ human ≥ agent/(1−F).
-- **투명성**: 바닥에 걸린 세션은 `human.raw_min`(실측 원값, `!= min`이면
-  바닥 적용) 보존, `notes`에 "절감율 하한 −50% 적용 — 분자 실측 X분 → 바닥 Y분".
+- **투명성**: 출력 필드는 늘리지 않는다. 바닥에 걸린 세션은 `notes`에 "절감율 하한 −50% 적용 — 분자 실측 X분 → 바닥 Y분".
   `SAVINGS_FLOOR=None`이면 끔. `speedup`도 바닥 적용된 `h_min` 기준(≥ 0.667).
 - **회귀**: 이 PC 67세션 중 바닥에 걸리는 세션 1(a8138f7a: 분자 실측 12.1분·agent 20.1분 → 절감율 −66% → −50%로 받침, 분자 13.4분). 나머지 66세션 수치 불변.
 
