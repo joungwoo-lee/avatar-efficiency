@@ -383,6 +383,52 @@ class TestTranscriptActual(unittest.TestCase):
         finally:
             os.unlink(p)
 
+    def test_background_wait_counted_like_foreground(self):
+        import json, tempfile, os
+        from transcript_actual import parse_actions
+        # §84: AI가 답을 끝낸 뒤 배경 서브에이전트/배경 명령을 기다리다
+        # <task-notification>으로 깨어난 대기는 포그라운드 도구 대기처럼
+        # AI 시간이다 — 같은 일을 배경으로 돌렸다고 분모가 줄면 안 된다.
+        # 상한은 포그라운드와 동일(10분): 6분 대기는 그대로, 10일 대기는 10분.
+        T = "2026-08-%02dT09:%02d:00.000Z"
+        notif = ("<task-notification>\n<task-id>a1</task-id>\n"
+                 "<status>completed</status>\n</task-notification>")
+        lines = [
+            {"type": "user", "timestamp": T % (3, 0),
+             "message": {"role": "user", "content": "서브에이전트 돌려 " * 20}},
+            {"type": "assistant", "timestamp": T % (3, 1),
+             "message": {"role": "assistant", "content": [
+                 {"type": "text", "text": "배경에서 돌립니다 " * 20}]}},
+            # 6분 뒤 배경 작업 완료 알림 → 6분은 AI 시간
+            {"type": "user", "timestamp": T % (3, 7),
+             "message": {"role": "user", "content": notif}},
+            {"type": "assistant", "timestamp": T % (3, 8),
+             "message": {"role": "assistant", "content": [
+                 {"type": "text", "text": "다른 것도 돌립니다 " * 20}]}},
+            # 10일 뒤 알림 → 상한 10분만
+            {"type": "user", "timestamp": T % (13, 8),
+             "message": {"role": "user", "content": notif}},
+            {"type": "assistant", "timestamp": T % (13, 9),
+             "message": {"role": "assistant", "content": [
+                 {"type": "text", "text": "끝났습니다 " * 20}]}},
+        ]
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(json.dumps(ln, ensure_ascii=False) + chr(10))
+        try:
+            c = parse_actions(p)
+            # 1(지시→답) + 6(배경 대기) + 1(알림→답) + 10(상한) + 1(알림→답)
+            self.assertAlmostEqual(c["ai_wall_min"], 19.0, places=2)
+            self.assertEqual(c["bg_wait_events"], 2)
+            self.assertAlmostEqual(c["bg_wait_min"], 16.0, places=2)
+            self.assertAlmostEqual(c["bg_wait_cut_min"], 10 * 1440 - 10,
+                                   places=1)
+            # 알림은 사람 지시가 아니다 — hitl instruct 미계상
+            self.assertEqual(c["user_instructions"], 1)
+        finally:
+            os.unlink(p)
+
 
 
 class TestHitlCompact(unittest.TestCase):

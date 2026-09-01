@@ -127,6 +127,10 @@ agent_min = agent_human_min(사람 협업자의 에포트, hitl)
    명령 출력), 본선 파일에 섞인 병렬 기록(isSidechain). parse_actions가 전부
    제외한다. 실측: 자동 반복 대형 세션에서 이 오염이 "사용자 입력"의 93%,
    제거로 분모 1,160→766분 (CHANGELOG §17).
+   단, `<task-notification>`은 지시는 아니지만 **AI 시간의 경계는 아니다**
+   (§84): AI가 답을 끝낸 뒤 배경 서브에이전트·배경 명령을 기다린 시간(직전
+   AI 기록 → 알림)을 포그라운드 도구 대기와 같은 10분 상한으로 `ai_wall_min`에
+   넣는다. 감사용 `bg_wait_min`·`bg_wait_events`·`bg_wait_cut_min`.
 
 ## 한계 — 분자·분모 산정 체계 불일치 편향 (해석 주의)
 

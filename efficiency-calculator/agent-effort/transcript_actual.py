@@ -222,6 +222,12 @@ def parse_actions(jsonl_path, count_window=None):
               #  진짜 도구 실행 10분짜리들이 같이 날아간다.)
               # AI가 끝낸 뒤 다음 사람 발화까지는 사람 시간이라 제외.
               "ai_wall_min": 0.0, "ai_turns": 0,
+              # 배경작업 대기 (§84): AI가 답을 끝낸 뒤 배경 서브에이전트·
+              # 배경 명령이 돌다가 <task-notification>으로 깨운 경우, 직전 AI
+              # 기록 → 알림 간격을 포그라운드 tool_result와 같은 규칙(간격당
+              # _AI_GAP_CAP_SEC 상한)으로 ai_wall_min에 가산한다.
+              # bg_wait_min = 가산분, bg_wait_cut_min = 상한에 잘린 초과분.
+              "bg_wait_min": 0.0, "bg_wait_events": 0, "bg_wait_cut_min": 0.0,
               # 세션 러닝타임 (§64): 첫 기록 ~ 마지막 기록. 초소형 세션
               # 제외 판정에 쓴다 — 5분 안에 끝난 세션은 측정 가치가 없다.
               "session_span_min": 0.0,
@@ -364,6 +370,28 @@ def parse_actions(jsonl_path, count_window=None):
             # 알림이 몇 시간 뒤에 와도 그 대기가 AI 시간에 들어간다.
             if not any(isinstance(b, dict) and b.get("type") == "tool_result"
                        for b in blocks):
+                # §84 배경작업 알림(<task-notification>)은 예외 — 포그라운드
+                # tool_result처럼 센다. 배경 서브에이전트·배경 명령은 사람이
+                # 아니라 AI가 시킨 일이고 결과가 올 때까지 일은 안 끝난 것
+                # (사람 관점 벽시계)이므로, 같은 일을 배경으로 돌렸다고 분모가
+                # 줄면 안 된다. 상한은 포그라운드와 동일(_AI_GAP_CAP_SEC) —
+                # 초과분은 방치로 보고 bg_wait_cut_min에 감사용으로만 남긴다.
+                is_bg_notif = any(
+                    isinstance(b, dict) and b.get("type") == "text"
+                    and b.get("text", "").lstrip().startswith(
+                        "<task-notification")
+                    for b in blocks)
+                if (is_bg_notif and turn_start is not None and rec_t
+                        and turn_prev):
+                    gap = max(0.0, rec_t - turn_prev)
+                    if inw:
+                        add = min(gap, _AI_GAP_CAP_SEC) / 60
+                        counts["ai_wall_min"] += add
+                        counts["bg_wait_min"] += add
+                        counts["bg_wait_events"] += 1
+                        counts["bg_wait_cut_min"] += max(
+                            0.0, gap - _AI_GAP_CAP_SEC) / 60
+                    turn_prev = rec_t
                 if turn_start is not None and turn_prev is not None \
                         and turn_prev > turn_start:
                     if _inw(turn_start):
