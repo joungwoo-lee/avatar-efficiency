@@ -837,6 +837,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
     answer_t = []            # answers[i]의 시각
     final_answer_t = 0.0
     tool_report_t = 0.0
+    last_write_t = None      # 세션 마지막 산출물 쓰기 시각 (verify 귀속, §82)
     tool_calls_in = 0        # 구간 안 도구 호출 수
     search_calls_in = 0
     exec_calls_in = 0
@@ -1102,6 +1103,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                             pending_read[b["id"]] = (fp, region)
                     elif name == "Write":
                         edited_files.add(fp)
+                        last_write_t = rec_tw
                         write_seq.setdefault(fp, []).append(
                             ("write", "", inp.get("content") or "", b.get("id"),
                              rec_tw))
@@ -1110,6 +1112,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                         # 핵심 위치 증거는 Edit의 원문(old_string)만 (§26)
                     else:
                         edited_files.add(fp)
+                        last_write_t = rec_tw
                         multi = inp.get("edits")
                         pairs = ([(e.get("old_string") or "",
                                    e.get("new_string") or "")
@@ -1427,6 +1430,10 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
            "image_blocks": image_blocks_in,
            "sub_report_words": sub_report_w_in,
            "count_window": list(win) if win else None,   # §80
+           # §82: 마무리 verify 1건은 세션에 한 번 — 마지막 쓰기 시각이 구간 안일
+           # 때만 (구간을 나눠도 verify가 구간 수만큼 불지 않게)
+           "verify_here": (win is None or last_write_t is None
+                           or _inw(last_write_t)),
            # 채널 결산 (§59 규칙2) — 세션에서 나간/들어온 글이 어느 축으로
            # 갔는지 감사용. 어느 축에도 안 잡히는 양이 크면 구멍이다.
            "channels": {

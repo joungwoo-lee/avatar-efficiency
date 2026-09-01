@@ -553,7 +553,8 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
     ex = exec_item(stats, rates, humanize_act)   # 실행 4토막 (§59)
     if ex:
         items.append(ex)
-    if draft_w or edit_w:
+    if (draft_w or edit_w) and stats.get("verify_here", True):
+        # §82: 구간 측정에서는 세션 마지막 쓰기가 속한 구간에만 1건
         # 마무리 확인 1건 — 두 모드 공통 (§43). 초기 §39는 "기록에 대응
         # 행동 없음"이라며 로레코드에서 verify를 뺐는데, 그 결과 도구 호출이
         # 1~2회뿐인 소형 세션에서 궤적 천장이 바닥 자보다 낮아지는 모순이

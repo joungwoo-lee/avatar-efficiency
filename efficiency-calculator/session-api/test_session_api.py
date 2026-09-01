@@ -735,12 +735,12 @@ class TestWindowMeasure(unittest.TestCase):
             for k in ("instruct", "review"):
                 self.assertAlmostEqual(sum(hb(x)[k] for x in parts),
                                        hb(whole)[k], places=1, msg=k)
-            # 사람 시간: verify(구간마다 1건 하한)만 예외 → 그 몫 빼면 일치
-            vmin = lambda x: sum(b["minutes"] for b in x["human"]["breakdown"]
+            # 사람 시간 전체 일치 — verify도 세션에 1번(마지막 쓰기 구간, §82)
+            self.assertAlmostEqual(sum(x["human"]["min"] for x in parts),
+                                   whole["human"]["min"], places=0)
+            vcnt = lambda x: sum(1 for b in x["human"]["breakdown"]
                                  if b["primitive"] == "verify")
-            self.assertAlmostEqual(
-                sum(x["human"]["min"] - vmin(x) for x in parts),
-                whole["human"]["min"] - vmin(whole), places=0)
+            self.assertEqual([vcnt(x) for x in parts], [0, 0, 1])
             for x in parts:
                 self.assertIn("window", x)
         finally:
