@@ -127,6 +127,56 @@ def test_unknown_model_flagged():
     print("ok unknown_model_flagged")
 
 
+def test_synthetic_excluded_from_counts_any_id_format():
+    """<synthetic> 레코드: message.id 가 UUID 든 '<synthetic>' 문자열이든 호출 수에서 제외.
+    by_provider['free'] 에만 남고 달러는 불변. 구버전 포맷(cache_creation 딕트 없음) 혼합."""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        sid = "aaaaaaaa-0000-0000-0000-000000000001"
+        real = _rec("m1", "claude-opus-5", out=1_000_000)          # $25
+        syn_uuid = _rec("11f89a78-d2a6-4c3e-9a1b-000000000001", "<synthetic>")
+        syn_uuid["version"] = "2.1.152"
+        del syn_uuid["message"]["usage"]["cache_creation"]           # 구버전 스키마
+        syn_uuid["message"]["usage"]["cache_creation_input_tokens"] = 0
+        syn_lit = _rec("<synthetic>", "<synthetic>")
+        syn_lit["version"] = "2.1.252"
+        real["version"] = "2.1.226"
+        _write(root / "C--proj", sid + ".jsonl", [real, syn_uuid, syn_lit, syn_lit])
+        d = tc.session_cost(sid, projects_root=root)
+    assert d["total"]["calls"] == 1, d["total"]
+    assert d["main_agent"]["calls"] == 1
+    assert "<synthetic>" not in d["by_model"], d["by_model"]
+    assert d["by_provider"]["free"]["calls"] == 2       # uuid 1 + 문자열 id 는 dedupe 로 1
+    assert d["by_provider"]["free"]["cost_usd"] == 0.0
+    assert abs(d["trajectory_cost_usd"] - 25.0) < 1e-6
+    assert d["min_version"] == "2.1.152" and d["max_version"] == "2.1.252", (d["min_version"], d["max_version"])
+    print("ok synthetic_excluded_from_counts_any_id_format")
+
+
+def test_glm_is_onprem():
+    assert tc.classify_model("GLM-5.2-FP8", RATES) == "onprem"
+    assert tc.classify_model("zai-org/glm-4.5", RATES) == "onprem"
+    print("ok glm_is_onprem")
+
+
+def test_cache_creation_fallback_when_dict_all_zero():
+    """cache_creation 딕트가 있으나 전부 0 이고 최상위 cache_creation_input_tokens 만 있는 경우 -> 5m 로 계상."""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        sid = "bbbbbbbb-0000-0000-0000-000000000001"
+        r = _rec("c1", "claude-opus-5")
+        r["message"]["usage"]["cache_creation_input_tokens"] = 1_000_000
+        r["message"]["usage"]["cache_creation"] = {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0}
+        old = _rec("c2", "claude-opus-5")
+        old["message"]["usage"]["cache_creation_input_tokens"] = 1_000_000
+        del old["message"]["usage"]["cache_creation"]
+        _write(root / "C--proj", sid + ".jsonl", [r, old])
+        d = tc.session_cost(sid, projects_root=root)
+    assert d["total"]["cache_write_5m"] == 2_000_000, d["total"]
+    assert abs(d["trajectory_cost_usd"] - 12.5) < 1e-6, d["trajectory_cost_usd"]   # 6.25 x 2
+    print("ok cache_creation_fallback_when_dict_all_zero")
+
+
 if __name__ == "__main__":
     test_price_math()
     test_date_suffix_and_fast()
@@ -134,4 +184,7 @@ if __name__ == "__main__":
     test_dedupe_streaming_repeats()
     test_session_with_subagents_and_onprem()
     test_unknown_model_flagged()
+    test_synthetic_excluded_from_counts_any_id_format()
+    test_glm_is_onprem()
+    test_cache_creation_fallback_when_dict_all_zero()
     print("all tests passed")

@@ -30,6 +30,9 @@ python callsite_example.py <세션.jsonl 경로>
   (실측: usage 레코드 1804줄 = 실제 호출 867건. 안 하면 2배 넘게 부풀려짐)
 - 온프렘 모델은 비용 0 (토큰은 집계). 지정: `onprem_models=[...]` 인자,
   환경변수 `TRAJECTORY_ONPREM_MODELS`, 또는 `rates.json` 의 `onprem_patterns`
+- `<synthetic>` 등 `free_models` 레코드(실제 LLM 호출 아님)는 `by_provider["free"]` 에만 남기고
+  `total`/`main_agent`/`by_model` 호출 수에서 제외 (message.id 가 UUID 든 문자열이든 동일)
+- `min_version`/`max_version`: 세션 레코드의 Claude Code 버전 범위 (usage 포맷 드리프트 추적용)
 - 요율표는 `rates.json`. 코드에 숫자 없음
 
 ## 분해가 필요할 때

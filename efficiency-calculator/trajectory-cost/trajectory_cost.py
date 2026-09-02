@@ -5,6 +5,8 @@
 - 캐시 토큰은 write-5m 1.25x / write-1h 2.0x / read 0.1x 로 별도 단가 적용
 - message.id 기준 중복 제거 (스트리밍 중간 레코드 과대계상 방지)
 - 온프렘(사내 구축) 모델 호출은 provider="onprem" 으로 분리하고 비용 0
+- <synthetic> 등 free 모델 레코드(실제 LLM 호출 아님)는 by_provider["free"] 에만 남기고 호출 수 집계에서 제외
+- 레코드의 Claude Code 버전 범위(min_version/max_version)를 출력해 포맷 드리프트 추적
 
 지표 이름은 llm_cost_usd 대신 trajectory_cost_usd 로 두는 편이 정확하다.
 = "해당 trajectory 에서 관측 가능한 모델 호출 비용". Claude Code 내부 background
@@ -87,6 +89,7 @@ class Call:
     web_search_requests: int = 0
     web_fetch_requests: int = 0
     source: str = ""
+    version: str | None = None    # 레코드의 Claude Code 버전 (드리프트 추적용)
 
     @property
     def total_tokens(self) -> int:
@@ -135,7 +138,9 @@ def iter_calls(files: Iterable[Path]) -> Iterator[Call]:
                 cc = usage.get("cache_creation") or {}
                 w5 = int(cc.get("ephemeral_5m_input_tokens") or 0)
                 w1 = int(cc.get("ephemeral_1h_input_tokens") or 0)
-                if not cc:  # 구버전: 5m/1h 분리 없음 -> 전량 5m 로 간주
+                # 구버전(5m/1h 분리 없음) 또는 딕트는 있으나 전부 0 인데 최상위 값만 있는 경우
+                # -> 최상위 cache_creation_input_tokens 를 전량 5m 로 간주
+                if not cc or (w5 == 0 and w1 == 0):
                     w5 = int(usage.get("cache_creation_input_tokens") or 0)
                 stu = usage.get("server_tool_use") or {}
 
@@ -155,6 +160,7 @@ def iter_calls(files: Iterable[Path]) -> Iterator[Call]:
                     web_search_requests=int(stu.get("web_search_requests") or 0),
                     web_fetch_requests=int(stu.get("web_fetch_requests") or 0),
                     source=str(f),
+                    version=rec.get("version"),
                 )
 
 
@@ -235,6 +241,17 @@ class Bucket:
         return d
 
 
+def _ver_key(v: str) -> tuple:
+    return tuple(int(x) if x.isdigit() else x for x in re.split(r"[.\-+]", v))
+
+
+def _ver_min_max(versions: set[str]) -> tuple[str | None, str | None]:
+    if not versions:
+        return None, None
+    ordered = sorted(versions, key=_ver_key)
+    return ordered[0], ordered[-1]
+
+
 def session_cost(session: str | Path,
                  projects_root: Path | None = None,
                  rates: dict | None = None,
@@ -249,15 +266,22 @@ def session_cost(session: str | Path,
     by_agent: dict[str, Bucket] = {}
     by_provider: dict[str, Bucket] = {}
     unknown_models: set[str] = set()
+    versions: set[str] = set()
 
     for c in calls:
+        if c.version:
+            versions.add(str(c.version))
         usd, provider = call_cost(c, rates, onprem_models)
         if provider == "unknown":
             unknown_models.add(c.model)
+        by_provider.setdefault(provider, Bucket()).add(c, usd)
+        if provider == "free":
+            # <synthetic> 등 실제 LLM 호출이 아닌 레코드: by_provider["free"] 에만 남기고
+            # total/main/subagents/by_model/by_agent 카운트에서는 제외
+            continue
         total.add(c, usd)
         (sub if (c.is_sidechain or c.agent_id) else main).add(c, usd)
         by_model.setdefault(c.model or "(none)", Bucket()).add(c, usd)
-        by_provider.setdefault(provider, Bucket()).add(c, usd)
         akey = (c.agent_type or "agent") + ":" + c.agent_id if c.agent_id else "main"
         by_agent.setdefault(akey, Bucket()).add(c, usd)
 
@@ -265,6 +289,8 @@ def session_cost(session: str | Path,
         "session_id": Path(files[0]).stem,
         "files": [str(f) for f in files],
         "subagent_files": len(files) - 1,
+        "min_version": _ver_min_max(versions)[0],
+        "max_version": _ver_min_max(versions)[1],
         "trajectory_cost_usd": round(total.cost_usd, 6),
         "total": total.as_dict(),
         "main_agent": main.as_dict(),

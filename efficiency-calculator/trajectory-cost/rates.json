@@ -63,7 +63,7 @@
   "onprem_patterns": [
     "^onprem/", "^local/", "^ollama/", "^vllm/", "^lmstudio/", "^sglang/", "^tgi/", "^hf/",
     "qwen", "llama", "mistral", "mixtral", "gemma", "phi-", "deepseek", "gpt-oss",
-    "exaone", "solar", "hyperclova", "kanana", "midm", "polyglot"
+    "glm", "exaone", "solar", "hyperclova", "kanana", "midm", "polyglot"
   ],
   "free_models": ["<synthetic>"]
 }
