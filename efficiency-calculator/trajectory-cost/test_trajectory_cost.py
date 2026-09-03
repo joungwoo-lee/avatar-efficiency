@@ -177,6 +177,78 @@ def test_cache_creation_fallback_when_dict_all_zero():
     print("ok cache_creation_fallback_when_dict_all_zero")
 
 
+def test_window_range():
+    """§80 구간: [start, end] 닫힌 구간, 시각 없는 레코드는 직전 시각 상속,
+    서브에이전트도 같은 구간, 구간 나눠 더하면 전체와 같음(가산성)."""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        sid = "cccccccc-0000-0000-0000-000000000001"
+        proj = root / "C--proj"
+        # 10:00 $25 / 11:00 $25 / (시각없음→11:00 상속) $25 / 12:00 $25
+        r1 = _rec("w1", "claude-opus-5", out=1_000_000); r1["timestamp"] = "2026-09-03T10:00:00+09:00"
+        r2 = _rec("w2", "claude-opus-5", out=1_000_000); r2["timestamp"] = "2026-09-03T11:00:00+09:00"
+        r3 = _rec("w3", "claude-opus-5", out=1_000_000)                     # timestamp 없음
+        r4 = _rec("w4", "claude-opus-5", out=1_000_000); r4["timestamp"] = "2026-09-03T12:00:00+09:00"
+        # 스트리밍 중복: w2 의 앞 조각(토큰 작음)이 다른 시각에 기록돼도 dedupe 후 1건
+        r2dup = _rec("w2", "claude-opus-5", out=10); r2dup["timestamp"] = "2026-09-03T10:59:50+09:00"
+        _write(proj, sid + ".jsonl", [r1, r2dup, r2, r3, r4])
+        # 서브에이전트 11:30 $10 (sonnet)
+        s1 = _rec("s1", "claude-sonnet-5", out=1_000_000,
+                  agent_id="abc", agent_type="general-purpose", sidechain=True)
+        s1["timestamp"] = "2026-09-03T11:30:00+09:00"
+        _write(proj / sid / "subagents", "agent-abc.jsonl", [s1])
+
+        full = tc.session_cost(sid, projects_root=root)
+        assert abs(full["trajectory_cost_usd"] - 110.0) < 1e-6, full["trajectory_cost_usd"]
+        assert full["window"] is None
+        assert full["first_ts"] < full["last_ts"]
+
+        # ISO(tz 포함) 구간 [11:00, 11:59]: w2 + w3(상속) + s1 = 25+25+10
+        a = tc.session_cost(sid, projects_root=root,
+                            window=("2026-09-03T11:00:00+09:00", "2026-09-03T11:59:00+09:00"))
+        assert abs(a["trajectory_cost_usd"] - 60.0) < 1e-6, a["trajectory_cost_usd"]
+        assert a["window"]["calls_in"] == 3 and a["window"]["calls_out"] == 2, a["window"]
+        assert a["subagents"]["cost_usd"] == 10.0
+
+        # 닫힌 구간: end == 12:00 정각이면 w4 포함
+        b = tc.session_cost(sid, projects_root=root,
+                            window=("2026-09-03T12:00:00+09:00", "2026-09-03T12:00:00+09:00"))
+        assert abs(b["trajectory_cost_usd"] - 25.0) < 1e-6
+
+        # epoch 초 + --to 생략(끝까지) / --from 생략(처음부터)
+        t11 = tc.parse_time("2026-09-03T11:00:00+09:00")
+        c = tc.session_cost(sid, projects_root=root, window=(t11, None))
+        assert abs(c["trajectory_cost_usd"] - 85.0) < 1e-6, c["trajectory_cost_usd"]
+        d = tc.session_cost_usd(sid, projects_root=root, window=(None, t11 - 1))
+        assert abs(d - 25.0) < 1e-6, d
+
+        # 가산성: 앞 구간 + 뒤 구간 = 전체
+        assert abs(c["trajectory_cost_usd"] + d - full["trajectory_cost_usd"]) < 1e-6
+
+        # (None, None) 은 전체와 동일
+        assert tc.session_cost_usd(sid, projects_root=root, window=(None, None)) == full["trajectory_cost_usd"]
+
+        # start > end 는 오류
+        try:
+            tc.session_cost(sid, projects_root=root, window=(t11, t11 - 1))
+            assert False, "expected ValueError"
+        except ValueError:
+            pass
+
+        # CLI --from/--to --json
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            tc.main([str(proj / (sid + ".jsonl")), "--json",
+                     "--from", "2026-09-03T11:00:00+09:00", "--to", "2026-09-03T11:59:00+09:00"])
+        assert abs(json.loads(buf.getvalue())["trajectory_cost_usd"] - 60.0) < 1e-6
+
+        # --project 에도 구간 적용
+        pc = tc.project_cost(proj, window=(t11, None))
+        assert abs(pc["trajectory_cost_usd"] - 85.0) < 1e-6 and pc["window"]["start"] == t11
+    print("ok window_range")
+
+
 if __name__ == "__main__":
     test_price_math()
     test_date_suffix_and_fast()
@@ -187,4 +259,5 @@ if __name__ == "__main__":
     test_synthetic_excluded_from_counts_any_id_format()
     test_glm_is_onprem()
     test_cache_creation_fallback_when_dict_all_zero()
+    test_window_range()
     print("all tests passed")

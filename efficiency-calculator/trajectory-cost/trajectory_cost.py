@@ -7,10 +7,21 @@
 - 온프렘(사내 구축) 모델 호출은 provider="onprem" 으로 분리하고 비용 0
 - <synthetic> 등 free 모델 레코드(실제 LLM 호출 아님)는 by_provider["free"] 에만 남기고 호출 수 집계에서 제외
 - 레코드의 Claude Code 버전 범위(min_version/max_version)를 출력해 포맷 드리프트 추적
+- 구간 계산: session_cost(..., window=(start, end)) / CLI --from A --to B
+  (record_actions_code_api.py §80 과 같은 규약)
 
 지표 이름은 llm_cost_usd 대신 trajectory_cost_usd 로 두는 편이 정확하다.
 = "해당 trajectory 에서 관측 가능한 모델 호출 비용". Claude Code 내부 background
 호출(제목 생성 등) 일부는 JSONL 에 남지 않아 /usage 값과 소폭 차이가 날 수 있다.
+
+구간 계산 (§80 규약과 동일):
+    window=(start, end) — 호출 레코드의 timestamp 가 닫힌 구간 [start, end] 안인
+    호출만 합산. start/end 는 epoch 초 또는 ISO 8601 문자열(tz 없는 ISO 는 로컬
+    시각). start 생략(None)=0, end 생략(None)=무한. 시각 없는 레코드는 같은
+    파일의 직전 시각을 물려받는다(맨 앞이면 0). 서브에이전트 파일도 같은
+    구간으로 거른다. 비용은 판정이 없는 순수 합산이므로 as_of 는 필요 없다
+    (as_of=T 는 window=(0, T) 와 같다). 가산성: 구간을 나눠 더하면 전체와 같다
+    (중복 제거는 구간 자르기 전에 한다).
 """
 
 from __future__ import annotations
@@ -19,6 +30,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -34,6 +46,62 @@ _DATE_SUFFIX = re.compile(r"-\d{8}$")
 def load_rates(path: Path | str | None = None) -> dict:
     with open(path or RATES_PATH, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+# --------------------------------------------------------------------------
+# 시각 / 구간 (record_actions_code_api.py §80 과 같은 규약)
+# --------------------------------------------------------------------------
+
+def _ts_epoch(x) -> float | None:
+    """레코드 ISO 타임스탬프 → epoch 초 (없거나 깨지면 None)."""
+    if not x:
+        return None
+    try:
+        return datetime.fromisoformat(str(x).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+def parse_time(x) -> float | None:
+    """CLI/API 시각 인자 → epoch 초. 숫자(문자열 포함)는 epoch, ISO 8601 은
+    파싱(tz 없으면 로컬 시각으로 해석). None 은 None."""
+    if x is None:
+        return None
+    if isinstance(x, (int, float)):
+        return float(x)
+    s = str(x).strip()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.astimezone()          # 로컬 시각으로 해석
+    return dt.timestamp()
+
+
+def normalize_window(window) -> tuple[float, float] | None:
+    """(start, end) 인자 → (epoch, epoch). None/(None, None) 은 None(전체).
+    start 생략=0, end 생략=inf. start > end 면 ValueError."""
+    if window is None:
+        return None
+    start, end = window
+    start = parse_time(start)
+    end = parse_time(end)
+    if start is None and end is None:
+        return None
+    start = 0.0 if start is None else start
+    end = float("inf") if end is None else end
+    if start > end:
+        raise ValueError("window start > end: (%r, %r)" % (start, end))
+    return start, end
+
+
+def in_window(ts: float | None, window: tuple[float, float] | None) -> bool:
+    """닫힌 구간 판정. 시각 없는 호출은 0 으로 본다(§80 과 동일)."""
+    return window is None or (window[0] <= (ts or 0.0) <= window[1])
 
 
 # --------------------------------------------------------------------------
@@ -90,6 +158,7 @@ class Call:
     web_fetch_requests: int = 0
     source: str = ""
     version: str | None = None    # 레코드의 Claude Code 버전 (드리프트 추적용)
+    timestamp: float | None = None  # 레코드 시각 epoch 초 (없으면 직전 시각 상속, 맨 앞이면 None)
 
     @property
     def total_tokens(self) -> int:
@@ -119,6 +188,7 @@ def transcript_files(session: str | Path, projects_root: Path | None = None) -> 
 
 def iter_calls(files: Iterable[Path]) -> Iterator[Call]:
     for f in files:
+        last_ts: float | None = None   # 시각 없는 레코드는 같은 파일의 직전 시각 상속
         with open(f, encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 line = line.strip()
@@ -128,6 +198,12 @@ def iter_calls(files: Iterable[Path]) -> Iterator[Call]:
                     rec = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(rec, dict):
+                    continue
+                ts = _ts_epoch(rec.get("timestamp"))
+                if ts is None:
+                    ts = last_ts
+                last_ts = ts
                 msg = rec.get("message")
                 if not isinstance(msg, dict):
                     continue
@@ -161,6 +237,7 @@ def iter_calls(files: Iterable[Path]) -> Iterator[Call]:
                     web_fetch_requests=int(stu.get("web_fetch_requests") or 0),
                     source=str(f),
                     version=rec.get("version"),
+                    timestamp=ts,
                 )
 
 
@@ -255,11 +332,18 @@ def _ver_min_max(versions: set[str]) -> tuple[str | None, str | None]:
 def session_cost(session: str | Path,
                  projects_root: Path | None = None,
                  rates: dict | None = None,
-                 onprem_models: Iterable[str] = ()) -> dict[str, Any]:
-    """세션 1건의 trajectory 비용. 부모 + 서브에이전트 전부 포함."""
+                 onprem_models: Iterable[str] = (),
+                 window=None) -> dict[str, Any]:
+    """세션 1건의 trajectory 비용. 부모 + 서브에이전트 전부 포함.
+
+    window=(start, end): §80 구간 계산 — 호출 시각이 [start, end] 안인 것만
+    합산(모듈 docstring). epoch 초 또는 ISO 8601. None 이면 전체."""
     rates = rates or load_rates()
     files = transcript_files(session, projects_root)
-    calls = dedupe(iter_calls(files))
+    win = normalize_window(window)
+    all_calls = dedupe(iter_calls(files))       # 중복 제거는 구간 자르기 전에
+    calls = [c for c in all_calls if in_window(c.timestamp, win)]
+    stamped = [c.timestamp for c in all_calls if c.timestamp is not None]
 
     total, main, sub = Bucket(), Bucket(), Bucket()
     by_model: dict[str, Bucket] = {}
@@ -291,6 +375,13 @@ def session_cost(session: str | Path,
         "subagent_files": len(files) - 1,
         "min_version": _ver_min_max(versions)[0],
         "max_version": _ver_min_max(versions)[1],
+        "first_ts": min(stamped) if stamped else None,   # 세션 전체(구간 무관) 시각 범위
+        "last_ts": max(stamped) if stamped else None,
+        "window": (
+            {"start": win[0], "end": (None if win[1] == float("inf") else win[1]),
+             "calls_in": len(calls), "calls_out": len(all_calls) - len(calls)}
+            if win else None
+        ),
         "trajectory_cost_usd": round(total.cost_usd, 6),
         "total": total.as_dict(),
         "main_agent": main.as_dict(),
@@ -308,35 +399,59 @@ def session_cost(session: str | Path,
 
 def session_cost_usd(session: str | Path,
                      projects_root: Path | None = None,
-                     onprem_models: Iterable[str] = ()) -> float:
+                     onprem_models: Iterable[str] = (),
+                     window=None) -> float:
     """세션 ID 또는 트랜스크립트 .jsonl 경로 -> 달러(float) 한 개.
 
     서브에이전트 포함, 온프렘 모델 호출은 0원. 분해가 필요하면 session_cost() 를 쓴다.
+    window=(start, end) 를 주면 그 구간의 달러만 (§80, 모듈 docstring).
     """
     return session_cost(session, projects_root=projects_root,
-                        onprem_models=onprem_models)["trajectory_cost_usd"]
+                        onprem_models=onprem_models, window=window)["trajectory_cost_usd"]
 
 
 def project_cost(project_dir: str | Path,
                  rates: dict | None = None,
-                 onprem_models: Iterable[str] = ()) -> dict[str, Any]:
-    """프로젝트 폴더의 모든 세션 합계."""
+                 onprem_models: Iterable[str] = (),
+                 window=None) -> dict[str, Any]:
+    """프로젝트 폴더의 모든 세션 합계. window 는 각 세션에 같은 구간 적용."""
     rates = rates or load_rates()
     pdir = Path(project_dir)
-    sessions = [session_cost(f, rates=rates, onprem_models=onprem_models)
+    win = normalize_window(window)
+    sessions = [session_cost(f, rates=rates, onprem_models=onprem_models, window=win)
                 for f in sorted(pdir.glob("*.jsonl"))]
     return {
         "project_dir": str(pdir),
         "sessions": len(sessions),
+        "window": ({"start": win[0], "end": (None if win[1] == float("inf") else win[1])}
+                   if win else None),
         "trajectory_cost_usd": round(sum(s["trajectory_cost_usd"] for s in sessions), 6),
         "detail": sessions,
     }
+
+
+def _iso(ts: float | None) -> str:
+    if ts is None:
+        return "-"
+    try:
+        return datetime.fromtimestamp(ts).astimezone().isoformat(timespec="seconds")
+    except (OSError, OverflowError, ValueError):   # Windows: epoch 0 근처·음수 불가
+        return str(ts)
 
 
 def _fmt(d: dict) -> str:
     t = d["total"]
     lines = [
         "session %s  (서브에이전트 파일 %d개)" % (d["session_id"], d["subagent_files"]),
+        "  기록 범위        %s ~ %s" % (_iso(d.get("first_ts")), _iso(d.get("last_ts"))),
+    ]
+    w = d.get("window")
+    if w:
+        lines.append("  구간             %s ~ %s  (안 %d calls / 밖 %d calls)"
+                     % (_iso(w["start"]) if w["start"] > 0 else "처음",
+                        _iso(w["end"]) if w["end"] is not None else "끝",
+                        w["calls_in"], w["calls_out"]))
+    lines += [
         "  비용 합계        $%.4f" % d["trajectory_cost_usd"],
         "    메인 에이전트  $%.4f  (%d calls)" % (d["main_agent"]["cost_usd"], d["main_agent"]["calls"]),
         "    서브에이전트   $%.4f  (%d calls)" % (d["subagents"]["cost_usd"], d["subagents"]["calls"]),
@@ -367,10 +482,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", action="store_true", help="JSON 출력")
     ap.add_argument("--onprem-model", action="append", default=[],
                     help="온프렘 모델 ID (반복 가능, 비용 0 처리)")
+    ap.add_argument("--from", dest="from_", metavar="A", default=None,
+                    help="구간 시작 (ISO 8601 또는 epoch 초, tz 없으면 로컬). 생략=기록 처음")
+    ap.add_argument("--to", dest="to", metavar="B", default=None,
+                    help="구간 끝 (ISO 8601 또는 epoch 초). 생략=기록 끝")
     a = ap.parse_args(argv)
 
+    window = (a.from_, a.to) if (a.from_ is not None or a.to is not None) else None
+    try:
+        normalize_window(window)
+    except ValueError as e:
+        ap.error(str(e))
+
     if a.project:
-        out = project_cost(a.session, onprem_models=a.onprem_model)
+        out = project_cost(a.session, onprem_models=a.onprem_model, window=window)
         if a.json:
             print(json.dumps(out, ensure_ascii=False, indent=2))
         else:
@@ -379,7 +504,7 @@ def main(argv: list[str] | None = None) -> int:
                 print("  %s  $%.4f" % (s["session_id"], s["trajectory_cost_usd"]))
         return 0
 
-    out = session_cost(a.session, onprem_models=a.onprem_model)
+    out = session_cost(a.session, onprem_models=a.onprem_model, window=window)
     print(json.dumps(out, ensure_ascii=False, indent=2) if a.json else _fmt(out))
     return 0
 

@@ -22,14 +22,17 @@
       그리고 파일 아무 데나 (measure 위) 헬퍼 하나 — 트랜스크립트가 없는 세션에서
       측정 전체가 죽지 않게 감싼다:
 
-    +   def _cost_usd(jsonl_path):
+    +   def _cost_usd(jsonl_path, window=None):
     +       try:
-    +           return session_cost_usd(jsonl_path)
+    +           return session_cost_usd(jsonl_path, window=window)
     +       except (FileNotFoundError, OSError):
     +           return None
 
+      measure() 에 window=(A, B) (§80 구간)를 줬다면 같은 구간을 비용에도 넘긴다:
+            "trajectory_cost_usd": _cost_usd(jsonl_path, window=window),
+
 이 파일은 원본을 고치지 않고 같은 결과를 만들어 보여준다.
-실행: python callsite_example.py <세션.jsonl 경로>
+실행: python callsite_example.py <세션.jsonl 경로> [--from A] [--to B]
 """
 import sys
 from pathlib import Path
@@ -43,17 +46,18 @@ from record_actions_code_api import measure          # noqa: E402
 from trajectory_cost import session_cost_usd         # noqa: E402  ← (1) 임포트
 
 
-def _cost_usd(jsonl_path):
-    """트랜스크립트가 없으면 None. 비용 때문에 측정이 죽지 않게."""
+def _cost_usd(jsonl_path, window=None):
+    """트랜스크립트가 없으면 None. 비용 때문에 측정이 죽지 않게.
+    window=(A, B): measure() 의 §80 구간을 그대로 비용에도 적용."""
     try:
-        return session_cost_usd(jsonl_path)
+        return session_cost_usd(jsonl_path, window=window)
     except (FileNotFoundError, OSError):
         return None
 
 
 def measure_with_cost(jsonl_path, **kw):
     r = measure(jsonl_path, **kw)
-    r["trajectory_cost_usd"] = _cost_usd(jsonl_path)   # ← (2) 호출
+    r["trajectory_cost_usd"] = _cost_usd(jsonl_path, window=kw.get("window"))   # ← (2) 호출
     return r
 
 
@@ -63,7 +67,15 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    r = measure_with_cost(sys.argv[1])
+    args = sys.argv[1:]
+    opts = {}
+    for k in ("--from", "--to"):
+        if k in args:
+            i = args.index(k)
+            opts[k] = args[i + 1]
+            del args[i:i + 2]
+    window = (opts.get("--from"), opts.get("--to")) if opts else None
+    r = measure_with_cost(args[0], window=window)
     print("세션      : %s" % r["session"])
     print("사람 시간 : %s 분" % r["human"]["min"])
     print("기계 시간 : %s 분" % r["agent"]["machine_min"])

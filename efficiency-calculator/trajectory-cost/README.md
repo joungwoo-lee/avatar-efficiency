@@ -11,7 +11,28 @@ usd = session_cost_usd(r"C:\Users\joung\.claude\projects\C--proj\<세션ID>.json
 
 세션 ID 만 넘겨도 된다: `session_cost_usd("1b131c75-92b4-...")`
 
-CLI: `python trajectory_cost.py <경로 또는 세션ID>`
+CLI: `python trajectory_cost.py <경로 또는 세션ID> [--from A] [--to B] [--json] [--project]`
+
+## 구간 계산 (`record_actions_code_api.py` 의 `--from/--to` 와 같은 규약)
+
+```python
+usd = session_cost_usd(path, window=("2026-09-03T11:00", "2026-09-03T12:00"))
+usd = session_cost_usd(path, window=(1756873200, None))     # epoch 초, 끝까지
+d = session_cost(path, window=(None, "2026-09-03T12:00:00+09:00"))   # 처음부터
+d["window"]   # {"start", "end", "calls_in", "calls_out"}  (구간 없으면 None)
+d["first_ts"], d["last_ts"]   # 세션 전체 기록 시각 범위 (epoch 초)
+```
+
+```bash
+python trajectory_cost.py <세션.jsonl> --from "2026-09-03T11:00" --to "2026-09-03T12:00"
+python trajectory_cost.py <프로젝트 폴더> --project --from 1756873200
+```
+
+- 호출 레코드의 `timestamp` 가 닫힌 구간 `[A, B]` 안인 호출만 달러로 합산
+- `A`/`B` 는 epoch 초 또는 ISO 8601 (tz 없는 ISO 는 로컬 시각). 한쪽 생략 가능
+- 시각 없는 레코드는 같은 파일의 직전 시각을 물려받음. 서브에이전트 파일도 같은 구간으로 거름
+- 중복 제거(`message.id`)를 먼저 하고 구간을 자르므로, 구간을 나눠 더하면 전체와 같다
+- 비용은 뒤 기록에 따라 달라지는 판정이 없어 `--as-of` 는 없다 (`--to B` 가 그 역할)
 
 `record_actions_code_api.py` 에 붙이는 호출부 예시(임포트·호출 넣을 자리 표시):
 `callsite_example.py` — 원본을 고치지 않고 그대로 실행해 확인할 수 있다.
