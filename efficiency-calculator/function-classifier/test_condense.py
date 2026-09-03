@@ -115,6 +115,39 @@ def real():
         print(f"{Path(f).stem[-6:]:8} {s['orig_bytes']/1e6:7.2f}MB {s['ratio']*100:6.2f}% {s['out_chars']//1000:5d}k {s['est_tokens']//1000:6d}k {s['assistant_cap']} {s['over_budget']}")
 
 
+def test_summarize_match():
+    from summarize_match import summarize_match, inspect_claude, child_env, _normalize as _nm
+    # PID 검사: 자기 자신(python)으로 PEB/proc 읽기 검증
+    info = inspect_claude(os.getpid())
+    assert info["cwd"].rstrip("\/").lower() == os.getcwd().rstrip("\/").lower(), (info["cwd"], os.getcwd())
+    assert "PATH" in info["env"] or "Path" in info["env"]
+    assert info["config_dir"]
+    e = child_env({"CLAUDECODE": "1", "ANTHROPIC_MODEL": "opus", "CLAUDE_CONFIG_DIR": "X", "PATH": "p"})
+    assert "CLAUDECODE" not in e and "ANTHROPIC_MODEL" not in e
+    assert e["CLAUDE_CONFIG_DIR"] == "X" and e["DISABLE_PROMPT_CACHING"] == "1"
+    # 매칭 정규화
+    org = json.load(open(Path(__file__).parent / "functions.example.json", encoding="utf-8"))
+    r = _nm({"summary": "s", "functions": {"sw개발": 50, "hw검증": 30, "엉뚱": 20}, "primary": "엉뚱",
+             "products": ["UART IP", "없는제품"]}, org)
+    assert r["functions"] == {"sw개발": 62, "hw검증": 38} and r["primary"] == "sw개발" and r["products"] == ["UART IP"]
+    # 전체 흐름(runner 주입, CLI 미호출)
+    p = _write([_rec("user", "uart 테스트벤치 만들어서 시뮬 돌려줘"),
+                _rec("assistant", [{"type": "text", "text": "uart_tb.sv 작성하고 시뮬 통과. " * 20},
+                                   {"type": "tool_use", "name": "Write", "input": {"file_path": "C:/p/rtl/uart_tb.sv"}}])])
+    cpath = p + ".c.json"
+    json.dump(condense(p), open(cpath, "w", encoding="utf-8"), ensure_ascii=False)
+    seen = {}
+    def runner(prompt):
+        seen["prompt"] = prompt
+        return '{"summary":"UART 테스트벤치 작성·시뮬","functions":{"hw검증":80,"hw설계":20},"primary":"hw검증","products":["UART IP"],"evidence":"exts sv"}'
+    r = summarize_match(os.getpid(), cpath, Path(__file__).parent / "functions.example.json", runner=runner)
+    assert "- hw검증:" in seen["prompt"] and "uart 테스트벤치" in seen["prompt"] and "## META" in seen["prompt"]
+    assert r["primary"] == "hw검증" and r["products"] == ["UART IP"] and r["meta"]["model"] == "haiku"
+    assert r["meta"]["no_session_persistence"] and r["meta"]["prompt_caching_disabled"]
+    os.remove(p); os.remove(cpath)
+    print("test_summarize_match OK")
+
+
 if __name__ == "__main__":
     if "--real" in sys.argv:
         real()
@@ -122,3 +155,4 @@ if __name__ == "__main__":
         test_basic()
         test_window()
         test_normalize()
+        test_summarize_match()

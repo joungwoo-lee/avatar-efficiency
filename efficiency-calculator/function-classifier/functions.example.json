@@ -1,0 +1,18 @@
+{
+  "org": "SoC 개발팀 (예시)",
+  "functions": [
+    {"name": "sw개발", "desc": "펌웨어·드라이버·툴·스크립트 구현, 버그 수정"},
+    {"name": "sw검증", "desc": "테스트 작성·실행, 회귀, 커버리지, 결함 분석"},
+    {"name": "hw설계", "desc": "RTL(Verilog/SystemVerilog) 설계, 합성, 타이밍"},
+    {"name": "hw검증", "desc": "테스트벤치, 시뮬레이션, UVM, 파형 분석"},
+    {"name": "문서작성", "desc": "설계서·보고서·논문·발표자료 작성"},
+    {"name": "데이터분석", "desc": "실험 결과 집계, 통계, 시각화"},
+    {"name": "인프라운영", "desc": "빌드/CI, 서버·게이트웨이·환경 설정, 재시작, 배포"}
+  ],
+  "products": [
+    {"name": "agent-gateway", "desc": "메신저·web-ui 에이전트 게이트웨이"},
+    {"name": "avatar-efficiency", "desc": "AI 효율 측정 계산기"},
+    {"name": "EPWM", "desc": "PDDL 심볼릭 월드모델 프레임웍"},
+    {"name": "UART IP", "desc": "UART 컨트롤러 RTL"}
+  ]
+}

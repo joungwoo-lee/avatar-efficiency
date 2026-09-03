@@ -33,9 +33,43 @@ python condense.py session.jsonl              # JSON 출력 (구조체)
 python condense.py session.jsonl --text       # LLM 투입 텍스트 그대로
 python condense.py session.jsonl --from A --to B   # 구간
 python classify.py session.jsonl "sw개발,sw검증,hw설계"   # 프롬프트만 출력(LLM 미호출)
-python test_condense.py                       # 단위 테스트
+python test_condense.py                       # 단위 테스트 (summarize_match는 runner 주입, CLI 미호출)
 python test_condense.py --real                # ~/.claude/projects 실파일 감량률
 ```
+
+## 하이쿠 서머리+매칭 (summarize_match.py) — 호출한 클로드 설정 그대로
+
+```bash
+python summarize_match.py --pid <claude PID> --condensed c.json --functions org.json [--out r.json]
+python summarize_match.py --pid <PID> --transcript session.jsonl --functions org.json [--from A --to B]
+```
+```python
+from summarize_match import summarize_match
+r = summarize_match(pid, "c.json", "functions.example.json")
+# {"summary": "...", "functions": {"hw검증": 80, "hw설계": 20}, "primary": "hw검증",
+#  "products": ["UART IP"], "evidence": "...", "meta": {"exe", "cwd", "config_dir", "usage", ...}}
+```
+
+| 보장 | 방법 | 실기동 검증(2026-09-04) |
+|---|---|---|
+| 그 클로드의 설정 | PID → 실행파일(WMI)·cwd·환경변수(PEB 메모리 읽기, Linux는 /proc) 상속. CLAUDE_CONFIG_DIR·ANTHROPIC_* 그대로, 중첩 세션 마커만 제거 | exe·config_dir 정확 |
+| 하이쿠 | `--model haiku`, 상위 세션 `ANTHROPIC_MODEL` 제거 | claude-haiku-4-5 |
+| 트랜스크립트 안 만듦 | `--no-session-persistence` | ~/.claude/projects jsonl 1344 → 1344 |
+| 캐시 안 씀 | `DISABLE_PROMPT_CACHING=1` | cache_creation 0 / cache_read 0 |
+| 부수효과 없음 | `--tools ""` `--strict-mcp-config` `--setting-sources user`(프로젝트 훅 무시) | |
+| 토큰 절감 | `--system-prompt` 한 줄, `--effort low`, `MAX_THINKING_TOKENS=0` | 아래 표 |
+
+| 설정 | 입력 | 출력(thinking) | 비용 | 시간 |
+|---|---|---|---|---|
+| 기본 -p | 14.8k | 5.9k (5.6k) | $0.046 | 57s |
+| + 시스템프롬프트 한 줄 + effort low | 8.2k | 4.5k (4.2k) | $0.033 | 44s |
+| + MAX_THINKING_TOKENS=0 | 8.2k | 0.3k (0) | $0.012 | 4.7s |
+
+전처리본 0.5k 토큰 기준. 남은 입력 8k는 CLI 고정 부담(전처리본 크기와 무관). 캐시 미사용은 환경변수로
+클라이언트가 안 요청하는 것이고, 서버 측 적중까지 막는다는 보장은 없다.
+
+펑션 파일(`functions.example.json`): `{"org", "functions": [{"name","desc"}], "products": [{"name","desc"}]}`.
+출력의 functions 키·products 이름은 파일에 있는 것만 남기고(`기타` 허용) 합계 100 보정.
 
 ## 전처리 규칙 (condense)
 
