@@ -8,12 +8,15 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from condense import condense, render, estimate_tokens  # noqa: E402
+from condense import condense, render, estimate_tokens, parse_time  # noqa: E402
 from classify import build_prompt, _normalize  # noqa: E402
 
 
 def _rec(rtype, content, ts="2026-01-01T00:00:00Z"):
-    return json.dumps({"type": rtype, "timestamp": ts, "message": {"role": rtype, "content": content}}, ensure_ascii=False)
+    d = {"type": rtype, "message": {"role": rtype, "content": content}}
+    if ts:
+        d["timestamp"] = ts
+    return json.dumps(d, ensure_ascii=False)
 
 
 def _write(lines):
@@ -62,6 +65,36 @@ def test_basic():
     print("test_basic OK")
 
 
+def test_window():
+    lines = [
+        _rec("user", "첫 번째 업무: 파서 버그 고쳐줘", ts="2026-09-03T02:00:00Z"),
+        _rec("assistant", [{"type": "text", "text": "파서 고침. " * 40},
+                           {"type": "tool_use", "name": "Edit", "input": {"file_path": "C:/p/src/parser.py"}}], ts="2026-09-03T02:10:00Z"),
+        _rec("assistant", [{"type": "text", "text": "시각 없는 레코드는 직전 시각 상속 " * 20}], ts=None),
+        _rec("user", "두 번째 업무: 회로도 검토해줘", ts="2026-09-03T05:00:00Z"),
+        _rec("assistant", [{"type": "text", "text": "회로도 검토 완료. " * 40},
+                           {"type": "tool_use", "name": "Read", "input": {"file_path": "C:/p/hw/top.sch"}}], ts="2026-09-03T05:10:00Z"),
+    ]
+    p = _write(lines)
+    full = condense(p)
+    a = condense(p, window=("2026-09-03T02:00:00Z", "2026-09-03T03:00:00Z"))
+    b = condense(p, window=(parse_time("2026-09-03T04:00:00Z"), None))
+    assert full["meta"]["window"] is None and full["meta"]["exts"] == {"py": 1, "sch": 1}
+    assert a["user"] == ["첫 번째 업무: 파서 버그 고쳐줘"] and a["meta"]["exts"] == {"py": 1}
+    assert len(a["assistant"]) == 2  # 시각 없는 레코드 → 직전 시각으로 구간 안
+    assert a["final"].startswith("시각 없는")
+    assert b["user"] == ["두 번째 업무: 회로도 검토해줘"] and b["meta"]["exts"] == {"sch": 1}
+    assert b["meta"]["records_in_window"] == 2 and b["meta"]["records"] == 5
+    assert "window:" in render(a)
+    try:
+        condense(p, window=(10, 5))
+        assert False
+    except ValueError:
+        pass
+    os.remove(p)
+    print("test_window OK")
+
+
 def test_normalize():
     r = _normalize({"shares": {"sw개발": 30, "hw설계": 60, "없는펑션": 10}, "primary": "없는펑션"}, ["sw개발", "hw설계"])
     assert r["shares"] == {"sw개발": 33, "hw설계": 67} and r["primary"] == "hw설계"
@@ -87,4 +120,5 @@ if __name__ == "__main__":
         real()
     else:
         test_basic()
+        test_window()
         test_normalize()

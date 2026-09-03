@@ -6,6 +6,7 @@ LLM 계약(레포 공통): llm.complete_json(prompt: str, max_tokens: int) -> di
 사용:
   from classify import classify
   r = classify(llm, "session.jsonl", ["sw개발", "sw검증", "hw설계", "문서작성"])
+  r = classify(llm, "session.jsonl", fns, window=("2026-09-03T11:00", "2026-09-03T12:00"))  # 구간
   # r = {"shares": {"sw개발": 60, ...}, "primary": "sw개발", "evidence": "...", "condense_stats": {...}}
 """
 import json
@@ -58,12 +59,13 @@ def _normalize(raw, functions):
     return {"shares": clean, "primary": primary, "evidence": str(raw.get("evidence", "")).strip()}
 
 
-def classify(llm, jsonl_path, functions, budget_tokens=DEFAULT_BUDGET_TOKENS, max_tokens=800):
-    c = condense(jsonl_path, budget_tokens)
+def classify(llm, jsonl_path, functions, budget_tokens=DEFAULT_BUDGET_TOKENS, max_tokens=800, window=None):
+    c = condense(jsonl_path, budget_tokens, window=window)
     prompt = build_prompt(c, functions)
     raw = llm.complete_json(prompt, max_tokens)
     out = _normalize(raw, functions)
     out["condense_stats"] = c["stats"]
+    out["window"] = c["meta"]["window"]
     return out
 
 

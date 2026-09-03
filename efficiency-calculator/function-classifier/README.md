@@ -11,9 +11,27 @@ r = classify(llm, "session.jsonl", ["sw개발", "sw검증", "hw설계", "문서�
 ```
 LLM 계약은 레포 공통 `llm.complete_json(prompt, max_tokens) -> dict`. 호출 1회.
 
+## 구간 옵션 (trajectory-cost / record_actions_code_api 와 같은 규약)
+
+```python
+c = condense("session.jsonl", window=("2026-09-03T11:00", "2026-09-03T12:00"))
+c = condense("session.jsonl", window=(1756873200, None))          # epoch 초, 끝까지
+r = classify(llm, "session.jsonl", fns, window=(None, "2026-09-03T12:00:00+09:00"))
+c["meta"]["window"]              # {"start": epoch, "end": epoch|None} (없으면 None)
+c["meta"]["records_in_window"]   # 구간 안 레코드 수 / meta.records 전체
+```
+```bash
+python condense.py session.jsonl --from "2026-09-03T11:00" --to "2026-09-03T12:00" --text
+```
+- 레코드 `timestamp`가 닫힌 구간 `[A, B]` 안인 것만. A/B는 epoch 초 또는 ISO 8601(tz 없으면 로컬), 한쪽 생략 가능
+- 시각 없는 레코드는 직전 시각 상속 (trajectory_cost.normalize_window/in_window/parse_time 재사용)
+- META 히스토그램·USER·ASSISTANT·FINAL 전부 구간 안 레코드로만 구성 → 구간별 펑션 비중을 따로 낼 수 있다
+- 실측: 1.1MB 세션의 15분 구간 → 648 레코드 중 168, 추정 2.2k 토큰
+
 ```bash
 python condense.py session.jsonl              # JSON 출력 (구조체)
 python condense.py session.jsonl --text       # LLM 투입 텍스트 그대로
+python condense.py session.jsonl --from A --to B   # 구간
 python classify.py session.jsonl "sw개발,sw검증,hw설계"   # 프롬프트만 출력(LLM 미호출)
 python test_condense.py                       # 단위 테스트
 python test_condense.py --real                # ~/.claude/projects 실파일 감량률
@@ -52,6 +70,11 @@ python test_condense.py --real                # ~/.claude/projects 실파일 감
 | 3.32MB | 0.82% | 27k | 10k | 없음 |
 | 1.35MB | 0.91% | 12k | 4k | 없음 |
 | 0.43MB | 2.08% | 8k | 3k | 없음 |
+
+## 서머리 등 다른 용도
+같은 압축본을 세션 요약·회고 입력으로 써도 입력 토큰은 동일하게 1~2%. 단 코드는 `[code omitted]`라
+"무슨 코드를 짰나"는 META.paths(파일명)까지만 나온다. 코드 내용까지 요약하려면 `_strip_code` 끄고
+Edit/Write 입력을 별도 블록으로 넣어야 하며 그 경우 원본의 1.3~4.7%.
 
 ## 분류 출력
 단일 라벨 금지. 펑션별 비중(합 100) + `primary` + 근거 한두 문장. 목록 밖 업무는 `기타`.

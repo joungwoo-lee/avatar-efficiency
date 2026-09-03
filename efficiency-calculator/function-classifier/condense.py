@@ -13,14 +13,23 @@ condense.py — 긴 트랜스크립트(Claude Code jsonl)를 펑션 분류용으
 사용:
   from condense import condense, render
   c = condense("session.jsonl")            # dict
+  c = condense("session.jsonl", window=("2026-09-03T11:00", "2026-09-03T12:00"))  # 구간
   prompt_text = render(c)                  # LLM 투입용 텍스트
-  python condense.py session.jsonl [--budget 60000] [--text]
+  python condense.py session.jsonl [--budget 60000] [--from A] [--to B] [--text]
+
+구간(window): trajectory-cost / record_actions_code_api 와 같은 규약.
+  레코드 timestamp 가 닫힌 구간 [A, B] 안인 것만 취함. A/B 는 epoch 초 또는 ISO 8601
+  (tz 없는 ISO 는 로컬 시각), 한쪽 생략 가능. 시각 없는 레코드는 직전 시각 상속.
+  META 히스토그램·USER·ASSISTANT·FINAL 전부 구간 안 레코드로만 만든다.
 """
 import json
 import re
 import sys
 from collections import Counter
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "trajectory-cost"))
+from trajectory_cost import normalize_window, in_window, parse_time  # noqa: E402
 
 DEFAULT_BUDGET_TOKENS = 60000
 USER_CAP = 300
@@ -109,9 +118,12 @@ def _top_dir(path):
 
 
 # ---------- 본체 ----------
-def condense(jsonl_path, budget_tokens=DEFAULT_BUDGET_TOKENS):
+def condense(jsonl_path, budget_tokens=DEFAULT_BUDGET_TOKENS, window=None):
     jsonl_path = Path(jsonl_path)
     orig_bytes = jsonl_path.stat().st_size
+    win = normalize_window(window)
+    n_in = n_out = 0
+    last_epoch = None
 
     users, assistants = [], []
     tools, exts, dirs, paths = Counter(), Counter(), Counter(), Counter()
@@ -121,6 +133,13 @@ def condense(jsonl_path, budget_tokens=DEFAULT_BUDGET_TOKENS):
     for rec in _iter_records(jsonl_path):
         n_records += 1
         ts = rec.get("timestamp")
+        ep = parse_time(ts) if ts else None
+        if ep is not None:
+            last_epoch = ep
+        if not in_window(last_epoch, win):
+            n_out += 1
+            continue
+        n_in += 1
         if ts:
             first_ts = first_ts or ts
             last_ts = ts
@@ -152,6 +171,8 @@ def condense(jsonl_path, budget_tokens=DEFAULT_BUDGET_TOKENS):
 
     meta = {
         "records": n_records,
+        "records_in_window": n_in,
+        "window": None if win is None else {"start": win[0], "end": (None if win[1] == float("inf") else win[1])},
         "user_turns": len(users),
         "assistant_turns": len(assistants),
         "first_ts": first_ts,
@@ -188,6 +209,8 @@ def render(c):
     m = c["meta"]
     lines = ["## META"]
     lines.append(f"turns: user={m['user_turns']} assistant={m['assistant_turns']} span={m.get('first_ts')}..{m.get('last_ts')}")
+    if m.get("window"):
+        lines.append(f"window: {m['window']['start']}..{m['window']['end']} (records {m['records_in_window']}/{m['records']})")
     lines.append("tools: " + ", ".join(f"{k}={v}" for k, v in m["tools"].items()))
     lines.append("exts: " + ", ".join(f"{k}={v}" for k, v in m["exts"].items()))
     lines.append("dirs: " + ", ".join(f"{k}={v}" for k, v in m["dirs"].items()))
@@ -211,7 +234,9 @@ def main(argv):
     as_text = "--text" in argv
     if "--budget" in argv:
         budget = int(argv[argv.index("--budget") + 1])
-    c = condense(path, budget)
+    start = argv[argv.index("--from") + 1] if "--from" in argv else None
+    end = argv[argv.index("--to") + 1] if "--to" in argv else None
+    c = condense(path, budget, window=(start, end) if (start or end) else None)
     if as_text:
         sys.stdout.write(render(c))
     else:
