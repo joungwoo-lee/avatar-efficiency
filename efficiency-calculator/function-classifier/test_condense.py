@@ -54,6 +54,8 @@ def test_basic():
     assert c["meta"]["exts"] == {"sv": 1}
     assert "proj" in c["meta"]["dirs"]
     assert c["final"].startswith("완료.")
+    assert c["source"]["transcript_path"] == str(Path(p).resolve()) and c["source"]["session_id"] == Path(p).stem
+    assert c["source"]["first_ts"] == "2026-01-01T00:00:00Z"
     assert c["stats"]["assistant_cap"] is None and not c["stats"]["over_budget"]
     # 예산 초과 → 에이전트 캡 축소, 사용자·final 불변
     c2 = condense(p, budget_tokens=50)
@@ -85,6 +87,7 @@ def test_window():
     assert a["final"].startswith("시각 없는")
     assert b["user"] == ["두 번째 업무: 회로도 검토해줘"] and b["meta"]["exts"] == {"sch": 1}
     assert b["meta"]["records_in_window"] == 2 and b["meta"]["records"] == 5
+    assert b["source"]["first_ts"] == "2026-09-03T02:00:00Z" and b["source"]["last_ts"] == "2026-09-03T05:10:00Z"  # 구간 무관 전체
     assert "window:" in render(a)
     try:
         condense(p, window=(10, 5))
@@ -116,7 +119,7 @@ def real():
 
 
 def test_summarize_match():
-    from summarize_match import summarize_match, inspect_claude, child_env, _normalize as _nm
+    from summarize_match import summarize_match, inspect_claude, child_env, _normalize as _nm, save_result, load_results, result_filename
     # PID 검사: 자기 자신(python)으로 PEB/proc 읽기 검증
     info = inspect_claude(os.getpid())
     assert info["cwd"].rstrip("\/").lower() == os.getcwd().rstrip("\/").lower(), (info["cwd"], os.getcwd())
@@ -131,11 +134,13 @@ def test_summarize_match():
              "products": ["UART IP", "없는제품"]}, org)
     assert r["functions"] == {"sw개발": 62, "hw검증": 38} and r["primary"] == "sw개발" and r["products"] == ["UART IP"]
     # 전체 흐름(runner 주입, CLI 미호출)
-    p = _write([_rec("user", "uart 테스트벤치 만들어서 시뮬 돌려줘"),
-                _rec("assistant", [{"type": "text", "text": "uart_tb.sv 작성하고 시뮬 통과. " * 20},
-                                   {"type": "tool_use", "name": "Write", "input": {"file_path": "C:/p/rtl/uart_tb.sv"}}])])
+    lines = [_rec("user", "uart 테스트벤치 만들어서 시뮬 돌려줘", ts="2026-09-03T02:00:00Z"),
+             _rec("assistant", [{"type": "text", "text": "uart_tb.sv 작성하고 시뮬 통과. " * 20},
+                                {"type": "tool_use", "name": "Write", "input": {"file_path": "C:/p/rtl/uart_tb.sv"}}], ts="2026-09-03T02:10:00Z")]
+    lines = [l.replace('{"type": "user"', '{"sessionId": "sess-123", "cwd": "C:/p", "type": "user"', 1) for l in lines]
+    p = _write(lines)
     cpath = p + ".c.json"
-    json.dump(condense(p), open(cpath, "w", encoding="utf-8"), ensure_ascii=False)
+    json.dump(condense(p, window=("2026-09-03T02:00:00Z", "2026-09-03T03:00:00Z")), open(cpath, "w", encoding="utf-8"), ensure_ascii=False)
     seen = {}
     def runner(prompt):
         seen["prompt"] = prompt
@@ -144,6 +149,21 @@ def test_summarize_match():
     assert "- hw검증:" in seen["prompt"] and "uart 테스트벤치" in seen["prompt"] and "## META" in seen["prompt"]
     assert r["primary"] == "hw검증" and r["products"] == ["UART IP"] and r["meta"]["model"] == "haiku"
     assert r["meta"]["no_session_persistence"] and r["meta"]["prompt_caching_disabled"]
+    # 출처·구간이 결과에 박힘 → 다른 곳에서 가져갈 수 있음
+    assert r["schema"] == "function-classifier/result@1" and r["generated_at"]
+    assert r["source"]["session_id"] == "sess-123" and r["source"]["transcript_path"] == str(Path(p).resolve())
+    assert r["source"]["project_cwd"] == "C:/p" and r["source"]["first_ts"] == "2026-09-03T02:00:00Z"
+    assert r["window"]["start_iso"].startswith("2026-09-03T02:00:00") and r["window"]["records_in_window"] == 2
+    assert result_filename(r).startswith("sess-123__") and result_filename(r).endswith(".json")
+    d = tempfile.mkdtemp()
+    saved = save_result(r, out_dir=d)
+    assert Path(saved).exists() and (Path(d) / "index.jsonl").exists()
+    back = json.load(open(saved, encoding="utf-8"))
+    assert back["source"]["session_id"] == "sess-123" and back["primary"] == "hw검증"
+    rows = load_results(out_dir=d, session_id="sess-123")
+    assert len(rows) == 1 and rows[0]["file"] == str(Path(saved).resolve()) and rows[0]["primary"] == "hw검증"
+    assert load_results(out_dir=d, session_id="nope") == []
+    assert len(load_results(out_dir=d, transcript_path=p)) == 1
     os.remove(p); os.remove(cpath)
     print("test_summarize_match OK")
 

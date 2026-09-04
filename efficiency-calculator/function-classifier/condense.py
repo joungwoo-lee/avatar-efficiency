@@ -12,7 +12,7 @@ condense.py — 긴 트랜스크립트(Claude Code jsonl)를 펑션 분류용으
 
 사용:
   from condense import condense, render
-  c = condense("session.jsonl")            # dict
+  c = condense("session.jsonl")            # dict — c["source"]에 세션ID·경로·전체시각범위
   c = condense("session.jsonl", window=("2026-09-03T11:00", "2026-09-03T12:00"))  # 구간
   prompt_text = render(c)                  # LLM 투입용 텍스트
   python condense.py session.jsonl [--budget 60000] [--from A] [--to B] [--text]
@@ -124,6 +124,9 @@ def condense(jsonl_path, budget_tokens=DEFAULT_BUDGET_TOKENS, window=None):
     win = normalize_window(window)
     n_in = n_out = 0
     last_epoch = None
+    session_id = None
+    session_cwd = None
+    span_first = span_last = None   # 구간 무관, 세션 전체 시각 범위
 
     users, assistants = [], []
     tools, exts, dirs, paths = Counter(), Counter(), Counter(), Counter()
@@ -132,10 +135,14 @@ def condense(jsonl_path, budget_tokens=DEFAULT_BUDGET_TOKENS, window=None):
 
     for rec in _iter_records(jsonl_path):
         n_records += 1
+        session_id = session_id or rec.get("sessionId")
+        session_cwd = session_cwd or rec.get("cwd")
         ts = rec.get("timestamp")
         ep = parse_time(ts) if ts else None
         if ep is not None:
             last_epoch = ep
+            span_first = span_first or ts
+            span_last = ts
         if not in_window(last_epoch, win):
             n_out += 1
             continue
@@ -169,6 +176,14 @@ def condense(jsonl_path, budget_tokens=DEFAULT_BUDGET_TOKENS, window=None):
 
     final = next((a for a in reversed(assistants) if len(a) >= FINAL_MIN_CHARS), assistants[-1] if assistants else "")
 
+    source = {
+        "transcript_path": str(jsonl_path.resolve()),
+        "session_id": session_id or jsonl_path.stem,
+        "project_cwd": session_cwd,
+        "first_ts": span_first,
+        "last_ts": span_last,
+        "orig_bytes": orig_bytes,
+    }
     meta = {
         "records": n_records,
         "records_in_window": n_in,
@@ -187,7 +202,7 @@ def condense(jsonl_path, budget_tokens=DEFAULT_BUDGET_TOKENS, window=None):
     chosen_cap = None
     for cap in ASSISTANT_CAPS:
         a_list = assistants if cap is None else [a[:cap] for a in assistants]
-        out = {"meta": meta, "user": users_capped, "assistant": a_list, "final": final}
+        out = {"source": source, "meta": meta, "user": users_capped, "assistant": a_list, "final": final}
         tokens = estimate_tokens(render(out))
         chosen_cap = cap
         if tokens <= budget_tokens:
@@ -208,6 +223,9 @@ def condense(jsonl_path, budget_tokens=DEFAULT_BUDGET_TOKENS, window=None):
 def render(c):
     m = c["meta"]
     lines = ["## META"]
+    src = c.get("source") or {}
+    if src:
+        lines.append(f"session: {src.get('session_id')} span={src.get('first_ts')}..{src.get('last_ts')} cwd={src.get('project_cwd')}")
     lines.append(f"turns: user={m['user_turns']} assistant={m['assistant_turns']} span={m.get('first_ts')}..{m.get('last_ts')}")
     if m.get("window"):
         lines.append(f"window: {m['window']['start']}..{m['window']['end']} (records {m['records_in_window']}/{m['records']})")

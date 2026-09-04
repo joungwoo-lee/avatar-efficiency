@@ -108,6 +108,38 @@ r = summarize_match(pid, "c.json", "functions.example.json")
 전처리본 0.5k 토큰 기준. 남은 입력 8k는 CLI 고정 부담(전처리본 크기와 무관). 캐시 미사용은 환경변수로
 클라이언트가 안 요청하는 것이고, 서버 측 적중까지 막는다는 보장은 없다.
 
+### 결과 파일 규격 — 다른 곳에서 가져가는 입구
+
+한 번 돌리면 **출처(세션 ID·트랜스크립트 경로·구간)와 서머리·매칭이 한 파일**에 박힌다.
+기본 위치 `~/.avatar-efficiency/function-classifier/results/` (환경변수 `FUNCTION_CLASSIFIER_OUT` 또는 `--out-dir`로 변경, `--out`은 파일 직접 지정).
+
+```
+results/
+  <session_id>__all.json                 # 구간 없음
+  <session_id>__<start>-<end>.json       # 구간(epoch 초) — 같은 세션 여러 구간 공존
+  <session_id>__all.condensed.json       # --transcript 모드일 때 전처리본
+  index.jsonl                            # 한 줄 = 결과 하나 (file, session_id, transcript_path, window, primary, functions, products)
+```
+```json
+{"schema": "function-classifier/result@1", "generated_at": "2026-09-04T00:31:19+00:00",
+ "source": {"session_id": "2d557455-...", "transcript_path": "C:\Users\...\2d557455-....jsonl",
+            "project_cwd": "C:\Users\joung\avatar-efficiency\efficiency\human-effort",
+            "first_ts": "2026-08-17T05:40:46.059Z", "last_ts": "2026-08-17T05:41:43.465Z", "orig_bytes": 51761},
+ "window": null,   // 또는 {"start", "end", "start_iso", "end_iso", "records_in_window", "records"}
+ "org": "<펑션 파일 절대경로>",
+ "summary": "...", "functions": {"문서작성": 40, "데이터분석": 30, "인프라운영": 20, "기타": 10},
+ "primary": "문서작성", "products": ["avatar-efficiency"], "evidence": "...",
+ "meta": {"pid", "exe", "config_dir", "model", "usage": {...비용·토큰}}}
+```
+가져가기:
+```python
+from summarize_match import load_results
+load_results(session_id="2d557455-...")          # index.jsonl 에서 그 세션 결과들(구간별)
+load_results(transcript_path="…/2d557455-….jsonl")
+load_results()                                    # 전부
+```
+session-api·trajectory-cost 결과와는 `session_id`(= jsonl 파일명 = 레코드 `sessionId`)와 `window.start/end`(epoch 초)로 조인한다.
+
 펑션 파일(`functions.example.json`): `{"org", "functions": [{"name","desc"}], "products": [{"name","desc"}]}`.
 출력의 functions 키·products 이름은 파일에 있는 것만 남기고(`기타` 허용) 합계 100 보정.
 

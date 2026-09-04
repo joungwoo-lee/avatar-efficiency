@@ -18,27 +18,39 @@ summarize_match.py — 호출한 클로드의 PID로 그 클로드 설정을 물
   전처리본  : condense.py 출력 JSON 파일
   펑션 파일 : 조직 정보 JSON (functions.example.json 참조)
               {"org": "...", "functions": [{"name","desc"}...], "products": [{"name","desc"}...]}
-출력(JSON):
-  {"summary": "...", "functions": {"<펑션>": 비중, ...}, "primary": "...",
-   "products": ["..."], "evidence": "...", "meta": {pid, exe, config_dir, model, ...}}
+출력(JSON 파일, 다른 곳에서 가져가는 규격):
+  {"schema": "function-classifier/result@1", "generated_at": ISO,
+   "source": {"session_id", "transcript_path", "project_cwd", "first_ts", "last_ts", "orig_bytes"},
+   "window": {"start", "end", "start_iso", "end_iso", "records_in_window", "records"} | null,
+   "org": <펑션 파일 경로>,
+   "summary": "...", "functions": {"<펑션>": 비중, ...}, "primary": "...",
+   "products": ["..."], "evidence": "...", "meta": {pid, exe, config_dir, model, usage, ...}}
+  기본 저장: ~/.avatar-efficiency/function-classifier/results/<session_id>__<start>-<end>.json
+            (구간 없으면 <session_id>__all.json) + 같은 폴더 index.jsonl 에 한 줄 append.
+            --transcript 모드면 전처리본도 같은 폴더에 <...>.condensed.json (결과의 condensed_path).
+  --out <file> 로 위치 지정, --out-dir <dir> 로 폴더만 바꿈. 환경변수 FUNCTION_CLASSIFIER_OUT 도 동일.
 
 사용:
-  python summarize_match.py --pid <claude PID> --condensed c.json --functions org.json [--out r.json]
-  python summarize_match.py --pid <PID> --transcript session.jsonl --functions org.json   # 전처리부터
-  from summarize_match import summarize_match
-  r = summarize_match(pid, "c.json", "org.json")
+  python summarize_match.py --pid <claude PID> --condensed c.json --functions org.json [--out r.json|--out-dir d]
+  python summarize_match.py --pid <PID> --transcript session.jsonl --functions org.json [--from A --to B]
+  from summarize_match import summarize_match, save_result, load_results
+  r = summarize_match(pid, "c.json", "org.json"); path = save_result(r)
+  rows = load_results(session_id="...")        # index.jsonl 에서 세션별 조회
 """
 import json
 import os
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from condense import condense, render  # noqa: E402
 
 MODEL = "haiku"
+SCHEMA = "function-classifier/result@1"
+DEFAULT_OUT_DIR = Path(os.environ.get("FUNCTION_CLASSIFIER_OUT") or (Path.home() / ".avatar-efficiency" / "function-classifier" / "results"))
 EFFORT = "low"          # 분류·요약엔 긴 사고 불필요 — thinking 토큰 절감
 SYSTEM_PROMPT = "You are a concise analyst. Reply with exactly one JSON object and nothing else."  # 기본 시스템프롬프트(≈14k 토큰) 대체
 # 중첩 세션 마커 — 게이트웨이 sidecar/InteractiveProcess.js 스크럽 목록과 동일 계열
@@ -240,11 +252,80 @@ def summarize_match(pid, condensed_path, functions_path, model=MODEL, runner=Non
     info = inspect_claude(pid)
     prompt = PROMPT.format(org=_org_text(org), body=render(c))
     text, usage = run_claude(info, prompt, model=model, timeout=timeout, runner=runner)
-    out = _normalize(_extract_json(text), org)
+    body = _normalize(_extract_json(text), org)
+    win = c.get("meta", {}).get("window")
+    window = None
+    if win:
+        window = {"start": win["start"], "end": win["end"],
+                  "start_iso": _iso(win["start"]), "end_iso": _iso(win["end"]),
+                  "records_in_window": c["meta"].get("records_in_window"), "records": c["meta"].get("records")}
+    out = {"schema": SCHEMA, "generated_at": datetime.now(timezone.utc).isoformat(),
+           "source": c.get("source") or {"session_id": Path(condensed_path).stem, "transcript_path": None},
+           "window": window, "org": str(Path(functions_path).resolve())}
+    out.update(body)
     out["meta"] = {"pid": pid, "exe": info["exe"], "cwd": info["cwd"], "config_dir": info["config_dir"],
                    "model": model, "no_session_persistence": True, "prompt_caching_disabled": True,
                    "prompt_est_chars": len(prompt), "condense_stats": c.get("stats"), "usage": usage}
     return out
+
+
+def _iso(epoch):
+    if epoch is None:
+        return None
+    return datetime.fromtimestamp(float(epoch), tz=timezone.utc).isoformat()
+
+
+def result_filename(result):
+    sid = re.sub(r"[^A-Za-z0-9_.-]", "_", str(result["source"].get("session_id") or "unknown"))
+    w = result.get("window")
+    if not w:
+        return f"{sid}__all.json"
+    s = int(w["start"]) if w.get("start") is not None else "0"
+    e = int(w["end"]) if w.get("end") is not None else "end"
+    return f"{sid}__{s}-{e}.json"
+
+
+def save_result(result, out=None, out_dir=None):
+    """결과 파일 저장 + index.jsonl 한 줄 append. 저장 경로 반환."""
+    if out:
+        path = Path(out)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        index = path.parent / "index.jsonl"
+    else:
+        d = Path(out_dir) if out_dir else DEFAULT_OUT_DIR
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / result_filename(result)
+        index = d / "index.jsonl"
+    path.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+    row = {"file": str(path.resolve()), "generated_at": result["generated_at"],
+           "session_id": result["source"].get("session_id"), "transcript_path": result["source"].get("transcript_path"),
+           "window": ({"start": result["window"]["start"], "end": result["window"]["end"]} if result.get("window") else None),
+           "primary": result.get("primary"), "functions": result.get("functions"), "products": result.get("products")}
+    with open(index, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return str(path)
+
+
+def load_results(out_dir=None, session_id=None, transcript_path=None):
+    """index.jsonl 조회. 필터 없으면 전부. 다른 모듈이 정보 가져갈 때 쓰는 입구."""
+    d = Path(out_dir) if out_dir else DEFAULT_OUT_DIR
+    index = d / "index.jsonl"
+    if not index.exists():
+        return []
+    rows = []
+    for line in index.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if session_id and r.get("session_id") != session_id:
+            continue
+        if transcript_path and str(Path(r.get("transcript_path") or "").resolve()) != str(Path(transcript_path).resolve()):
+            continue
+        rows.append(r)
+    return rows
 
 
 def main(argv):
@@ -266,13 +347,16 @@ def main(argv):
             return 2
         start, end = opt("--from"), opt("--to")
         c = condense(transcript, window=(start, end) if (start or end) else None)
-        condensed = Path(transcript).with_suffix(".condensed.json")
+        # 전처리본은 트랜스크립트 옆이 아니라 결과 폴더에(~/.claude/projects 오염 방지)
+        d = Path(opt("--out")).parent if opt("--out") else (Path(opt("--out-dir")) if opt("--out-dir") else DEFAULT_OUT_DIR)
+        d.mkdir(parents=True, exist_ok=True)
+        condensed = d / result_filename({"source": c["source"], "window": c["meta"]["window"]}).replace(".json", ".condensed.json")
         json.dump(c, open(condensed, "w", encoding="utf-8"), ensure_ascii=False)
     r = summarize_match(pid, condensed, functions, model=opt("--model", MODEL))
-    s = json.dumps(r, ensure_ascii=False, indent=1)
-    if opt("--out"):
-        open(opt("--out"), "w", encoding="utf-8").write(s)
-    sys.stdout.write(s + "\n")
+    r["condensed_path"] = str(Path(condensed).resolve())
+    path = save_result(r, out=opt("--out"), out_dir=opt("--out-dir"))
+    sys.stdout.write(json.dumps(r, ensure_ascii=False, indent=1) + "\n")
+    sys.stderr.write(f"[summarize_match] saved {path}\n")
     return 0
 
 
