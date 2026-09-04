@@ -42,6 +42,9 @@ agent-effort/    분모 — 사전 추산(agent_effort.py) · 세션 실측(tran
                  rates.json = 행동 단가표 단일 출처 (프롬프트 미노출)
 counterfactual-api/  사전 API + 구 계약(integ-spec) drop-in
 session-api/         사후 API + 초소형 게이트
+function-classifier/ 긴 트랜스크립트 → 펑션(업무 구분)·프로덕트 분류. condense(원본의 1~2%로 전처리)
+                     · classify(complete_json 계약) · summarize_match(부모 클로드 PID 설정으로 하이쿠,
+                     무트랜스크립트·무캐시). 효율 계산과 독립, 같은 --from/--to 구간 규약
 ```
 
 ## 측정 기조 (요지)

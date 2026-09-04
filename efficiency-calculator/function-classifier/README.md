@@ -11,6 +11,46 @@ r = classify(llm, "session.jsonl", ["sw개발", "sw검증", "hw설계", "문서�
 ```
 LLM 계약은 레포 공통 `llm.complete_json(prompt, max_tokens) -> dict`. 호출 1회.
 
+## 파일 구성 · 인테그레이션
+
+| 파일 | 역할 | 입구 |
+|---|---|---|
+| `condense.py` | **전처리**. jsonl → 4블록 JSON (META/USER/ASSISTANT/FINAL) | `condense(path, budget_tokens, window)` · `render(dict)` |
+| `classify.py` | 분류만. 레포 공통 `llm.complete_json` 계약으로 아무 LLM에 꽂음 | `classify(llm, path, functions, window)` |
+| `summarize_match.py` | 서머리+펑션/프로덕트 매칭. 호출한 클로드 PID의 설정으로 **하이쿠 CLI 직접 실행** (LLM 객체 불필요) | `summarize_match(pid, condensed_json, functions_json)` |
+| `functions.example.json` | 조직 펑션·프로덕트 목록 형식 예시 | 복사해서 자기 조직 것으로 |
+| `test_condense.py` | 단위 테스트 4건 + `--real` 실측 | |
+
+의존성: Python 3.10+, 표준 라이브러리만. 형제 폴더 `../trajectory-cost/trajectory_cost.py`를 구간 파싱에
+임포트하므로 **폴더째** 가져갈 것. `summarize_match`는 그 PC에 `claude` CLI가 있어야 하고, PID 검사는
+같은 사용자 프로세스만 가능(다른 사용자·관리자 프로세스는 OpenProcess 거부).
+
+붙이는 법 3가지:
+```python
+# (1) 전처리만 — 내 LLM/파이프라인에 텍스트로 넣을 때
+from condense import condense, render
+text = render(condense("session.jsonl"))
+
+# (2) 분류만 — 이미 llm 객체(complete_json)가 있을 때 (session-api 와 같은 계약)
+from classify import classify
+r = classify(llm, "session.jsonl", ["sw개발", "sw검증", "hw설계"])
+
+# (3) 서머리+매칭 — 클로드 훅/게이트웨이에서 부모 클로드 설정으로 하이쿠 1회
+from summarize_match import summarize_match
+r = summarize_match(pid, "c.json", "org.json")
+```
+
+PID 얻는 법: Stop 훅 등 클로드가 띄운 스크립트 안이면 부모가 클로드 → `os.getppid()` (셸이면 `$PPID`).
+CLI에서 `--pid` 생략 시 자동으로 `os.getppid()`. 게이트웨이처럼 클로드를 직접 spawn했다면 그 `child.pid`.
+훅에서 트랜스크립트 경로는 stdin JSON의 `transcript_path`:
+```python
+import json, os, sys
+h = json.load(sys.stdin)            # Stop 훅 입력
+r = summarize_match(os.getppid(), condense_to_file(h["transcript_path"]), "org.json")
+```
+(`condense_to_file` = `json.dump(condense(path), open(out,"w",encoding="utf-8"), ensure_ascii=False)`,
+또는 CLI `--transcript` 옵션이 같은 일을 함.)
+
 ## 구간 옵션 (trajectory-cost / record_actions_code_api 와 같은 규약)
 
 ```python
