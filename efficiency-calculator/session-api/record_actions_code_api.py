@@ -22,12 +22,12 @@
       execute = 4토막 — 구성(첫 신원만) + 실측 대기 + 판독 + 조작 (§59);
                 무효는 환경·타이핑 실수·거부 서명일 때만 (§69)
       verify  = 없음 (§83에서 제거 — 종전 산출물 있으면 1건 3.0분)
-      think   = 전략 생각 (§53) — 지시 직후 첫 응답의 생각 토큰 × 요율
-                (0.00333 = §57 정독 동속 0.005의 1.5배속, §86), 서브에이전트
-                기록 포함 (§68). (구 포맷은 토큰 수가 없어 건당 1.0분 고정,
-                §58의 1.5분을 §86에서 1.5배속)
+      think   = 전략 생각 (§53) — 지시 직후 첫 응답에 생각 흔적이 있으면
+                **지점당 고정 1.0분** (§86: 생각 토큰 수는 모델의 reasoning
+                effort 설정에 따라 달라져 사람 시간의 근거가 못 된다 — 횟수만
+                센다. 신·구 포맷 동일), 서브에이전트 기록 포함 (§68)
                 + 서브 보고문 전량 (§68) + 메인 진행 나레이션 (§73) — 밖으로
-                나온 생각, 같은 요율.
+                나온 생각, 단어 × 0.00333(§57 정독 0.005의 1.5배속, §86).
                 기본 ON, 휴먼화 축과 독립 (include_think=False로 끔).
     분모 = 공용 실측 (session_api.measure_agent_actual).
 
@@ -161,8 +161,12 @@ def channel_audit(stats):
 # 따라서 도구 사용 중간의 잔생각은 제외하고, **지시 직후 첫 응답의 생각**
 # (= 전략 수립)만 분자에 계상한다. 실측(51세션): 전체 생각 토큰의 68%가
 # 지시 직후에 몰림 — 위치 선별만으로 도구 잔생각이 걸러진다.
-THINK_TOK2WORD = 0.75        # 토큰→단어 환산
-THINK_FALLBACK_MIN = 1.0      # 구 포맷(토큰 미기록) 전략 생각 지점의 건당 시간 (§58 1.5 → §86 1.5배속 1.0)
+THINK_TOK2WORD = 0.75        # 토큰→단어 환산 (보고용 — §86부터 계상엔 미사용)
+THINK_POINT_MIN = 1.0         # 전략 생각 지점당 고정 시간 (§86: 토큰 수 미사용 —
+#                               reasoning effort 설정에 따라 달라지는 값은 사람
+#                               시간의 근거가 못 된다. §58 구 포맷 1.5분 → 1.5배속
+#                               1.0분을 신 포맷까지 통일)
+THINK_FALLBACK_MIN = THINK_POINT_MIN   # 구 이름 호환
 PASTE_BLOCK_MIN = 0.05        # §86: 복붙 덩어리당 고정 시간(3초) — 단어 요율 대신
 
 # 절감율 하한 (§76): 절감율 = 1 − agent/human 은 위로 100%에서 막히지만
@@ -668,10 +672,11 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
     if include_think:  # 전략 생각 (§53) — 휴먼화 축과 독립, 기본 ON
         st = collect_strategy_thinking(jsonl_path, subs, count_window=window)
         spec = card.get("think") or _THINK_DEFAULT_SPEC
-        # 구 포맷 지점은 건당 고정 분(§58) — 요율에 무관하게 같은 시간이
-        # 되도록 분을 단어로 역환산해 더한다(breakdown 단위 일관성 유지).
-        fb_words = (st["fallback_points"] * THINK_FALLBACK_MIN
-                    / spec["min_per_unit"]) if st["fallback_points"] else 0.0
+        # §86: 전략 지점(신·구 포맷 공통)은 지점당 고정 분 — 토큰 수를 쓰지
+        # 않는다(reasoning effort 설정 의존 제거). 요율에 무관하게 같은
+        # 시간이 되도록 분을 단어로 역환산해 더한다(breakdown 단위 일관성).
+        pt_words = (st["points"] * THINK_POINT_MIN
+                    / spec["min_per_unit"]) if st["points"] else 0.0
         # 전략 생각(지시 직후 첫 응답)만 계상 — 도구 중간 생각은 집계만
         # 하고 분자에 넣지 않는다(§53 숙련자 가정 유지). 미계상 크기는
         # think.mid_tokens로 그대로 보고된다.
@@ -682,16 +687,17 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
         # §73: 메인 진행 나레이션(마무리 답변 제외 assistant 텍스트)도 §68과
         # 같은 논리 — 사람이 혼자 했다면 속으로 정리한 것 = 밖으로 나온 생각.
         narr_words = stats.get("narration_words", 0)
-        strat_words = round(st["tokens"] * THINK_TOK2WORD, 1)
-        think_words = round(strat_words + fb_words + rep_words + narr_words, 1)
+        strat_words = round(pt_words, 1)
+        think_words = round(strat_words + rep_words + narr_words, 1)
         if think_words:
             minutes = think_words * spec["min_per_unit"]
             total += minutes
             breakdown.append({"primitive": "think", "count": think_words,
                               "unit": spec.get("unit", "word_count"),
                               "minutes": round(minutes, 2),
-                              "detail": {"strategy_words": strat_words,
-                                         "fallback_words": round(fb_words, 1),
+                              "detail": {"strategy_points": st["points"],
+                                         "strategy_words": strat_words,
+                                         "strategy_tokens": st["tokens"],  # 보고용
                                          "sub_report_words": rep_words,
                                          "narration_words": narr_words}})
         think_info = dict(st)

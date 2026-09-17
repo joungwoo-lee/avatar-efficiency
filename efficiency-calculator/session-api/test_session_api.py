@@ -268,8 +268,10 @@ class TestSessionApi(unittest.TestCase):
         for r in (r_on, r_off):
             th = [b for b in r["human"]["breakdown"] if b["primitive"] == "think"]
             self.assertEqual(len(th), 1)
-            # 400토큰×0.75 = 300단어 + 서브 보고 200단어 = 500
-            self.assertEqual(th[0]["count"], 500)
+            # §86: 전략 지점 1개 × 1.0분 → 1.0/0.00333 ≈ 300단어 환산 (토큰 수
+            # 400은 계상에 안 씀) + 서브 보고 200단어 ≈ 500
+            self.assertAlmostEqual(th[0]["count"], 1.0 / 0.00333 + 200, places=0)
+            self.assertEqual(th[0]["detail"]["strategy_points"], 1)
             self.assertEqual(th[0]["detail"]["sub_report_words"], 200)
             self.assertEqual(r["human"]["think"]["sub_report_words"], 200)
             # 보고문이 draft로 새지 않는다
