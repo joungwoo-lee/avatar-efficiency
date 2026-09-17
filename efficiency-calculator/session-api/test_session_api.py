@@ -364,8 +364,9 @@ class TestSessionApi(unittest.TestCase):
         bd = {b["primitive"]: b for b in r_on["human"]["breakdown"]}
         # (7) 파일 100단어(code) + 마무리 답변 50단어(doc) 둘 다 draft
         self.assertEqual(bd["draft"]["detail"], {"code": 100, "doc": 50})
-        # (8) 나레이션 40단어 → think
-        self.assertEqual(bd["think"]["detail"]["narration_words"], 40)
+        # (8) 나레이션 40단어 — §86부터 미계상, 보고만 (think 항목 없음)
+        self.assertEqual(r_on["human"]["think"]["narration_words"], 40)
+        self.assertNotIn("think", bd)
         # (12) rw ON 읽기 = 지시 10 + 검색 결과 정독 200 + 훑기 300×(0.002/0.005, §86)
         self.assertAlmostEqual(bd["read"]["count"], 10 + 200 + 300 * 0.4, places=0)
         bd0 = {b["primitive"]: b for b in r_off["human"]["breakdown"]}

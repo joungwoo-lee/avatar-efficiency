@@ -26,8 +26,9 @@
                 **지점당 고정 1.0분** (§86: 생각 토큰 수는 모델의 reasoning
                 effort 설정에 따라 달라져 사람 시간의 근거가 못 된다 — 횟수만
                 센다. 신·구 포맷 동일), 서브에이전트 기록 포함 (§68)
-                + 서브 보고문 전량 (§68) + 메인 진행 나레이션 (§73) — 밖으로
-                나온 생각, 단어 × 0.00333(§57 정독 0.005의 1.5배속, §86).
+                + 서브 보고문 전량 (§68) — 밖으로 나온 생각, 단어 × 0.00333
+                (§57 정독 0.005의 1.5배속, §86). 메인 진행 나레이션(§73)은
+                §86부터 미계상(AI 특유 산출물 — narration_words로 보고만).
                 기본 ON, 휴먼화 축과 독립 (include_think=False로 끔).
     분모 = 공용 실측 (session_api.measure_agent_actual).
 
@@ -684,11 +685,12 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
         # think 요율로 가산. 직접 생각(토큰×0.005) ≈ 위임(서브 생각 토큰×0.005
         # + 보고 단어×0.005)이 되어 위임 여부에 값이 안 흔들린다.
         rep_words = stats.get("sub_report_words", 0)
-        # §73: 메인 진행 나레이션(마무리 답변 제외 assistant 텍스트)도 §68과
-        # 같은 논리 — 사람이 혼자 했다면 속으로 정리한 것 = 밖으로 나온 생각.
+        # §73은 메인 진행 나레이션(마무리 답변 제외 assistant 텍스트)도 think로
+        # 더했으나 §86부터 미계상 — "먼저 확인하겠습니다"류는 AI 특유 산출물이고
+        # 전략 생각은 이미 지점당 고정분으로 셌다. 크기는 보고만.
         narr_words = stats.get("narration_words", 0)
         strat_words = round(pt_words, 1)
-        think_words = round(strat_words + rep_words + narr_words, 1)
+        think_words = round(strat_words + rep_words, 1)   # 나레이션 미계상 (§86)
         if think_words:
             minutes = think_words * spec["min_per_unit"]
             total += minutes

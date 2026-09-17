@@ -42,6 +42,9 @@ _IMG_EXT = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg", ".ico"}
 # 구간 분해 블록 크기(단어) — 기여 파일 안에서 정독/훑기를 가르는 눈금 (§26).
 # 시간 지식이 아니라 구조 눈금이라 요율표가 아닌 코드 상수로 둔다.
 _DEEP_BLOCK_WORDS = 200
+# §86 같은 명령(신원)을 다시 돌린 출력은 앞 50단어만 정독 — 사람은 재실행 결과에서
+# 통과/실패 줄만 본다. 첫 호출은 종전대로 200.
+_REPEAT_DEEP_WORDS = 50
 
 # §69 실행 "실패" 판정 — Bash의 is_error는 종료코드≠0이면 전부 붙는다. 실측
 # (55세션 931건): 테스트 실패·스크립트 traceback 71% = 숙련자도 똑같이 짜서
@@ -519,7 +522,7 @@ _EDIT_ANCHOR_MIN = 3   # 이 길이 이상 연속 일치만 "다시 뱉은 앵�
 #   타이핑 = 나머지. 길이 상한은 두지 않는다(사람이 파일을 쓸 때는 길어도 친다 —
 #           감지된 복붙만 복붙). 순계(ON)·총량(OFF) 모두 파일별 min(·, 타이핑 합).
 _PASTE_GRAM = 3
-_PASTE_RUN_WORDS = 20
+_PASTE_RUN_WORDS = 15      # §86: 20 → 15 (15단어 정확 연속 일치는 우연이 아니다; 상용구 오탐 실측 없음)
 
 
 def _grams(words, n=_PASTE_GRAM):
@@ -1144,7 +1147,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                         canon = " ".join(cmd.split())[:120]
                         _cwords = cmd.split()
                         # §86: 명령문 속 복붙 — 앞서 본 글(출력·파일·응답·앞 명령)을
-                        # 가져다 쓴 20단어+ 연속 구간은 타이핑이 아니다
+                        # 가져다 쓴 15단어+ 연속 구간은 타이핑이 아니다
                         _mask, _pb = _paste_mask(_cwords, seen_grams)
                         _pw = sum(_mask)
                         seen_grams.update(_grams(_cwords))
@@ -1502,19 +1505,23 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
 
     # 실행 4토막 재료 (§59 규칙3)
     ex_seen = set()
+    ex_seen_any = set()   # §86 반복 호출 판정 (실패 포함, 전체 순서)
     ex_compose_net = ex_compose_gross = ex_out = 0
     ex_deep = ex_skim = 0
     ex_wait = 0.0
     for ev in exec_events:
         ev_in = _inw(ev.get("t"))
+        _rep = ev["canon"] in ex_seen_any
+        ex_seen_any.add(ev["canon"])
         if ev_in:
             ex_compose_gross += ev["cmd_words"]
             ex_out += ev["out_words"]
             # 출력 판독도 파일 읽기와 같은 눈금: 호출마다 앞 200단어 정독,
             # 나머지 훑기 (호출별로 갈라야 한다 — 합계에 상한을 걸면 큰 로그
-            # 하나가 전체 상한을 먹는다)
-            ex_deep += min(ev["out_words"], _DEEP_BLOCK_WORDS)
-            ex_skim += max(0, ev["out_words"] - _DEEP_BLOCK_WORDS)
+            # 하나가 전체 상한을 먹는다). §86: 같은 신원 재실행은 앞 50단어.
+            _cap = _REPEAT_DEEP_WORDS if _rep else _DEEP_BLOCK_WORDS
+            ex_deep += min(ev["out_words"], _cap)
+            ex_skim += max(0, ev["out_words"] - _cap)
             ex_wait += ev["wait_sec"]
         if ev["canon"] not in ex_seen and not ev["failed"]:
             ex_seen.add(ev["canon"])          # 신원 판정은 전체 순서로 (§80)
