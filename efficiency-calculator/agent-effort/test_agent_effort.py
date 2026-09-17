@@ -96,9 +96,9 @@ class TestTranscriptActual(unittest.TestCase):
             # §50 턴 확인 + §63 코드/문서 요율 분리:
             #   동작 확인 1회 2.0 + 코드 500×0.005 + 문서 250×0.0025
             #   + 문서·기타 파일당 표본 확인 2×0.5
-            #   + 결론 100×0.005 + 진행 100×0.00222 (§71 분자 동속)
-            #   = 2 + 2.5 + 0.625 + 1 + 0.5 + 0.222 = 6.847
-            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 6.847,
+            #   + 결론 100×0.005 + 진행 100×0.002 (§71 분자 동속, §86 500 wpm)
+            #   = 2 + 2.5 + 0.625 + 1 + 0.5 + 0.2 = 6.825
+            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 6.825,
                                    places=2)
             # §52 기계 draft = (답변 200 + 파일 본문 500+250+1)×0.002
             #                = 1.902, execute 3×0.3 → machine 2.80
@@ -301,8 +301,8 @@ class TestTranscriptActual(unittest.TestCase):
                 f.write(json.dumps(ln, ensure_ascii=False) + "\n")
         try:
             m = actual_effort_minutes(parse_actions(p))
-            # 검토 = 정독 200×0.005 + 초과 훑기 300×0.00222 = 1.0 + 0.666 = 1.666 (§71·§74 상한 200)
-            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 1.666,
+            # 검토 = 정독 200×0.005 + 초과 훑기 300×0.002 = 1.0 + 0.6 = 1.6 (§71·§74 상한 200, §86 500 wpm)
+            self.assertAlmostEqual(m["breakdown"]["hitl"]["review"], 1.6,
                                    places=2)
         finally:
             os.unlink(p)

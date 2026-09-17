@@ -11,7 +11,7 @@
     분자(human) = 기록 실측 → 고정 규칙으로 사람 행동 구성 → × human 요율.
     LLM의 잔여 역할(행동 종류 선택)을 고정 대응 규칙으로 치환:
       read    = 항해 구조 환산 — 기여 파일은 증거 블록 정독(최소 앞 200단어,
-                §75) + 나머지 훑기(450 wpm, §66); 조회형·범위 지정 Read는
+                §75) + 나머지 훑기(500 wpm, §86); 조회형·범위 지정 Read는
                 전량 정독(§70·§75); 실행 출력·검색 결과는 호출당 앞 200
                 정독 + 나머지 훑기(§59·§73); 입력 전량 정독
       draft   = 생성 파일 순계 (§31 재생) + 기존 파일 순수 추가(§66)
@@ -23,8 +23,9 @@
                 무효는 환경·타이핑 실수·거부 서명일 때만 (§69)
       verify  = 없음 (§83에서 제거 — 종전 산출물 있으면 1건 3.0분)
       think   = 전략 생각 (§53) — 지시 직후 첫 응답의 생각 토큰 × 요율
-                (정독과 동속 0.005, §57), 서브에이전트 기록 포함 (§68).
-                (구 포맷은 토큰 수가 없어 건당 1.5분 고정, §58)
+                (0.001 = §57 정독 동속 0.005의 5배속, §86), 서브에이전트
+                기록 포함 (§68). (구 포맷은 토큰 수가 없어 건당 0.3분 고정,
+                §58의 1.5분을 §86에서 5배속)
                 + 서브 보고문 전량 (§68) + 메인 진행 나레이션 (§73) — 밖으로
                 나온 생각, 같은 요율.
                 기본 ON, 휴먼화 축과 독립 (include_think=False로 끔).
@@ -161,7 +162,8 @@ def channel_audit(stats):
 # (= 전략 수립)만 분자에 계상한다. 실측(51세션): 전체 생각 토큰의 68%가
 # 지시 직후에 몰림 — 위치 선별만으로 도구 잔생각이 걸러진다.
 THINK_TOK2WORD = 0.75        # 토큰→단어 환산
-THINK_FALLBACK_MIN = 1.5      # 구 포맷(토큰 미기록) 전략 생각 지점의 건당 시간
+THINK_FALLBACK_MIN = 0.3      # 구 포맷(토큰 미기록) 전략 생각 지점의 건당 시간 (§58 1.5 → §86 5배속 0.3)
+PASTE_BLOCK_MIN = 0.05        # §86: 복붙 덩어리당 고정 시간(3초) — 단어 요율 대신
 
 # 절감율 하한 (§76): 절감율 = 1 − agent/human 은 위로 100%에서 막히지만
 # 아래로는 한계가 없어(agent가 human의 3배면 −200%) 세션별 평균이 음수
@@ -184,7 +186,7 @@ HUMAN_FLOOR_RATIO = 1.0 / (1.0 - SAVINGS_FLOOR)   # = 0.6667
 #                              요율(rates.json think)이 바뀌어도 건당 분은 고정 —
 #                              아래에서 분을 단어로 역환산해 쓴다.
 #                              신 포맷(2026-08-12+)은 실측 토큰 그대로.
-_THINK_DEFAULT_SPEC = {"unit": "word_count", "min_per_unit": 0.005}
+_THINK_DEFAULT_SPEC = {"unit": "word_count", "min_per_unit": 0.001}
 #                      # rates.json에 think 항목이 없을 때의 폴백
 #                      # (§57 분자 정독과 동속 — 200wpm 상당)
 
@@ -206,7 +208,7 @@ def collect_strategy_thinking(jsonl_path, subagent_paths=(), count_window=None):
       전략 지점 = 그 지시 직후 첫 assistant 메시지에 생각 흔적이 있는 경우.
       생각량 = usage.output_tokens_details.thinking_tokens (2026-08-12+ 기록).
       구 포맷(토큰 수 미기록, 생각 블록만 존재)은 fallback_points로 세고,
-      건당 THINK_FALLBACK_MIN(1.5분) 고정으로 계상한다(§58) — 실측 평균
+      건당 THINK_FALLBACK_MIN(0.3분, §86) 고정으로 계상한다(§58) — 실측 평균
       (2.98분)이 아니라 중앙값(1.49분)에 맞춘 하한이다.
 
     반환: {"points": 전략 지점 수, "tokens": 전략 생각 토큰,
@@ -271,6 +273,10 @@ def _scan_strategy_thinking(fh, skip_sidechain=True, count_window=None):
                 if rec.get("isMeta"):
                     continue
                 awaiting = True
+            elif t == "assistant" and (
+                    rec.get("isApiErrorMessage")
+                    or (rec.get("message") or {}).get("model") == "<synthetic>"):
+                continue  # 장애 메시지 — 응답 아님, awaiting 유지 (§86)
             elif t == "assistant" and awaiting:
                 msg = rec.get("message") or {}
                 mid = msg.get("id")
@@ -535,6 +541,13 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
                       "unit": "word_count", "minutes": round(emn, 2),
                       "detail": {k: round(v, 1)
                                  for k, v in edit_kind.items() if v}})
+    pb = stats.get("paste_blocks", 0)   # §86 복붙 덩어리 — 양 모드 공통
+    if pb:
+        items.append({"primitive": "paste", "count": pb, "unit": "block",
+                      "minutes": round(pb * PASTE_BLOCK_MIN, 2),
+                      "detail": {k: v for k, v in
+                                 (stats.get("paste_words_by_kind") or {}).items()
+                                 if v}})
     if raw_record:
         # 궤적 재연: 행동 횟수 = 세션 기록의 호출 수 그대로
         if stats.get("search_calls"):
@@ -638,7 +651,8 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
     total = 0.0
     breakdown = []
     for a in build_actions(stats, rates, humanize_rw, humanize_act):
-        spec = card[a["primitive"]]
+        spec = card.get(a["primitive"]) or {"unit": a.get("unit", "count"),
+                                            "min_per_unit": 0.0}
         # 항목이 분을 직접 들고 오면 그대로 (§59 — 실행 4토막·쓰기 종류별
         # 요율처럼 단일 요율로 환원 안 되는 계산)
         minutes = a["minutes"] if "minutes" in a \

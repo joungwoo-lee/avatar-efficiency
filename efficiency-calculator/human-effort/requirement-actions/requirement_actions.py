@@ -512,6 +512,100 @@ def estimate_actions_from_requirements(llm, requirements, record_stats=None,
 
 _EDIT_ANCHOR_MIN = 3   # 이 길이 이상 연속 일치만 "다시 뱉은 앵커"로 인정 (우연 일치 방지)
 
+# 복붙 판정 (§86): 쓰기 1회(Write 본문·Edit 추가분)의 단어를 둘로 가른다.
+#   복붙  = 세션에서 이미 본 글(지시·도구 결과·응답·앞선 쓰기)과 _PASTE_RUN_WORDS
+#           이상 **연속** 일치 → 덩어리당 고정 소액(record_actions_code_api
+#           PASTE_BLOCK_MIN), 단어 요율 0.
+#   타이핑 = 나머지. 길이 상한은 두지 않는다(사람이 파일을 쓸 때는 길어도 친다 —
+#           감지된 복붙만 복붙). 순계(ON)·총량(OFF) 모두 파일별 min(·, 타이핑 합).
+_PASTE_GRAM = 3
+_PASTE_RUN_WORDS = 20
+
+
+def _grams(words, n=_PASTE_GRAM):
+    return {tuple(words[i:i + n]) for i in range(len(words) - n + 1)}
+
+
+def _paste_mask(words, seen, n=_PASTE_GRAM):
+    """words 중 seen(3-gram 집합)과 _PASTE_RUN_WORDS 이상 연속 일치하는 단어 위치
+    → (mask, runs). mask[i]=True 면 복붙 구간."""
+    run_min = _PASTE_RUN_WORDS
+    mask = [False] * len(words)
+    if len(words) < run_min or not seen:
+        return mask, 0
+    cov = [False] * len(words)
+    for i in range(len(words) - n + 1):
+        if tuple(words[i:i + n]) in seen:
+            for j in range(i, i + n):
+                cov[j] = True
+    runs = c = 0
+    for i, x in enumerate(cov + [False]):
+        if x:
+            c += 1
+        else:
+            if c >= run_min:
+                for j in range(i - c, i):
+                    mask[j] = True
+                runs += 1
+            c = 0
+    return mask, runs
+
+
+def _paste_cover(words, seen, n=_PASTE_GRAM):
+    """→ (pasted_words, runs). _paste_mask의 집계판."""
+    mask, runs = _paste_mask(words, seen, n)
+    return sum(mask), runs
+
+
+_CD_SEP = {"&&", ";", "||"}
+
+
+def _exec_prefix_anchor(words, prev, mask):
+    """§86: 직전 실행 명령과 같은 **`cd <경로> &&` 접두어**의 단어 수(복붙 구간 제외).
+    AI는 작업 폴더가 호출마다 초기화될 수 있어 매번 `cd 경로 &&`를 다시 붙이지만,
+    사람은 한 번 이동한 폴더에서 계속 일한다. 이 접두어가 직전 명령과 같을 때만
+    재입력에서 뺀다 — 그 밖의 앞부분 일치(`python -m pytest` 등)는 사람도 치므로
+    제외."""
+    if not words or words[0] != "cd" or not prev or prev[0] != "cd":
+        return 0
+    k = 0
+    for i, w in enumerate(words):
+        if w in _CD_SEP:
+            k = i + 1
+            break
+    if k == 0 or words[:k] != prev[:k]:
+        return 0
+    return sum(1 for i in range(k) if not mask[i])
+
+
+def _added_segments(old, new, anchor_min=_EDIT_ANCHOR_MIN):
+    """edit_delta와 같은 diff로 new 쪽 '추가' 구간(앵커 블록 밖)을 단어열 목록으로."""
+    ow, nw = old.split(), new.split()
+    if not ow or not nw:
+        return [nw] if nw else []
+    sm = difflib.SequenceMatcher(None, ow, nw,
+                                 autojunk=(len(ow) + len(nw) > 4000))
+    segs, cur = [], 0
+    for b in sm.get_matching_blocks():
+        if b.size >= anchor_min:
+            if b.b > cur:
+                segs.append(nw[cur:b.b])
+            cur = b.b + b.size
+    if cur < len(nw):
+        segs.append(nw[cur:])
+    return [s for s in segs if s]
+
+
+def _typing_split(segments, seen):
+    """쓰기 1회의 신규 단어열들 → (typed, pasted, blocks)."""
+    pasted = runs = 0
+    total = sum(len(s) for s in segments)
+    for s in segments:
+        p, r = _paste_cover(s, seen)
+        pasted += p
+        runs += r
+    return total - pasted, pasted, runs
+
 
 def edit_delta(old, new, anchor_min=_EDIT_ANCHOR_MIN):
     """Edit 1건의 실제 변경량 (§66). 반환: (added, removed, anchor) 단어수.
@@ -824,6 +918,11 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
     whole_files = set()      # Read 통째로 읽은 파일 (§75) — 둘 다면 블록 규칙
     search_turns = 0         # 검색 도구를 1회+ 쓴 지시 턴 수 (§70: 검색 턴당 하한 1건)
     write_seq = {}           # fp → [(kind, old, new, tool_id)] 쓰기 순서열 (§31 재생용)
+    write_meta = {}          # fp → [(removed, typed, pasted, blocks, t)] write_seq와 같은 순서 (§86)
+    seen_grams = set()       # 세션에서 이미 본 글의 3-gram (복붙 판정용, §86)
+    exec_paste_w_in = exec_paste_b_in = 0   # §86 실행 명령 속 복붙 (구간 내)
+    exec_anchor_w_in = 0     # §86 직전 명령 접두어 재입력 제외 (구간 내)
+    prev_exec_words = {}     # 스트림(메인/서브)별 직전 실행 명령 단어열
     failed_tool_ids = set()  # 툴 에러가 난 호출 id — 적용 안 된 편집 제외
     exec_hard_failed = set() # 실행 중 환경·타이핑 실수·거부로 무효인 호출 id (§69)
     # ---- §80 구간 계상 재료: 판정 구조는 위 그대로(전체), 아래는 시각 꼬리표
@@ -904,6 +1003,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                         # 서브에이전트에게 간 지시문은 AI가 쓴 것 — 사람 지시
                         # (input_words)로 세면 안 된다 (§59)
                         t = "" if is_sub else b.get("text", "")
+                        seen_grams.update(_grams(b.get("text", "").split()))
                         if t and not _is_system_text(t):
                             input_w += len(t.split())
                             if inw:
@@ -923,6 +1023,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                                   if isinstance(c, dict) and c.get("type") == "text"]
                                  if isinstance(rc, list) else [])
                         text = " ".join(parts)
+                        seen_grams.update(_grams(text.split()))
                         reviewed += len(text.split())
                         if inw:
                             reviewed_in += len(text.split())
@@ -1002,11 +1103,15 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                             if len(old.split()) < 20000:
                                 read_content[fp] = old + " " + text
             elif rtype == "assistant":
+                if rec.get("isApiErrorMessage") or \
+                        (rec.get("message") or {}).get("model") == "<synthetic>":
+                    continue  # 장애 메시지(API Error·로그인 만료 등) — 사람 행동 아님 (§86)
                 texts = []
                 for b in blocks:
                     if not isinstance(b, dict):
                         continue
                     if b.get("type") == "text":
+                        seen_grams.update(_grams(b.get("text", "").split()))
                         # 서브에이전트 텍스트(부모에게 낸 보고) = 사람이 직렬로
                         # 했다면 머릿속에 있던 것을 다음 단계로 넘기는 것 —
                         # 밖으로 나온 생각. 전량을 세어 §68에서 think 요율로
@@ -1037,6 +1142,12 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                     if name in ("Bash", "PowerShell"):
                         cmd = str((b.get("input") or {}).get("command", ""))
                         canon = " ".join(cmd.split())[:120]
+                        _cwords = cmd.split()
+                        # §86: 명령문 속 복붙 — 앞서 본 글(출력·파일·응답·앞 명령)을
+                        # 가져다 쓴 20단어+ 연속 구간은 타이핑이 아니다
+                        _mask, _pb = _paste_mask(_cwords, seen_grams)
+                        _pw = sum(_mask)
+                        seen_grams.update(_grams(_cwords))
                         kind = classify_shell_command(cmd)
                         if kind == "search":         # §47: 셸 grep·find류
                             turn_search_i = tool_i   # = 탐색 신호(착지 로직)
@@ -1057,9 +1168,16 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                                 exec_calls_in += 1
                             exec_seq.append((canon, b.get("id")))
                             exec_seq_in.append((canon, b.get("id"), inw))
+                            _anc = _exec_prefix_anchor(
+                                _cwords, prev_exec_words.get(is_sub, []), _mask)
+                            prev_exec_words[is_sub] = _cwords
+                            if inw:
+                                exec_paste_w_in += _pw
+                                exec_paste_b_in += _pb
+                                exec_anchor_w_in += _anc
                             if b.get("id"):
                                 pending_exec[b["id"]] = (
-                                    canon, len(cmd.split()), rec_t, rec_tw)
+                                    canon, len(_cwords) - _pw - _anc, rec_t, rec_tw)
                     inp = b.get("input") or {}
                     if name == "StructuredOutput":
                         # 구조화 보고 채널 (§33): 워크플로 에이전트의 최종
@@ -1104,9 +1222,14 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                     elif name == "Write":
                         edited_files.add(fp)
                         last_write_t = rec_tw
+                        _ww = str(inp.get("content") or "").split()
+                        _ty, _pa, _bl = _typing_split([_ww], seen_grams)  # §86
+                        seen_grams.update(_grams(_ww))
                         write_seq.setdefault(fp, []).append(
                             ("write", "", inp.get("content") or "", b.get("id"),
                              rec_tw))
+                        write_meta.setdefault(fp, []).append(
+                            (0, _ty, _pa, _bl, rec_tw))
                         # Write 전체 본문은 편집 증거로 안 쓴다 — 파일을 통째로
                         # 다시 쓰면 모든 블록이 정독으로 물들어 구간 분해가 무효화됨.
                         # 핵심 위치 증거는 Edit의 원문(old_string)만 (§26)
@@ -1127,6 +1250,13 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                             if old_s or new:  # 삭제(new="")도 순계에 반영
                                 write_seq.setdefault(fp, []).append(
                                     ("edit", old_s, new, b.get("id"), rec_tw))
+                                seen_grams.update(_grams(old_s.split()))
+                                _ty, _pa, _bl = _typing_split(
+                                    _added_segments(old_s, new), seen_grams)  # §86
+                                _rm = edit_delta(old_s, new)[1]
+                                write_meta.setdefault(fp, []).append(
+                                    (_rm, _ty, _pa, _bl, rec_tw))
+                            seen_grams.update(_grams(new.split()))
                             # 편집 원문 위치가 사람이 정독해야 했던 핵심 구간
                             edit_texts[fp] = (edit_texts.get(fp, "")
                                               + " " + old_s + " " + new)
@@ -1295,6 +1425,34 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
         for fp in set(out_draft) | set(out_edit):
             artifact[fp] = out_draft.get(fp, 0) + out_edit.get(fp, 0)
 
+    # §86: 쓰기 op별 타이핑/복붙 분해 → 파일별 타이핑 합(순계용 = 실패 op 제외,
+    # 총량용 = 실패 포함). 순계·총량은 이 합을 상한으로 받는다(항목별 ON ≤ OFF 유지).
+    typed_on = {"draft": {}, "edit": {}}
+    typed_off = {"draft": {}, "edit": {}}
+    paste_kind = {"code": 0, "doc": 0, "data": 0, "other": 0}
+    paste_blocks = 0
+    for _fp, seq in write_seq.items():
+        _created = seq[0][0] == "write"
+        _k = write_kind(_fp)
+        for op, m in zip(seq, write_meta.get(_fp, [])):
+            _rm, _ty, _pa, _bl, _t = m
+            if not _inw(_t):
+                continue
+            cls = "draft" if (op[0] == "write" or _created or _rm == 0) else "edit"
+            typed_off[cls][_fp] = typed_off[cls].get(_fp, 0) + _ty
+            if not (op[3] and op[3] in failed_tool_ids):
+                typed_on[cls][_fp] = typed_on[cls].get(_fp, 0) + _ty
+            paste_kind[_k] += _pa
+            paste_blocks += _bl
+    paste_kind["cmd"] = exec_paste_w_in      # §86 실행 명령 속 복붙
+    paste_blocks += exec_paste_b_in
+    out_draft = {fp: min(w, typed_on["draft"].get(fp, 0)) for fp, w in out_draft.items()}
+    out_edit = {fp: min(w, typed_on["edit"].get(fp, 0)) for fp, w in out_edit.items()}
+    out_draft = {fp: w for fp, w in out_draft.items() if w}
+    out_edit = {fp: w for fp, w in out_edit.items() if w}
+    artifact = {fp: out_draft.get(fp, 0) + out_edit.get(fp, 0)
+                for fp in set(out_draft) | set(out_edit)}
+
     # 총량(로레코드 rw OFF용, 실패 포함) — §66에서 분류를 도구명→**파일 출처**
     # 기준으로 통일: 세션이 만든 파일(Write 기점)은 이후 Edit로 써넣은 단어도
     # 신규(draft) — 순계(replay_write_net)와 같은 원리라 항목별 ON ≤ OFF가
@@ -1308,11 +1466,11 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
     for _fp, seq in write_seq.items():
         _k = write_kind(_fp)
         _created = seq[0][0] == "write"
+        _gd = _ge = 0
         writes = [op for op in seq if op[0] == "write"]
         if writes and _inw(writes[-1][4] if len(writes[-1]) > 4 else None):
             _w = len(writes[-1][2].split())
-            gross_d += _w
-            gross_draft_kind[_k] += _w
+            _gd += _w
             write_tool_raw += _w
         for op in seq:
             if op[0] != "edit":
@@ -1322,11 +1480,15 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
             write_tool_raw += len(op[2].split())
             _added, _removed, _anchor = edit_delta(op[1], op[2])
             if _created or _removed == 0:
-                gross_d += _added
-                gross_draft_kind[_k] += _added
+                _gd += _added
             else:
-                gross_e += _added
-                gross_edit_kind[_k] += _added
+                _ge += _added
+        _gd = min(_gd, typed_off["draft"].get(_fp, 0))   # §86 타이핑 상한
+        _ge = min(_ge, typed_off["edit"].get(_fp, 0))
+        gross_d += _gd
+        gross_e += _ge
+        gross_draft_kind[_k] += _gd
+        gross_edit_kind[_k] += _ge
 
     # 쓰기 종류 분해 (§59): 코드/문서/데이터는 사람 절차가 다르다
     draft_kind = {"code": 0, "doc": 0, "data": 0, "other": 0}
@@ -1415,6 +1577,9 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
            # 쓰기 종류별 순계·총량 (§59 — 요율 3분할용)
            "out_draft_by_kind": draft_kind,
            "out_edit_by_kind": edit_kind,
+           "paste_words_by_kind": paste_kind,   # §86 복붙 단어(정보용)
+           "paste_blocks": paste_blocks,        # §86 덩어리 수 → 고정 소액
+           "exec_anchor_words": exec_anchor_w_in,   # §86 직전 명령 접두어 재입력 제외
            "gross_write_by_kind": gross_kind,
            # §66 총량의 draft/edit 종류별 분해 (파일 출처 기준, 앵커 제외)
            "gross_draft_by_kind": gross_draft_kind,

@@ -558,8 +558,8 @@ class TestPrimitiveEffort(unittest.TestCase):
 
     def test_record_stats_anchor(self):
         # 구방식도 record_stats를 주면 신방식과 같은 닻이 적용된다:
-        # 구조적 읽기 = 정독 실측 600 + 훑기 실측 400×0.444(§66: skim
-        # 0.00222/read 0.005) + 입력 40 = 817.6 → 818
+        # 구조적 읽기 = 정독 실측 600 + 훑기 실측 400×0.4(§86: skim
+        # 0.002/read 0.005) + 입력 40 = 800
         # (LLM 9999 대체) / 작성 = 실측 500 상한 (LLM 800 절단)
         from primitive_effort import estimate_human_min
         out = {"human": [{"primitive": "read", "count": 9999},
@@ -571,11 +571,11 @@ class TestPrimitiveEffort(unittest.TestCase):
                  "artifact_words": 500}
         r = estimate_human_min(self._Mock([out]), "spec", record_stats=stats)
         counts = {b["primitive"]: b["count"] for b in r["breakdown"]}
-        self.assertEqual(counts["read"], 818)
+        self.assertEqual(counts["read"], 800)
         self.assertEqual(counts["draft"], 500)
-        self.assertEqual(r["anchors"]["structured_read_words"], 818)
-        # read 818×0.005=4.09 + draft 500×0.05=25 = 29.09
-        self.assertAlmostEqual(r["human_min"], 29.09, places=2)
+        self.assertEqual(r["anchors"]["structured_read_words"], 800)
+        # read 800×0.005=4.0 + draft 500×0.05=25 = 29.0
+        self.assertAlmostEqual(r["human_min"], 29.0, places=2)
 
 
 class TestRequirementActions(unittest.TestCase):
@@ -737,15 +737,15 @@ class TestRequirementActions(unittest.TestCase):
             self.assertEqual(rs["contributed_docs"], 1)
             self.assertEqual(rs["deep_words"], 200)    # 재읽기 중복 제거 + 블록
             self.assertEqual(rs["skim_words"], 2300)   # a 나머지 1000 + b 400 + c 900
-            # 닻: 200 + 2300×(훑기 0.00222/정독 0.005=0.444) = 200+1021.2 → 1221 (§66)
+            # 닻: 200 + 2300×(훑기 0.002/정독 0.005=0.4) = 200+920 = 1120 (§86)
             out = {"human": [{"primitive": "read", "count": 9999}]}
             req = {"requirements": [{"title": "수정", "requested_quantities": [],
                                      "acceptance_criteria": []}]}
             r = estimate_actions_from_requirements(self._Mock([out]), req,
                                                    record_stats=rs)
             bd = {b["primitive"]: b for b in r["breakdown"]}
-            self.assertEqual(r["anchors"]["structured_read_words"], 1221)
-            self.assertEqual(bd["read"]["count"], 1221)
+            self.assertEqual(r["anchors"]["structured_read_words"], 1120)
+            self.assertEqual(bd["read"]["count"], 1120)
         finally:
             os.unlink(p)
 
