@@ -66,6 +66,28 @@ def test_date_suffix_and_fast():
     print("ok date_suffix_and_fast")
 
 
+def test_fable_rates():
+    """Fable 5.1: $10/$50, 캐시 쓰기 $12.5/$20, 읽기 $0.25 (0.025x — 배수 폴백이면 $1.0 로 틀림)."""
+    c = tc.Call("m", None, "claude-fable-5-1", None, None, False, "standard",
+                input_tokens=1_000_000, output_tokens=1_000_000)
+    usd, prov = tc.call_cost(c, RATES)
+    assert prov == "api" and abs(usd - 60.0) < 1e-9, usd
+
+    c = tc.Call("m", None, "claude-fable-5-1", None, None, False, "standard",
+                cache_write_5m=1_000_000, cache_write_1h=1_000_000, cache_read=1_000_000)
+    usd, _ = tc.call_cost(c, RATES)
+    assert abs(usd - (12.5 + 20.0 + 0.25)) < 1e-9, usd
+
+    # Fable 5 는 읽기 $1.0 (표준 0.1x). 5.1 과 구분되어야 한다
+    c = tc.Call("m", None, "claude-fable-5", None, None, False, "standard", cache_read=1_000_000)
+    usd, _ = tc.call_cost(c, RATES)
+    assert abs(usd - 1.0) < 1e-9, usd
+
+    for m in ["claude-fable-5-1", "claude-mythos-5-1", "claude-fable-5", "claude-mythos-5"]:
+        assert tc.classify_model(m, RATES) == "api", m
+    print("ok fable_rates")
+
+
 def test_onprem_is_free():
     for m in ["onprem/qwen3-32b", "llama-3.3-70b", "ollama/gemma3", "EXAONE-4.0"]:
         c = tc.Call("m", None, m, None, None, False, "standard",
@@ -252,6 +274,7 @@ def test_window_range():
 if __name__ == "__main__":
     test_price_math()
     test_date_suffix_and_fast()
+    test_fable_rates()
     test_onprem_is_free()
     test_dedupe_streaming_repeats()
     test_session_with_subagents_and_onprem()
