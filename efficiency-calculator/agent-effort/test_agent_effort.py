@@ -390,10 +390,12 @@ class TestTranscriptActual(unittest.TestCase):
         # §84: AI가 답을 끝낸 뒤 배경 서브에이전트/배경 명령을 기다리다
         # <task-notification>으로 깨어난 대기는 포그라운드 도구 대기처럼
         # AI 시간이다 — 같은 일을 배경으로 돌렸다고 분모가 줄면 안 된다.
-        # 상한은 포그라운드와 동일(10분): 6분 대기는 그대로, 10일 대기는 10분.
+        # §87 R4: 완료(completed)는 상한 없음, 그 외(killed 등)는 10분 상한.
+        # 6분 완료 대기는 그대로, 10일 뒤 killed 알림은 10분.
         T = "2026-08-%02dT09:%02d:00.000Z"
         notif = ("<task-notification>\n<task-id>a1</task-id>\n"
                  "<status>completed</status>\n</task-notification>")
+        killed = notif.replace("completed", "killed")
         lines = [
             {"type": "user", "timestamp": T % (3, 0),
              "message": {"role": "user", "content": "서브에이전트 돌려 " * 20}},
@@ -406,9 +408,9 @@ class TestTranscriptActual(unittest.TestCase):
             {"type": "assistant", "timestamp": T % (3, 8),
              "message": {"role": "assistant", "content": [
                  {"type": "text", "text": "다른 것도 돌립니다 " * 20}]}},
-            # 10일 뒤 알림 → 상한 10분만
+            # 10일 뒤 killed 알림 → 상한 10분만
             {"type": "user", "timestamp": T % (13, 8),
-             "message": {"role": "user", "content": notif}},
+             "message": {"role": "user", "content": killed}},
             {"type": "assistant", "timestamp": T % (13, 9),
              "message": {"role": "assistant", "content": [
                  {"type": "text", "text": "끝났습니다 " * 20}]}},
@@ -429,6 +431,109 @@ class TestTranscriptActual(unittest.TestCase):
             self.assertEqual(c["user_instructions"], 1)
         finally:
             os.unlink(p)
+
+    # ── §87 AI 시간 재정의 (DESIGN-ai-time-87.md) ──
+    @staticmethod
+    def _wall(lines):
+        import json, tempfile, os
+        from transcript_actual import parse_actions
+        fd, p = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for ln in lines:
+                f.write(json.dumps(ln, ensure_ascii=False) + chr(10))
+        try:
+            return parse_actions(p)
+        finally:
+            os.unlink(p)
+
+    @staticmethod
+    def _rec(kind, hm, content, **kw):
+        h, m = hm
+        r = {"type": kind, "timestamp": "2026-08-03T%02d:%02d:00.000Z" % (h, m),
+             "message": {"role": kind, "content": content}}
+        r.update(kw)
+        return r
+
+    def test_r0_rewritten_old_records_add_no_time(self):
+        # 실측: 파일 끝에 옛 레코드가 같은 uuid·옛 시각으로 다시 붙어, 옛 시각
+        # 사이 간격(84~336분)이 AI 시간으로 잡혔다. uuid 중복은 건너뛰고,
+        # uuid가 없어도 시계는 뒤로 가지 않아야 한다.
+        R = self._rec
+        tr = lambda i: [{"type": "tool_result", "tool_use_id": i,
+                         "content": "ok " * 10}]
+        tu = lambda i: [{"type": "tool_use", "id": i, "name": "Bash",
+                         "input": {"command": "x"}}]
+        base = [R("user", (9, 0), "작업 " * 20, uuid="a"),
+                R("assistant", (9, 1), tu("t1"), uuid="b"),
+                R("user", (9, 2), tr("t1"), uuid="c"),
+                R("assistant", (9, 3), [{"type": "text", "text": "끝 " * 20}],
+                  uuid="d"),
+                R("user", (9, 40), "다음 " * 20, uuid="e"),
+                R("assistant", (9, 41), tu("t2"), uuid="f"),
+                R("user", (9, 42), tr("t2"), uuid="g"),
+                R("assistant", (9, 43), [{"type": "text", "text": "끝 " * 20}],
+                  uuid="h")]
+        dup = [dict(base[2]), dict(base[6])]
+        c = self._wall(base + dup)
+        self.assertAlmostEqual(c["ai_wall_min"], 6.0, places=2)
+        nouuid = [{k: v for k, v in r.items() if k != "uuid"}
+                  for r in base + dup]
+        c = self._wall(nouuid)
+        self.assertAlmostEqual(c["ai_wall_min"], 6.0, places=2)
+
+    def test_r1_meta_waker_and_compact_summary_are_boundaries(self):
+        # 예약 타이머(isMeta)·압축 요약이 AI를 깨웠다면 그 앞 공백은 방치.
+        R = self._rec
+        txt = lambda: [{"type": "text", "text": "답 " * 20}]
+        lines = [R("user", (9, 0), "작업 " * 20),
+                 R("assistant", (9, 1), txt()),
+                 R("user", (11, 0), "타이머 종료 — 재개", isMeta=True),
+                 R("assistant", (11, 1), txt()),
+                 R("user", (15, 0), "This session is being continued",
+                   isCompactSummary=True, isVisibleInTranscriptOnly=True),
+                 R("assistant", (15, 2), txt())]
+        c = self._wall(lines)
+        self.assertAlmostEqual(c["ai_wall_min"], 1 + 1 + 2, places=2)
+        # 지시로는 안 센다
+        self.assertEqual(c["user_instructions"], 1)
+
+    def test_r2_long_generation_counted_synthetic_excluded(self):
+        # 느린 PC·서버 과부하 재시도: 답 하나에 25분이 걸려도 끝까지 센다.
+        # <synthetic>(세션 이어 붙일 때 자동 생성 답)은 AI 답이 아니다.
+        R = self._rec
+        lines = [R("user", (9, 0), "작업 " * 20),
+                 {"type": "system", "subtype": "api_error",
+                  "timestamp": "2026-08-03T09:12:00.000Z"},
+                 R("assistant", (9, 25), [{"type": "text", "text": "답 " * 20}]),
+                 R("user", (10, 0), "다음 " * 20),
+                 {"type": "assistant", "timestamp": "2026-08-03T12:00:00.000Z",
+                  "message": {"role": "assistant", "model": "<synthetic>",
+                              "content": [{"type": "text",
+                                           "text": "No response requested."}]}}]
+        c = self._wall(lines)
+        self.assertAlmostEqual(c["ai_wall_min"], 25.0, places=2)
+
+    def test_r3_unbounded_tools_full_bounded_capped(self):
+        # 제한 없는 도구(서브에이전트·MCP)의 정상 결과는 끝까지, 사람을
+        # 기다리는 도구·오류 결과는 10분 상한.
+        R = self._rec
+        tu = lambda i, n: [{"type": "tool_use", "id": i, "name": n,
+                            "input": {"prompt": "x"}}]
+        tr = lambda i, err=False: [{"type": "tool_result", "tool_use_id": i,
+                                    "content": "ok " * 10, "is_error": err}]
+        lines = [R("user", (9, 0), "작업 " * 20),
+                 R("assistant", (9, 1), tu("a1", "Agent")),
+                 R("user", (9, 31), tr("a1")),                  # 30 전부
+                 R("assistant", (9, 32), tu("q1", "AskUserQuestion")),
+                 R("user", (9, 52), tr("q1")),                  # 20 → 10
+                 R("assistant", (9, 53), tu("m1", "mcp__srv__run")),
+                 R("user", (10, 13), tr("m1")),                 # 20 전부
+                 R("assistant", (10, 14), tu("a2", "Agent")),
+                 R("user", (10, 44), tr("a2", err=True)),       # 30 → 10
+                 R("assistant", (10, 45), [{"type": "text", "text": "끝 " * 20}])]
+        c = self._wall(lines)
+        self.assertAlmostEqual(c["ai_wall_min"],
+                               1 + 30 + 1 + 10 + 1 + 20 + 1 + 10 + 1, places=2)
 
 
 

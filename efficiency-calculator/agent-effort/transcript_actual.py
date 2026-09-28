@@ -5,12 +5,15 @@
 - hitl(사람 몫)은 wall-clock이 아니라 **단서 × 요율**로 추정한다 — 사람 노동은
   트랜스크립트에 단서(지시 건수·AI 출력 분량)로만 남고, 산출물 검토·후작업은
   세션 종료 후 몰아서 할 수 있어 세션 시간 측정으로는 잡히지 않는다.
-- AI 몫은 **타임스탬프 실측** (§62·§65): 턴을 연 입력 → 그 턴의 AI 기록들
-  사이 간격을 합산하되, **간격 하나가 10분을 넘으면 그 초과분은 방치로 보고
-  버린다**(§65). 관측된 도구 실행 최대가 10.0분(타임아웃)이라 그대로 담기고,
-  며칠 벌어진 방치만 걸러진다. AI가 끝낸 뒤 다음 입력까지는 사람 시간이라
-  제외. 병렬 실행(서브에이전트)은 메인 타임라인에 이미 흐른 시간이므로
-  별도 가산하지 않는다.
+- AI 몫은 **타임스탬프 실측** (§62·§65·§87): 턴을 연 입력 → 그 턴의 AI 기록들
+  사이 간격을 합산한다. 기준 = 전체 러닝타임 − 방치 − 사람이 쓴 시간.
+  §87부터 방치는 재기록 중복 레코드 무시(R0)와 AI를 깨운 입력(isMeta·압축
+  요약)을 경계로 쓰는 것(R1)으로 빼고, 10분 상한(§65)은 방치·승인 대기가
+  섞일 수 있는 간격(실행 시간이 막힌 도구·즉시 끝나는 도구·사람을 기다리는
+  도구·오류 결과·완료 아닌 배경 알림)에만 남긴다. 답 생성·정상 완료 배경
+  대기·제한 없는 도구의 정상 결과는 끝까지 센다 (DESIGN-ai-time-87.md).
+  AI가 끝낸 뒤 다음 입력까지는 사람 시간이라 제외. 병렬 실행(서브에이전트)은
+  메인 타임라인에 이미 흐른 시간이므로 별도 가산하지 않는다.
 
 LLM을 쓰지 않는다 — 트랜스크립트에 기록된 동작을 결정론적으로 세고
 rates.json의 agent/hitl 카드 요율을 곱한다.
@@ -139,7 +142,24 @@ _WAIT_THRESHOLD_SEC = 30.0   # 이 시간을 넘는 도구만 실측 초과분 �
 # (Bash 타임아웃)이다. 즉 10분이면 실제로 관측된 가장 긴 도구 실행을 그대로
 # 담는다. 그 외 간격은 최대 78.8시간이고 상한으로 30,893분이 잘려나가는데
 # 전부 방치다.
+#
+# §87(DESIGN-ai-time-87.md): 상한은 "방치가 섞일 수 있는 간격"에만 남긴다.
+# 답 생성 간격·정상 완료 배경 대기·제한 없는 도구의 정상 결과는 상한 없음.
+# 방치는 상한 대신 R0(중복·역행 레코드 무시)·R1(AI를 깨운 입력을 경계로)로
+# 뺀다. 이 PC 실측: 상한이 가려 온 긴 간격 7건(84~336분)은 전부 파일 끝에
+# 같은 uuid·옛 시각으로 다시 붙은 재기록 레코드가 만든 가짜 간격이었다.
 _AI_GAP_CAP_SEC = 600.0
+
+# §87 R3: 10분 넘게 걸렸다면 방치·승인 대기뿐인 도구 — 상한 유지.
+# Claude Code가 실행 시간을 막는 도구 + 즉시 끝나는 파일·관리 도구.
+_BOUNDED_TOOLS = frozenset((
+    "Bash", "PowerShell", "TaskOutput", "BashOutput", "KillShell",
+    "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Grep", "Glob",
+    "LS", "TodoWrite", "ToolSearch", "TaskCreate", "TaskUpdate", "TaskGet",
+    "TaskList", "TaskStop"))
+# 사람의 답을 기다리는 도구 — 그 대기는 사람 시간(승인 대기와 같은 취급,
+# 상한 10분까지 포함).
+_HUMAN_WAIT_TOOLS = frozenset(("AskUserQuestion", "ExitPlanMode"))
 
 
 def _epoch(x):
@@ -276,6 +296,8 @@ def parse_actions(jsonl_path, count_window=None):
             "t": t if t is not None else last_tw})   # §80 확인 시점 시각
         seg_code.clear()
         seg_files.clear()
+    seen_uuid = set()    # §87 R0 재기록 중복 레코드 판별
+    tool_names = {}      # §87 R3 tool_use id → 도구 이름
     with open(jsonl_path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -287,6 +309,13 @@ def parse_actions(jsonl_path, count_window=None):
                 continue
             if not isinstance(rec, dict):
                 continue
+            # §87 R0: 같은 uuid가 다시 나오면 파일 끝에 다시 붙은 옛 레코드다
+            # (옛 시각 그대로). 시간·집계 모두 이미 반영됐으므로 건너뛴다.
+            uid = rec.get("uuid")
+            if uid:
+                if uid in seen_uuid:
+                    continue
+                seen_uuid.add(uid)
             counts["session_id"] = counts["session_id"] or rec.get("sessionId")
             rec_t = _epoch(rec.get("timestamp"))
             tw = rec_t if rec_t else last_tw   # §80 귀속 시각(물려받기)
@@ -297,6 +326,16 @@ def parse_actions(jsonl_path, count_window=None):
                 counts["first_ts"] = counts["first_ts"] or ts
                 counts["last_ts"] = ts
             rtype = rec.get("type")
+            # §87 R1: AI를 깨운 입력(isMeta: 예약 타이머·다른 세션 메시지 등 /
+            # isCompactSummary: 압축 요약)은 지시로는 안 세지만 AI 시간의
+            # 경계다 — 그 앞 공백은 AI가 쉬던 시간(방치)이므로 시계만 옮긴다.
+            if (rtype == "user" and rec_t and turn_prev
+                    and not rec.get("isSidechain")
+                    and (rec.get("isMeta") or rec.get("isCompactSummary"))
+                    and not any(isinstance(x, dict)
+                                and x.get("type") == "tool_result"
+                                for x in _content_blocks(rec.get("message")))):
+                turn_prev = max(turn_prev, rec_t)
             if (rtype not in ("user", "assistant") or rec.get("isMeta")
                     or rec.get("isSidechain")          # 병렬 — 시간 가산 금지
                     or rec.get("isCompactSummary")     # 압축 요약 ≠ 사용자 지시
@@ -306,11 +345,16 @@ def parse_actions(jsonl_path, count_window=None):
 
             if rtype == "assistant":
                 if turn_start is not None and rec_t and turn_prev:
-                    # §65 간격마다 상한 적용 — 방치는 안 센다
-                    if inw:  # §80 시간 조각은 끝나는 레코드 시각에 귀속
-                        counts["ai_wall_min"] += min(
-                            max(0.0, rec_t - turn_prev), _AI_GAP_CAP_SEC) / 60
-                    turn_prev = rec_t
+                    # §87 R2: 답 생성 간격은 상한 없음 — 느린 응답·서버 과부하
+                    # 재시도 대기도 끝까지 AI 시간. 방치는 R0·R1이 뺀다.
+                    # <synthetic>(세션 이어 붙일 때 자동 생성)은 AI 답이 아님.
+                    # 시계는 뒤로 안 간다(역행 레코드는 간격 0).
+                    synthetic = ((rec.get("message") or {}).get("model")
+                                 == "<synthetic>")
+                    if inw and not synthetic and rec_t > turn_prev:
+                        # §80 시간 조각은 끝나는 레코드 시각에 귀속
+                        counts["ai_wall_min"] += (rec_t - turn_prev) / 60
+                    turn_prev = max(turn_prev, rec_t)
                 ans_w = 0
                 for b in blocks:
                     if not isinstance(b, dict):
@@ -320,6 +364,8 @@ def parse_actions(jsonl_path, count_window=None):
                             counts["tool_calls"] += 1
                         if b.get("id") and rec_t:
                             pending_calls[b["id"]] = rec_t
+                        if b.get("id"):
+                            tool_names[b["id"]] = b.get("name")
                         seq += 1
                         inp = b.get("input") or {}
                         if b.get("name") == "StructuredOutput":
@@ -375,24 +421,27 @@ def parse_actions(jsonl_path, count_window=None):
                 # tool_result처럼 센다. 배경 서브에이전트·배경 명령은 사람이
                 # 아니라 AI가 시킨 일이고 결과가 올 때까지 일은 안 끝난 것
                 # (사람 관점 벽시계)이므로, 같은 일을 배경으로 돌렸다고 분모가
-                # 줄면 안 된다. 상한은 포그라운드와 동일(_AI_GAP_CAP_SEC) —
-                # 초과분은 방치로 보고 bg_wait_cut_min에 감사용으로만 남긴다.
-                is_bg_notif = any(
-                    isinstance(b, dict) and b.get("type") == "text"
-                    and b.get("text", "").lstrip().startswith(
-                        "<task-notification")
-                    for b in blocks)
+                # 줄면 안 된다.
+                # §87 R4: 정상 완료(completed)는 상한 없음 — 작업이 실제로 돈
+                # 시간이다(실측: 5시간 야간 배치). failed·killed·stopped·상태
+                # 없음은 상한 유지 — 켜 두었다 끈 서버, 사용량 한도로 5초 만에
+                # 멈춘 서브에이전트의 알림이 238분 뒤 온 사례 등 일한 시간이
+                # 아니다. 초과분은 bg_wait_cut_min에 감사용으로만 남긴다.
+                bg_text = " ".join(
+                    b.get("text", "") for b in blocks
+                    if isinstance(b, dict) and b.get("type") == "text")
+                is_bg_notif = bg_text.lstrip().startswith("<task-notification")
                 if (is_bg_notif and turn_start is not None and rec_t
                         and turn_prev):
                     gap = max(0.0, rec_t - turn_prev)
                     if inw:
-                        add = min(gap, _AI_GAP_CAP_SEC) / 60
+                        full = "<status>completed</status>" in bg_text
+                        add = (gap if full else min(gap, _AI_GAP_CAP_SEC)) / 60
                         counts["ai_wall_min"] += add
                         counts["bg_wait_min"] += add
                         counts["bg_wait_events"] += 1
-                        counts["bg_wait_cut_min"] += max(
-                            0.0, gap - _AI_GAP_CAP_SEC) / 60
-                    turn_prev = rec_t
+                        counts["bg_wait_cut_min"] += gap / 60 - add
+                    turn_prev = max(turn_prev, rec_t)
                 if turn_start is not None and turn_prev is not None \
                         and turn_prev > turn_start:
                     if _inw(turn_start):
@@ -411,11 +460,19 @@ def parse_actions(jsonl_path, count_window=None):
                     continue
                 if b.get("type") == "tool_result":
                     if turn_start is not None and rec_t and turn_prev:
-                        if inw:
-                            counts["ai_wall_min"] += min(
-                                max(0.0, rec_t - turn_prev),
-                                _AI_GAP_CAP_SEC) / 60      # §65
-                        turn_prev = rec_t
+                        if inw and rec_t > turn_prev:
+                            # §87 R3: 정상 결과 + 제한 없는 도구(포그라운드
+                            # 서브에이전트·MCP 등)는 상한 없음. 실행 시간이
+                            # 막히거나 즉시 끝나는 도구·사람을 기다리는 도구·
+                            # 오류 결과는 §65 상한 유지(넘으면 방치·승인 대기).
+                            gap = rec_t - turn_prev
+                            name = tool_names.get(b.get("tool_use_id"))
+                            full = (not b.get("is_error") and name
+                                    and name not in _BOUNDED_TOOLS
+                                    and name not in _HUMAN_WAIT_TOOLS)
+                            counts["ai_wall_min"] += (
+                                gap if full else min(gap, _AI_GAP_CAP_SEC)) / 60
+                        turn_prev = max(turn_prev, rec_t)
                     if inw:
                         counts["tool_result_words"] += _result_words(b)
                     seq += 1
