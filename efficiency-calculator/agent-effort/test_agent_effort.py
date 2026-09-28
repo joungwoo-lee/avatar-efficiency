@@ -535,6 +535,28 @@ class TestTranscriptActual(unittest.TestCase):
         self.assertAlmostEqual(c["ai_wall_min"],
                                1 + 30 + 1 + 10 + 1 + 20 + 1 + 10 + 1, places=2)
 
+    def test_r4_monitor_event_uncapped_statusless_other_capped(self):
+        # §88: 감시(Monitor) 이벤트 알림(<status> 없이 <event>)은 감시 대상이
+        # 돌던 시간 — 상한 없음(실측: 84분 이벤트가 10분으로 잘렸었다).
+        # <status>도 <event>도 없는 알림은 상한 유지.
+        R = self._rec
+        txt = lambda: [{"type": "text", "text": "답 " * 20}]
+        mon = ("<task-notification>\n<task-id>m1</task-id>\n"
+               "<summary>Monitor event: \"학습 진행\"</summary>\n"
+               "<event>=== step 1000 done</event>\n</task-notification>")
+        bare = ("<task-notification>\n<task-id>m2</task-id>\n"
+                "<summary>something</summary>\n</task-notification>")
+        lines = [R("user", (9, 0), "학습 감시 " * 20),
+                 R("assistant", (9, 1), txt()),
+                 R("user", (10, 30), mon),                    # 89 전부
+                 R("assistant", (10, 31), txt()),
+                 R("user", (11, 0), bare),                    # 29 → 10
+                 R("assistant", (11, 1), txt())]
+        c = self._wall(lines)
+        self.assertAlmostEqual(c["ai_wall_min"], 1 + 89 + 1 + 10 + 1, places=2)
+        self.assertEqual(c["bg_wait_events"], 2)
+        self.assertAlmostEqual(c["bg_wait_cut_min"], 19.0, places=2)
+
 
 
 class TestHitlCompact(unittest.TestCase):

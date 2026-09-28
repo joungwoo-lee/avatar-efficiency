@@ -131,7 +131,7 @@ agent_min = agent_human_min(사람 협업자의 에포트, hitl)
    (§84): AI가 답을 끝낸 뒤 배경 서브에이전트·배경 명령을 기다린 시간(직전
    AI 기록 → 알림)을 포그라운드 도구 대기와 같은 10분 상한으로 `ai_wall_min`에
    넣는다. 감사용 `bg_wait_min`·`bg_wait_events`·`bg_wait_cut_min`.
-   **§87**: 완료(completed) 알림은 상한 없음. 답 생성·제한 없는 도구의 정상 결과도
+   **§87·§88**: 완료(completed) 알림·감시(Monitor) 이벤트 알림은 상한 없음. 답 생성·제한 없는 도구의 정상 결과도
    상한 없음 — 방치는 재기록 중복 레코드 무시·AI를 깨운 입력(isMeta·압축 요약)
    경계로 뺀다. 상세 `DESIGN-ai-time-87.md`.
 

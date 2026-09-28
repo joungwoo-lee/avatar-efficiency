@@ -11,7 +11,8 @@
   요약)을 경계로 쓰는 것(R1)으로 빼고, 10분 상한(§65)은 방치·승인 대기가
   섞일 수 있는 간격(실행 시간이 막힌 도구·즉시 끝나는 도구·사람을 기다리는
   도구·오류 결과·완료 아닌 배경 알림)에만 남긴다. 답 생성·정상 완료 배경
-  대기·제한 없는 도구의 정상 결과는 끝까지 센다 (DESIGN-ai-time-87.md).
+  대기·감시(Monitor) 이벤트 대기(§88)·제한 없는 도구의 정상 결과는 끝까지
+  센다 (DESIGN-ai-time-87.md).
   AI가 끝낸 뒤 다음 입력까지는 사람 시간이라 제외. 병렬 실행(서브에이전트)은
   메인 타임라인에 이미 흐른 시간이므로 별도 가산하지 않는다.
 
@@ -236,17 +237,15 @@ def parse_actions(jsonl_path, count_window=None):
               # 장시간 호출을 이미 상쇄하고 있었다. 개별 호출로는 틀리지만
               # 총합에서는 맞는 구조. 감사용으로 집계만 남긴다.
               "long_wait_min": 0.0, "long_wait_events": 0,
-              # AI 동작 시간 실측 (§62): 사람 발화 시각 → 그 턴의 마지막 AI
-              # 기록 시각. 턴마다 재서 합산한다. 빼는 것 없음 — 도구가 10분
-              # 돌았으면 10분, 중간에 멈춰 승인을 기다렸어도 그대로 센다.
-              # (실측: 그 대기가 전체의 2.9%. 잘라내려 하면 타임아웃까지 간
-              #  진짜 도구 실행 10분짜리들이 같이 날아간다.)
+              # AI 동작 시간 실측 (§62·§65·§87): 턴을 연 입력 → 그 턴의 AI
+              # 기록들 사이 간격 합. 방치는 R0·R1로 빼고, 10분 상한은 방치·
+              # 승인 대기가 섞일 수 있는 간격에만 남긴다(§87, 위 주석).
               # AI가 끝낸 뒤 다음 사람 발화까지는 사람 시간이라 제외.
               "ai_wall_min": 0.0, "ai_turns": 0,
-              # 배경작업 대기 (§84): AI가 답을 끝낸 뒤 배경 서브에이전트·
-              # 배경 명령이 돌다가 <task-notification>으로 깨운 경우, 직전 AI
-              # 기록 → 알림 간격을 포그라운드 tool_result와 같은 규칙(간격당
-              # _AI_GAP_CAP_SEC 상한)으로 ai_wall_min에 가산한다.
+              # 배경작업 대기 (§84·§87·§88): AI가 답을 끝낸 뒤 배경 서브에이전트·
+              # 배경 명령·감시(Monitor)가 <task-notification>으로 깨운 경우, 직전
+              # AI 기록 → 알림 간격을 ai_wall_min에 가산한다. completed·감시
+              # 이벤트는 상한 없음, failed·killed·stopped는 _AI_GAP_CAP_SEC 상한.
               # bg_wait_min = 가산분, bg_wait_cut_min = 상한에 잘린 초과분.
               "bg_wait_min": 0.0, "bg_wait_events": 0, "bg_wait_cut_min": 0.0,
               # 세션 러닝타임 (§64): 첫 기록 ~ 마지막 기록. 초소형 세션
@@ -423,10 +422,14 @@ def parse_actions(jsonl_path, count_window=None):
                 # (사람 관점 벽시계)이므로, 같은 일을 배경으로 돌렸다고 분모가
                 # 줄면 안 된다.
                 # §87 R4: 정상 완료(completed)는 상한 없음 — 작업이 실제로 돈
-                # 시간이다(실측: 5시간 야간 배치). failed·killed·stopped·상태
-                # 없음은 상한 유지 — 켜 두었다 끈 서버, 사용량 한도로 5초 만에
-                # 멈춘 서브에이전트의 알림이 238분 뒤 온 사례 등 일한 시간이
-                # 아니다. 초과분은 bg_wait_cut_min에 감사용으로만 남긴다.
+                # 시간이다(실측: 5시간 야간 배치). failed·killed·stopped는
+                # 상한 유지 — 켜 두었다 끈 서버, 사용량 한도로 5초 만에 멈춘
+                # 서브에이전트의 알림이 238분 뒤 온 사례 등 일한 시간이 아니다.
+                # §88: 감시(Monitor) 이벤트 알림(<status> 없이 <event>만)도
+                # 상한 없음 — AI가 걸어 둔 감시 대상(학습·일괄 실행)이 돌던
+                # 시간이다(실측 62건 전부 진행 신호, 종료·타임아웃 0건; 5d38d92b
+                # 84·46·44·43분 이벤트가 10분씩으로 잘려 180분 미계상).
+                # 초과분은 bg_wait_cut_min에 감사용으로만 남긴다.
                 bg_text = " ".join(
                     b.get("text", "") for b in blocks
                     if isinstance(b, dict) and b.get("type") == "text")
@@ -435,7 +438,9 @@ def parse_actions(jsonl_path, count_window=None):
                         and turn_prev):
                     gap = max(0.0, rec_t - turn_prev)
                     if inw:
-                        full = "<status>completed</status>" in bg_text
+                        full = ("<status>completed</status>" in bg_text
+                                or ("<status>" not in bg_text     # §88
+                                    and "<event>" in bg_text))
                         add = (gap if full else min(gap, _AI_GAP_CAP_SEC)) / 60
                         counts["ai_wall_min"] += add
                         counts["bg_wait_min"] += add
