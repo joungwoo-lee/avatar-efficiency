@@ -132,22 +132,6 @@
 
 <!-- 1 -->
 <section class="slide">
-  <p class="sub">avatar-efficiency · 효율 계산기 §92 이후 · 2026-10-06 작성</p>
-  <h1>세션 45e1d583은 왜 효율 61.4배가 나오나</h1>
-  <div class="box key big">
-    결론 1. 지금은 이 세션 하나만 <b>예외 세션</b>이다. 크게 신경 쓸 필요는 없다.<br>
-    결론 2. 앞으로 AI로 시험하는 일이 흔해지면, <b>AI의 시험 노동이 사람이 시험한 노동과 똑같이 잡혀</b> 배수가 커질 것으로 예상된다. 그래도 이것은 실제로 노동을 많이 한 것으로 봐도 된다.
-  </div>
-  <table>
-    <tr><th>세션</th><th>Workflow가 한 일</th><th class="num">효율 (지금 → 포함하면)</th><th>부푼 원인</th></tr>
-    <tr class="hl"><td><code>45e1d583</code></td><td>벤치마크 시험 실행</td><td class="num">4.32배 → 61.4배</td><td>시험 대상의 일이 사람 일로 들어감</td></tr>
-  </table>
-  <p class="note">효율 = 사람이 했다면 걸렸을 시간 ÷ AI와 함께 실제로 든 시간. "61.4배"는 사람이 하면 61.4배 오래 걸릴 일로 계산됐다는 뜻이다.<br>
-  "지금"은 Workflow(여러 AI를 한꺼번에 돌리는 실행 기능) 기록을 빼고 센 값, "포함하면"은 계산기 §92 변경 후 그 기록까지 센 값이다.</p>
-</section>
-
-<!-- 2 -->
-<section class="slide">
   <h2>이 세션이 한 일 — 2026-07-24 08:07 ~ 09:24 (약 77분)</h2>
   <div class="box">
     <p>사용자 질문으로 시작했다: "EnterpriseOps-Gym(회사 IT 업무 시험장)을 로컬에서 재현할 때, 별도 API 키 없이 Haiku 서브에이전트(작은 AI 보조 일꾼)에게 시키는 것이 가능한가?"</p>
@@ -163,7 +147,7 @@
   </table>
 </section>
 
-<!-- 3 -->
+<!-- 2 -->
 <section class="slide">
   <h2>시험 대상은 무엇인가</h2>
   <div class="cols">
@@ -197,7 +181,7 @@
   </div>
 </section>
 
-<!-- 4 -->
+<!-- 3 -->
 <section class="slide">
   <h2>어떤 시험을 했나 — 과제 1개에 Haiku 에이전트 3개</h2>
   <div class="flow">
@@ -223,7 +207,7 @@
   </table>
 </section>
 
-<!-- 5 -->
+<!-- 4 -->
 <section class="slide">
   <h2>Workflow 6회 실행과 결과</h2>
   <table>
@@ -256,7 +240,7 @@
   </div>
 </section>
 
-<!-- 6 -->
+<!-- 5 -->
 <section class="slide">
   <h2>계산기는 이 세션을 어떻게 세나</h2>
   <div class="box">
@@ -278,7 +262,7 @@
   <p class="note">늘어난 4,250.33분 가운데 3,774.37분(약 89%)이 시험 대상 에이전트 몫이다. AI 쪽 74.46분 = 기계 시간 50.83분 + 사람 지시·검토 23.63분. 2026-10-06 현재 코드로 다시 계산한 값이다.</p>
 </section>
 
-<!-- 7 -->
+<!-- 6 -->
 <section class="slide">
   <h2>어떤 항목이 늘었나 — §92 이전 → 이후</h2>
   <table>
@@ -295,7 +279,7 @@
   <p class="note">늘어난 시간은 거의 전부 실행·읽기·생각이다. 곧 "에이전트가 티켓을 처리하며 도구를 부르고, 결과를 읽고, 판단한 일"이다. 메인 세션의 실제 제작물(연결 프로그램 코드·문서)에 해당하는 쓰기는 늘지 않았다.</p>
 </section>
 
-<!-- 8 -->
+<!-- 7 -->
 <section class="slide">
   <h2>왜 배수가 커지나 — 시험하는 서브에이전트 580개의 노동이 사람 노동으로 잡힌다</h2>
   <div class="cols">
@@ -321,7 +305,7 @@
   </div>
 </section>
 
-<!-- 9 -->
+<!-- 8 -->
 <section class="slide">
   <h2>지금은 이 세션 하나만 예외 세션이다</h2>
   <p class="sub">벤치마크 세션 목록 <code>bench_files.json</code> 56개 중 측정된 55개, 현재 코드 기본 설정으로 2026-10-06 재계산</p>
@@ -354,7 +338,7 @@
   </div>
 </section>
 
-<!-- 10 -->
+<!-- 9 -->
 <section class="slide">
   <h2>정리</h2>
   <div class="box key big">
@@ -369,6 +353,22 @@
     <li>여기 쓴 역할 구분(준비·시험 대상·채점)은 각 에이전트에 준 첫 지시문으로 나눴다. 계산기 기능이 아니라 이 자료를 위한 분석이다.</li>
     <li>55개 세션 분포는 <code>bench_files.json</code> 기준이다. 108개 세션 공식 집계와 세션 목록이 다르다. 1개(<code>6e4c67dc</code>)는 측정값이 나오지 않아 뺐다.</li>
   </ul>
+</section>
+
+<!-- 10 -->
+<section class="slide">
+  <p class="sub">avatar-efficiency · 효율 계산기 §92 이후 · 2026-10-06 작성</p>
+  <h1>세션 45e1d583은 왜 효율 61.4배가 나오나</h1>
+  <div class="box key big">
+    결론 1. 지금은 이 세션 하나만 <b>예외 세션</b>이다. 크게 신경 쓸 필요는 없다.<br>
+    결론 2. 앞으로 AI로 시험하는 일이 흔해지면, <b>AI의 시험 노동이 사람이 시험한 노동과 똑같이 잡혀</b> 배수가 커질 것으로 예상된다. 그래도 이것은 실제로 노동을 많이 한 것으로 봐도 된다.
+  </div>
+  <table>
+    <tr><th>세션</th><th>Workflow가 한 일</th><th class="num">효율 (지금 → 포함하면)</th><th>부푼 원인</th></tr>
+    <tr class="hl"><td><code>45e1d583</code></td><td>벤치마크 시험 실행</td><td class="num">4.32배 → 61.4배</td><td>시험 대상의 일이 사람 일로 들어감</td></tr>
+  </table>
+  <p class="note">효율 = 사람이 했다면 걸렸을 시간 ÷ AI와 함께 실제로 든 시간. "61.4배"는 사람이 하면 61.4배 오래 걸릴 일로 계산됐다는 뜻이다.<br>
+  "지금"은 Workflow(여러 AI를 한꺼번에 돌리는 실행 기능) 기록을 빼고 센 값, "포함하면"은 계산기 §92 변경 후 그 기록까지 센 값이다.</p>
 </section>
 
 <div class="src">근거: 세션 기록 45e1d583-1a7e-5719-b4a3-ae2da9d4d722.jsonl · efficiency-calculator/CHANGELOG.md §92 · session-api/record_actions_code_api.py</div>
