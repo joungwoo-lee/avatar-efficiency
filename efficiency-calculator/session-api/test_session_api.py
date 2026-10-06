@@ -827,6 +827,22 @@ class TestWindowMeasure(unittest.TestCase):
             os.unlink(p)
 
 
+class TestWorkflowSubagentFiles(unittest.TestCase):
+    def test_workflow_subagent_transcripts_included(self):
+        # §92: subagents/workflows/wf_*/ 아래 워크플로 서브에이전트 기록도 분자에 포함
+        from requirement_actions import find_subagent_files
+        with tempfile.TemporaryDirectory() as directory:
+            main = Path(directory) / "s.jsonl"
+            main.write_text("", encoding="utf-8")
+            wf = Path(directory) / "s" / "subagents" / "workflows" / "wf_1"
+            wf.mkdir(parents=True)
+            (wf.parent.parent / "agent-a.jsonl").write_text("", encoding="utf-8")
+            (wf / "agent-b.jsonl").write_text("", encoding="utf-8")
+            (wf / "agent-b.meta.json").write_text("{}", encoding="utf-8")
+            names = [Path(p).name for p in find_subagent_files(main)]
+            self.assertEqual(sorted(names), ["agent-a.jsonl", "agent-b.jsonl"])
+
+
 class TestBackgroundExecutionWait(unittest.TestCase):
     def run_case(self, seconds=600, background=True, status="completed", work_words=0,
                  name="Bash", parallel=False, window=None, foreground_seconds=0, native_notice=False,

@@ -805,10 +805,11 @@ def _ts(x):
 
 
 def find_subagent_files(jsonl_path):
-    """세션의 서브에이전트 트랜스크립트 목록 ({세션}/subagents/*.jsonl)."""
+    """세션의 서브에이전트 트랜스크립트 목록 ({세션}/subagents/**/*.jsonl).
+    §92: 워크플로 서브에이전트(subagents/workflows/wf_*/)도 포함 — 하위 폴더까지."""
     d = Path(str(jsonl_path))
     sub = d.with_suffix("") / "subagents"
-    return sorted(str(p) for p in sub.glob("*.jsonl")) if sub.is_dir() else []
+    return sorted(str(p) for p in sub.rglob("*.jsonl")) if sub.is_dir() else []
 
 
 def _iter_session_records(jsonl_path, subagent_paths=()):

@@ -27,7 +27,8 @@ speedup = human_min(분자) ÷ agent_min(분모)
   빼고 AI 쪽과 같은 상한을 쓴다(§89). ② **분모의 AI 몫 전체**
   (§62) — 요율 계산을 버리고 턴 실측으로 바꿨다. 아래 §4.2 참조.
 - **병렬 서브에이전트 기록(isSidechain): 분자는 포함, 분모는 제외 (§59).**
-  정확히는 `<세션>/subagents/*.jsonl`에 따로 저장된 서브 기록 파일을 분자에
+  정확히는 `<세션>/subagents/` 아래(하위 폴더 포함 — 워크플로 서브에이전트
+  `subagents/workflows/wf_*/`도, §92)에 따로 저장된 서브 기록 파일을 분자에
   합치는 것이며, 메인 파일 안에 섞인 isSidechain 레코드는 여전히 제외한다
   (`collect_record_stats` — `isSidechain and not is_sub`).
   종전에는 양쪽 다 제외했는데, "병렬이라 실소모 시간에 못 더한다"는 것은
