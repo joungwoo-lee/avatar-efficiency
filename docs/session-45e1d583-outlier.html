@@ -102,14 +102,14 @@
       <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8b93a7"/></marker>
     </defs>
     <!-- 왼쪽: 병렬 -->
-    <text x="0" y="18" fill="#9ecbff" font-size="17" font-weight="700">① 시험 서브에이전트 580개가 동시에(12개씩) 일한다</text>
+    <text x="0" y="18" fill="#9ecbff" font-size="17" font-weight="700">① 시험 서브에이전트 580개가 동시에 일한다</text>
     <rect x="0" y="34" width="520" height="22" rx="4" fill="#8b93a7"/>
     <text x="260" y="50" fill="#0f1117" font-size="13.5" font-weight="700" text-anchor="middle">실제 걸린 시간 74.46분 (AI 쪽 시간)</text>
-    <g id="lanes"></g>
-    <text x="0" y="296" fill="#8b93a7" font-size="12.5">줄 하나 = 동시에 도는 자리 1개 · 칸 하나 = 서브에이전트 1개 (그림은 모양만 나타냄)</text>
+    <g id="flow"></g>
+    <text x="0" y="282" fill="#8b93a7" font-size="12.5">모식도: 과제 1개 = 서브에이전트 3개. 과제 103개를 두 조건으로 Workflow 6번에 나눠 돌림</text>
     <g font-size="13">
-      <rect x="0" y="306" width="12" height="12" fill="#45b39d"/><text x="18" y="317" fill="#c9cfdc">준비·채점 377개</text>
-      <rect x="150" y="306" width="12" height="12" fill="#f0649c"/><text x="168" y="317" fill="#c9cfdc">시험 대상 203개 (티켓 처리, 도구 호출 2,358번)</text>
+      <rect x="0" y="292" width="12" height="12" fill="#45b39d"/><text x="18" y="303" fill="#c9cfdc">준비 207개 · 채점 164개 · 빈 기록 6개</text>
+      <rect x="270" y="292" width="12" height="12" fill="#f0649c"/><text x="288" y="303" fill="#c9cfdc">시험 대상 203개 (도구 호출 2,358번)</text>
     </g>
     <path d="M10,334 L510,334" stroke="#8b93a7" stroke-width="1.5" stroke-dasharray="4 4"/>
     <text x="0" y="360" fill="#e6e9f0" font-size="15">각 서브에이전트가 한 일을 <tspan fill="#ffb454" font-weight="700">모두 사람이 한 일로 더한다</tspan></text>
@@ -117,7 +117,14 @@
     <path d="M530,190 L585,190" stroke="#8b93a7" stroke-width="2" marker-end="url(#ah)"/>
 
     <!-- 오른쪽: 분수 3단 -->
-    <text x="600" y="18" fill="#9ecbff" font-size="17" font-weight="700">② 노동량만 커지고 걸린 시간은 그대로</text>
+    <text x="600" y="18" fill="#9ecbff" font-size="17" font-weight="700">② 동시에 돌리는 서브에이전트 수에 따른 효율</text>
+    <text x="600" y="40" fill="#8b93a7" font-size="12.5">가정: 서브에이전트 1개당 노동 7.33분(= 4,250.33분 ÷ 580개, 이 세션 평균).</text>
+    <text x="600" y="57" fill="#8b93a7" font-size="12.5">모두 동시에 돌아 걸린 시간은 74.46분 그대로. 메인 세션 노동 321.81분은 고정.</text>
+    <g font-size="12.5">
+      <rect x="600" y="66" width="11" height="11" fill="#6c8cff"/><text x="616" y="76" fill="#c9cfdc">메인 세션 노동</text>
+      <rect x="720" y="66" width="11" height="11" fill="#f0649c"/><text x="736" y="76" fill="#c9cfdc">서브에이전트 노동</text>
+      <text x="880" y="76" fill="#ffb454">실제 이 세션: 580개 → 61.4배</text>
+    </g>
     <g id="fracs"></g>
   </svg>
   <div class="cols" style="gap:14px;margin-top:6px">
@@ -388,7 +395,7 @@
     if (['ArrowRight', 'PageDown', ' '].includes(e.key)) show(i + 1);
     if (['ArrowLeft', 'PageUp'].includes(e.key)) show(i - 1);
   });
-  // 첫 장 그림: 병렬 줄과 분수 3단
+  // 첫 장 그림: 병렬 모식도와 서브에이전트 수별 효율
   const NS = 'http://www.w3.org/2000/svg';
   function el(tag, a, txt) {
     const e = document.createElementNS(NS, tag);
@@ -396,23 +403,33 @@
     if (txt !== undefined) e.textContent = txt;
     return e;
   }
-  const lanes = document.getElementById('lanes');
-  const W = [9, 34, 8, 10, 26, 7, 9, 41, 8, 11, 30, 9];  // 준비·시험 대상·채점 칸 폭 무늬
-  for (let r = 0; r < 12; r++) {
-    let x = (r * 7) % 23, k = r;
-    while (x < 515) {
-      const role = k % 3, w = Math.min(W[k % W.length] + (role === 1 ? 6 : 0), 520 - x);
-      lanes.appendChild(el('rect', { x, y: 66 + r * 18, width: Math.max(w - 2, 2), height: 13, rx: 2,
-        fill: role === 1 ? '#f0649c' : '#45b39d', opacity: 0.9 }));
-      x += w; k++;
-    }
-  }
+  // 왼쪽 모식도: 메인 세션 → 과제별 3단계 줄(동시에) → 보고서
+  const flow = document.getElementById('flow');
+  const box = (x, y, w, h, fill, txt, tc) => {
+    flow.appendChild(el('rect', { x, y, width: w, height: h, rx: 5, fill }));
+    flow.appendChild(el('text', { x: x + w / 2, y: y + h / 2 + 5, fill: tc || '#0f1117', 'font-size': 13, 'font-weight': 700, 'text-anchor': 'middle' }, txt));
+  };
+  const arrow = (x1, y1, x2, y2) => flow.appendChild(el('path', { d: `M${x1},${y1} L${x2},${y2}`, stroke: '#8b93a7', 'stroke-width': 1.5, fill: 'none', 'marker-end': 'url(#ah)' }));
+  const MID = 165;
+  box(0, MID - 24, 82, 48, '#6c8cff', '메인 세션');
+  box(444, MID - 24, 76, 48, '#ffb454', '보고서');
+  [['과제 1', 72], ['과제 2', 118], ['과제 3', 164], ['과제 103', 236]].forEach(([name, y]) => {
+    flow.appendChild(el('text', { x: 128, y: y - 4, fill: '#8b93a7', 'font-size': 11.5 }, name));
+    arrow(84, MID, 124, y + 13);
+    box(128, y, 68, 26, '#45b39d', '준비');
+    arrow(198, y + 13, 212, y + 13);
+    box(214, y, 104, 26, '#f0649c', '시험 대상');
+    arrow(320, y + 13, 334, y + 13);
+    box(336, y, 68, 26, '#45b39d', '채점');
+    arrow(406, y + 13, 442, MID);
+  });
+  flow.appendChild(el('text', { x: 266, y: 214, fill: '#8b93a7', 'font-size': 18, 'text-anchor': 'middle' }, '⋮'));
   const fr = document.getElementById('fracs');
-  const MAX = 4572.14, H = 250, BASE = 318;
+  const MAX = 3985.89, H = 205, BASE = 318;
   const cols = [
-    { x: 610, cap: '시험 운전 1개만', sub: '(§92 이전)', parts: [[321.81, '#6c8cff']], tot: '321.81분', eff: '4.32배' },
-    { x: 790, cap: '+ 준비·채점 377개', sub: '', parts: [[321.81, '#6c8cff'], [475.96, '#45b39d']], tot: '797.77분', eff: '10.71배' },
-    { x: 970, cap: '+ 시험 대상 203개', sub: '(지금 계산)', parts: [[321.81, '#6c8cff'], [475.96, '#45b39d'], [3774.37, '#f0649c']], tot: '4,572.14분', eff: '61.4배' },
+    { x: 610, cap: '서브에이전트 10개', parts: [[321.81, '#6c8cff'], [73.28, '#f0649c']], tot: '395.09분', eff: '5.31배' },
+    { x: 790, cap: '서브에이전트 100개', parts: [[321.81, '#6c8cff'], [732.82, '#f0649c']], tot: '1,054.63분', eff: '14.16배' },
+    { x: 970, cap: '서브에이전트 500개', parts: [[321.81, '#6c8cff'], [3664.08, '#f0649c']], tot: '3,985.89분', eff: '53.53배' },
   ];
   cols.forEach(c => {
     let y = BASE;
@@ -425,8 +442,8 @@
     fr.appendChild(el('line', { x1: c.x + 10, y1: BASE + 6, x2: c.x + 150, y2: BASE + 6, stroke: '#e6e9f0', 'stroke-width': 2.5 }));
     fr.appendChild(el('rect', { x: c.x + 25, y: BASE + 12, width: 110, height: 9, fill: '#8b93a7' }));
     fr.appendChild(el('text', { x: c.x + 80, y: BASE + 36, fill: '#c9cfdc', 'font-size': 13, 'text-anchor': 'middle' }, '걸린 시간 74.46분'));
-    fr.appendChild(el('text', { x: c.x + 80, y: BASE + 56, fill: '#8b93a7', 'font-size': 13, 'text-anchor': 'middle' }, c.cap + ' ' + c.sub));
-    fr.appendChild(el('text', { x: c.x + 80, y: BASE + 84, fill: c.eff === '61.4배' ? '#ffb454' : '#e6e9f0', 'font-size': 24, 'font-weight': 700, 'text-anchor': 'middle' }, '= ' + c.eff));
+    fr.appendChild(el('text', { x: c.x + 80, y: BASE + 56, fill: '#8b93a7', 'font-size': 13, 'text-anchor': 'middle' }, c.cap));
+    fr.appendChild(el('text', { x: c.x + 80, y: BASE + 84, fill: c.eff === '53.53배' ? '#ffb454' : '#e6e9f0', 'font-size': 24, 'font-weight': 700, 'text-anchor': 'middle' }, '= ' + c.eff));
   });
   // 무대 크기 맞춤
   const stage = document.getElementById('stage');
