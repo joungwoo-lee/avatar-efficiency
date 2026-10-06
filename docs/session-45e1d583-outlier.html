@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>세션 45e1d583 — AI로 시험을 돌리면 효율 배수가 커지는 이유</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: #0f1117; color: #e6e9f0;
+    font-family: "Segoe UI", "Malgun Gothic", sans-serif;
+    overflow: hidden;
+  }
+  .slide {
+    position: absolute; inset: 0;
+    padding: 48px 72px 64px;
+    display: none; flex-direction: column;
+    max-width: 1280px; margin: 0 auto;
+  }
+  .slide.active { display: flex; }
+  h1 { font-size: 34px; margin-bottom: 14px; line-height: 1.3; }
+  h2 { font-size: 26px; margin-bottom: 18px; color: #ffd9a0; }
+  h3 { font-size: 17px; margin: 14px 0 8px; color: #9ecbff; }
+  p, li { font-size: 17px; line-height: 1.65; }
+  ul { padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  .sub { color: #8b93a7; font-size: 14px; }
+  .note { color: #8b93a7; font-size: 13.5px; margin-top: 10px; line-height: 1.6; }
+  .box {
+    background: #171a23; border: 1px solid #2a3040; border-radius: 10px;
+    padding: 16px 20px; margin-bottom: 14px;
+  }
+  .box.key { border-color: #4a3c1e; }
+  .box.key b { color: #ffb454; }
+  .cols { display: flex; gap: 22px; }
+  .cols > div { flex: 1; }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; }
+  th, td { border-bottom: 1px solid #2a3040; padding: 7px 10px; text-align: left; }
+  th { color: #8b93a7; font-weight: 600; }
+  td.num, th.num { text-align: right; font-family: Consolas, monospace; }
+  tr.hl td { background: #2a2214; }
+  code { font-family: Consolas, monospace; background: #222736; padding: 1px 6px; border-radius: 4px; font-size: 0.92em; }
+  .flow { display: flex; align-items: stretch; gap: 10px; margin: 8px 0 14px; }
+  .flow .step {
+    flex: 1; background: #171a23; border: 1px solid #2a3040; border-radius: 10px;
+    padding: 12px 14px; font-size: 15px; line-height: 1.55;
+  }
+  .flow .step b { display: block; font-size: 16px; margin-bottom: 4px; }
+  .flow .step.target { border-color: #f0649c; }
+  .flow .arrow { align-self: center; color: #8b93a7; font-size: 22px; }
+  .bars { margin: 6px 0 4px; }
+  .bar-row { display: flex; align-items: center; margin-bottom: 10px; font-size: 15px; }
+  .bar-row .lbl { width: 300px; flex: none; }
+  .bar-row .track { flex: 1; height: 26px; background: #171a23; border-radius: 4px; position: relative; display: flex; }
+  .bar-row .seg { height: 100%; }
+  .bar-row .val { width: 150px; flex: none; text-align: right; font-family: Consolas, monospace; }
+  .c-main { background: #6c8cff; }
+  .c-prep { background: #45b39d; }
+  .c-target { background: #f0649c; }
+  .c-agent { background: #8b93a7; }
+  .legend { display: flex; gap: 20px; font-size: 13.5px; color: #8b93a7; margin-top: 4px; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+  .hist { display: flex; align-items: flex-end; gap: 18px; height: 230px; margin: 10px 0 6px; padding-left: 10px; border-bottom: 1px solid #2a3040; }
+  .hist .col { width: 110px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+  .hist .col .b { width: 100%; background: #6c8cff; border-radius: 4px 4px 0 0; }
+  .hist .col .b.out { background: #f0649c; }
+  .hist .col .n { font-family: Consolas, monospace; font-size: 15px; margin-bottom: 4px; }
+  .hist .gap { width: 60px; text-align: center; color: #8b93a7; align-self: center; }
+  .hist-x { display: flex; gap: 18px; padding-left: 10px; font-size: 13.5px; color: #8b93a7; }
+  .hist-x span { width: 110px; text-align: center; }
+  .hist-x .gap { width: 60px; }
+  .big { font-size: 22px; line-height: 1.6; }
+  .big b { color: #ffb454; }
+  .nav {
+    position: fixed; bottom: 14px; right: 24px; color: #8b93a7; font-size: 13px;
+    display: flex; gap: 10px; align-items: center; z-index: 10;
+  }
+  .nav button {
+    background: #171a23; color: #e6e9f0; border: 1px solid #2a3040; border-radius: 6px;
+    padding: 4px 12px; cursor: pointer; font-size: 14px;
+  }
+  .src { position: fixed; bottom: 16px; left: 24px; color: #5d6478; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<!-- 1 -->
+<section class="slide active">
+  <p class="sub">avatar-efficiency · 효율 계산기 §92 이후 · 2026-10-06 작성</p>
+  <h1>세션 45e1d583은 왜 효율 61.4배가 나오나</h1>
+  <div class="box key big">
+    결론 1. 지금은 이 세션 하나만 <b>예외 세션</b>이다. 크게 신경 쓸 필요는 없다.<br>
+    결론 2. 앞으로 AI로 시험하는 일이 흔해지면, <b>AI의 시험 노동이 사람이 시험한 노동과 똑같이 잡혀</b> 배수가 커질 것으로 예상된다. 그래도 이것은 실제로 노동을 많이 한 것으로 봐도 된다.
+  </div>
+  <table>
+    <tr><th>세션</th><th>Workflow가 한 일</th><th class="num">효율 (지금 → 포함하면)</th><th>부푼 원인</th></tr>
+    <tr class="hl"><td><code>45e1d583</code></td><td>벤치마크 시험 실행</td><td class="num">4.32배 → 61.4배</td><td>시험 대상의 일이 사람 일로 들어감</td></tr>
+  </table>
+  <p class="note">효율 = 사람이 했다면 걸렸을 시간 ÷ AI와 함께 실제로 든 시간. "61.4배"는 사람이 하면 61.4배 오래 걸릴 일로 계산됐다는 뜻이다.<br>
+  "지금"은 Workflow(여러 AI를 한꺼번에 돌리는 실행 기능) 기록을 빼고 센 값, "포함하면"은 계산기 §92 변경 후 그 기록까지 센 값이다.</p>
+</section>
+
+<!-- 2 -->
+<section class="slide">
+  <h2>이 세션이 한 일 — 2026-07-24 08:07 ~ 09:24 (약 77분)</h2>
+  <div class="box">
+    <p>사용자 질문으로 시작했다: "EnterpriseOps-Gym(회사 IT 업무 시험장)을 로컬에서 재현할 때, 별도 API 키 없이 Haiku 서브에이전트(작은 AI 보조 일꾼)에게 시키는 것이 가능한가?"</p>
+  </div>
+  <table>
+    <tr><th>시각</th><th>한 일</th></tr>
+    <tr><td>08:07–08:10</td><td>가능 여부 확인. 시험장의 기본 실행기에는 서브에이전트를 직접 꽂을 수 없다. 대신 에이전트가 시험장 도구를 직접 부르는 연결 프로그램을 만들면 된다고 결론.</td></tr>
+    <tr><td>08:25–08:41</td><td>연결 프로그램 <code>bridge.py</code> 제작 (준비·도구 목록·도구 호출·채점·삭제 기능). 과제 1개로 시험 운전. ep-worldmodel 레포에 푸시 (<code>f970d91</code>).</td></tr>
+    <tr><td>08:33–08:51</td><td><b>기본 방식</b>으로 ITSM 과제 103개 전부 실행 (3묶음). 결과 19/103 성공.</td></tr>
+    <tr><td>08:52–09:05</td><td><b>월드모델 방식</b>(업무 규칙 명세 <code>gym-itsm-v2</code>를 도구 결과 뒤에 붙여 줌) 추가 구현. 1묶음(35개) 실행. 성공 수는 기본 방식과 같음(10:10).</td></tr>
+    <tr><td>09:06–09:12</td><td>월드모델 방식이 기본 방식보다 나빠진 2건 원인 분석. 2묶음은 사용자 지시로 중단. 결과·분석 푸시 (<code>d9a7890</code>).</td></tr>
+    <tr><td>09:17–09:24</td><td>명세의 priority 문구를 고쳐 (<code>67d91cb</code>) 다시 실행. 고치기 전 결과는 삭제 (<code>8536541</code>). 1묶음 도중 월 사용 한도에 걸려 세션 종료.</td></tr>
+  </table>
+</section>
+
+<!-- 3 -->
+<section class="slide">
+  <h2>시험 대상은 무엇인가</h2>
+  <div class="cols">
+    <div>
+      <div class="box">
+        <h3>시험장: EnterpriseOps-Gym의 ITSM 영역</h3>
+        <ul>
+          <li>ITSM = 회사 IT 서비스 관리 업무. 장애 신고 접수, 장애 등급 지정, 사용자 조회, 문서 작성 같은 일이다.</li>
+          <li>시험장은 이 업무 시스템을 흉내 낸 데이터베이스와 도구(MCP 서버, 포트 <code>8010</code> 전용 컨테이너 <code>gym-itsm-haiku</code>)를 제공한다.</li>
+          <li>과제 103개 (<code>itsm_all_configs/</code>). 과제마다 요청문 1개와 채점 항목 여러 개가 있다.</li>
+          <li>채점 항목 합계 464개. 전부 "작업 뒤 데이터베이스 상태가 맞는가"를 본다. 그래서 AI 채점자가 필요 없다.</li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <div class="box">
+        <h3>시험받는 쪽: Haiku 에이전트</h3>
+        <ul>
+          <li>과제 요청문(<code>task.md</code>)을 읽는다.</li>
+          <li><code>bridge.py tools</code>로 쓸 수 있는 도구 목록을 본다.</li>
+          <li><code>bridge.py call</code>로 도구를 불러 티켓을 처리한다.</li>
+          <li>채점 항목은 볼 수 없게 숨겼다.</li>
+        </ul>
+        <h3>비교한 두 방식</h3>
+        <ul>
+          <li><b>기본 방식</b> (결과 폴더 <code>haiku-agent-react</code>): 에이전트가 생각 → 도구 호출을 반복한다.</li>
+          <li><b>월드모델 방식</b> (<code>haiku-agent-epwm</code>, <code>haiku-agent-epwm2</code>): 도구를 부를 때마다 업무 규칙 명세에서 계산한 현재 상태·다음에 할 수 있는 행동을 함께 보여 준다.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 4 -->
+<section class="slide">
+  <h2>어떤 시험을 했나 — 과제 1개에 Haiku 에이전트 3개</h2>
+  <div class="flow">
+    <div class="step"><b>① 준비 에이전트</b><code>bridge.py seed</code> 명령 1개를 실행한다. 과제용 데이터베이스를 채우고 요청문 파일을 만든다.</div>
+    <div class="arrow">→</div>
+    <div class="step target"><b>② 시험 대상 에이전트</b>요청문을 읽고 도구를 여러 번 불러 실제로 티켓을 처리한다. <b>시험받는 쪽이다.</b></div>
+    <div class="arrow">→</div>
+    <div class="step"><b>③ 채점 에이전트</b><code>bridge.py verify</code>로 채점하고 <code>delete</code>로 데이터베이스를 지운다.</div>
+  </div>
+  <ul>
+    <li>Workflow 1회 = 과제 34~35개 묶음. 동시에 12개씩 돌렸다.</li>
+    <li>묶음 사이마다 컨테이너를 새로 만들었다. 데이터 채우기를 40~50회 넘게 반복하면 서버가 500 오류를 내기 때문이다.</li>
+    <li>모든 에이전트는 구독으로 실행했다. API 키 비용은 0원이다.</li>
+  </ul>
+  <table>
+    <tr><th>세션 안의 에이전트 기록</th><th class="num">기록 수</th><th class="num">도구 호출 수</th></tr>
+    <tr><td>① 준비 에이전트</td><td class="num">207</td><td class="num">414</td></tr>
+    <tr class="hl"><td>② 시험 대상 에이전트</td><td class="num">203</td><td class="num">2,358</td></tr>
+    <tr><td>③ 채점 에이전트</td><td class="num">164</td><td class="num">434</td></tr>
+    <tr><td>내용 없는 기록</td><td class="num">6</td><td class="num">0</td></tr>
+    <tr><td>시험 운전용 에이전트 (Workflow 밖, 과제 1개)</td><td class="num">1</td><td class="num">6</td></tr>
+    <tr><th>합계</th><th class="num">581</th><th class="num">3,212</th></tr>
+  </table>
+</section>
+
+<!-- 5 -->
+<section class="slide">
+  <h2>Workflow 6회 실행과 결과</h2>
+  <table>
+    <tr><th>시작</th><th>방식</th><th>묶음</th><th class="num">과제</th><th class="num">기록 수</th><th>결과</th></tr>
+    <tr><td>08:33</td><td>기본</td><td>1/3</td><td class="num">35</td><td class="num">106</td><td>성공 10 (28.6%), 5.5분</td></tr>
+    <tr><td>08:39</td><td>기본</td><td>2/3</td><td class="num">34</td><td class="num">103</td><td>성공 1 (2.9%)</td></tr>
+    <tr><td>08:44</td><td>기본</td><td>3/3</td><td class="num">34</td><td class="num">103</td><td>성공 8 (23.5%)</td></tr>
+    <tr><td>08:57</td><td>월드모델 v2</td><td>1/3</td><td class="num">35</td><td class="num">106</td><td>성공 10 (기본 방식도 10). 나빠짐 2건, 좋아짐 2건</td></tr>
+    <tr><td>09:05</td><td>월드모델 v2</td><td>2/3</td><td class="num">34</td><td class="num">65</td><td>사용자 지시로 중단. 고치기 전 결과라 삭제</td></tr>
+    <tr><td>09:19</td><td>월드모델 교정판</td><td>1/3</td><td class="num">35</td><td class="num">97</td><td>26개 진행, 9개 빠짐. 월 사용 한도 도달로 세션 종료</td></tr>
+  </table>
+  <div class="cols" style="margin-top:16px">
+    <div class="box">
+      <h3>기본 방식 103개 최종</h3>
+      <ul>
+        <li>성공 19/103 (18.4%). 채점 항목 통과 253/464 (54.5%).</li>
+        <li>103개 모두 끝까지 돌았다. 빠진 과제 0, 실행 오류 0.</li>
+        <li>같은 절차 비교: gpt-5.4 27.2% &gt; Haiku 18.4% ≈ 논문 Sonnet 4.5 ITSM 17.6% &gt; qwen3-235b 11.7%.</li>
+        <li>단서: 이 실행 방식은 논문 실행기와 달라 논문 수치와 직접 비교하기에는 맞지 않다.</li>
+      </ul>
+    </div>
+    <div class="box">
+      <h3>월드모델 방식이 나빠진 원인 (09:09 분석)</h3>
+      <ul>
+        <li>명세에 "priority를 직접 정하지 말라"는 문구가 있었다. 실제 시험장은 직접 지정을 허용하고, 채점은 특정 priority(예: critical)를 요구했다.</li>
+        <li>묶음 1에서 기본 방식은 통과했고 월드모델 방식은 놓친 채점 항목이 10개였다.</li>
+        <li>문구를 "요청이 다른 priority를 암시하면 직접 정하라"로 고치고 다시 돌렸다.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 6 -->
+<section class="slide">
+  <h2>계산기는 이 세션을 어떻게 세나</h2>
+  <div class="box">
+    <p>계산기 <code>record_actions_code_api.py</code>는 세션 기록에 남은 읽기·쓰기·실행·생각을 사람이 했을 때 걸릴 시간(분)으로 바꿔 더한다. 서브에이전트 기록도 사람 몫에 더한다(§59).</p>
+    <p>§92 이전에는 <code>find_subagent_files</code>가 <code>subagents/*.jsonl</code>만 읽었다. Workflow 기록은 <code>subagents/workflows/wf_*/</code> 아래에 있어서 통째로 빠졌다. §92에서 하위 폴더까지 읽게(<code>rglob</code>) 고쳤다.</p>
+  </div>
+  <h3>사람이 했을 시간 (분) — AI와 함께 든 시간 74.46분은 그대로</h3>
+  <div class="bars">
+    <div class="bar-row"><span class="lbl">§92 이전 (메인 + 시험 운전 1개)</span>
+      <div class="track"><div class="seg c-main" style="width:7.04%"></div></div><span class="val">321.81분 · 4.32배</span></div>
+    <div class="bar-row"><span class="lbl">+ 준비·채점 에이전트 (377개)</span>
+      <div class="track"><div class="seg c-main" style="width:7.04%"></div><div class="seg c-prep" style="width:10.41%"></div></div><span class="val">797.77분 · 10.71배</span></div>
+    <div class="bar-row"><span class="lbl">+ 시험 대상 에이전트 (203개)</span>
+      <div class="track"><div class="seg c-main" style="width:7.04%"></div><div class="seg c-prep" style="width:10.41%"></div><div class="seg c-target" style="width:82.55%"></div></div><span class="val">4,572.14분 · 61.4배</span></div>
+    <div class="bar-row"><span class="lbl">AI와 함께 실제로 든 시간</span>
+      <div class="track"><div class="seg c-agent" style="width:1.63%"></div></div><span class="val">74.46분</span></div>
+  </div>
+  <div class="legend"><span><i class="c-main"></i>메인 세션 + 시험 운전</span><span><i class="c-prep"></i>준비·채점 +475.96분</span><span><i class="c-target"></i>시험 대상 +3,774.37분</span></div>
+  <p class="note">늘어난 4,250.33분 가운데 3,774.37분(약 89%)이 시험 대상 에이전트 몫이다. AI 쪽 74.46분 = 기계 시간 50.83분 + 사람 지시·검토 23.63분. 2026-10-06 현재 코드로 다시 계산한 값이다.</p>
+</section>
+
+<!-- 7 -->
+<section class="slide">
+  <h2>어떤 항목이 늘었나 — §92 이전 → 이후</h2>
+  <table>
+    <tr><th>사람 일 항목</th><th class="num">양 (이전 → 이후)</th><th class="num">분 (이전 → 이후)</th><th>무엇이 들어갔나</th></tr>
+    <tr class="hl"><td>실행 (명령 구성·결과 대기·결과 판독)</td><td class="num">35 → 136</td><td class="num">98.86 → 2,576.54</td><td>에이전트들이 부른 <code>bridge.py</code> 명령과 그 출력</td></tr>
+    <tr class="hl"><td>읽기</td><td class="num">6,552 → 210,046 단어</td><td class="num">32.76 → 1,050.23</td><td>도구 목록·도구 결과·요청문 읽기</td></tr>
+    <tr class="hl"><td>생각</td><td class="num">5,269 → 223,694 단어</td><td class="num">17.55 → 744.90</td><td>서브에이전트 571곳의 판단, 보고문 52,222단어</td></tr>
+    <tr><td>붙여넣기</td><td class="num">18 → 446</td><td class="num">0.90 → 22.30</td><td></td></tr>
+    <tr><td>검색</td><td class="num">5 → 10</td><td class="num">10.00 → 20.00</td><td></td></tr>
+    <tr><td>쓰기 (작성)</td><td class="num">2,345 → 2,314 단어</td><td class="num">161.47 → 157.87</td><td>거의 그대로. 코드·문서 작성은 메인 세션이 했다</td></tr>
+    <tr><td>쓰기 (수정)</td><td class="num">54 → 60 단어</td><td class="num">0.27 → 0.30</td><td></td></tr>
+    <tr><th>합계</th><th></th><th class="num">321.81 → 4,572.14</th><th></th></tr>
+  </table>
+  <p class="note">늘어난 시간은 거의 전부 실행·읽기·생각이다. 곧 "에이전트가 티켓을 처리하며 도구를 부르고, 결과를 읽고, 판단한 일"이다. 메인 세션의 실제 제작물(연결 프로그램 코드·문서)에 해당하는 쓰기는 늘지 않았다.</p>
+</section>
+
+<!-- 8 -->
+<section class="slide">
+  <h2>왜 배수가 커지나 — 시험하는 서브에이전트 580개의 노동이 사람 노동으로 잡힌다</h2>
+  <div class="cols">
+    <div class="box">
+      <h3>사실</h3>
+      <ul>
+        <li>이 세션은 월드모델 방식을 만든 뒤, 사람이 시험하는 것처럼 시험하는 서브에이전트를 Workflow로 580개 돌렸다 (시험 운전 1개 별도).</li>
+        <li>시험 대상 에이전트 203개가 티켓을 처리하며 도구를 2,358번 불렀다. 계산기는 이것을 사람 노동 +3,774.37분으로 더했다.</li>
+        <li>준비·채점 에이전트 371개의 명령 실행도 +475.96분으로 더했다.</li>
+        <li>서브에이전트는 동시에 12개씩 돌았다. 서브에이전트가 병렬로 돈 시간은 AI 쪽 시간에 더하지 않는다. 그래서 AI 쪽 시간은 74.46분 그대로다.</li>
+        <li>시험 결과는 보고서로 남았다 (<code>react-103.json</code>, 퇴행 분석, ep-worldmodel 레포 푸시). 버린 일로 빠지지 않는다.</li>
+      </ul>
+    </div>
+    <div class="box key">
+      <h3>그래서 생기는 일</h3>
+      <ul>
+        <li>효율 = 노동량 ÷ 실제 걸린 시간이다. 시험하는 서브에이전트 수를 늘리면 노동량(위쪽)은 늘고, 병렬로 돌기 때문에 걸린 시간(아래쪽)은 거의 늘지 않는다.</li>
+        <li>그래서 <b>시험 서브에이전트를 늘릴수록 효율 배수가 올라간다.</b> 이 세션은 4.32배 → 61.4배가 됐다.</li>
+        <li>계산기에는 "이 에이전트가 시험하는 쪽인가"를 가르는 규칙이 없다. CHANGELOG §92에 "알려진 한계: 시험 대상으로 띄운 에이전트(45e1d583)의 일도 사람 일로 센다 — 구분 규칙 미정"으로 적혀 있다.</li>
+        <li>다만 시험 결과가 보고서로 남으므로, 이 노동은 <b>실제로 일을 많이 한 것</b>으로 봐도 된다.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 9 -->
+<section class="slide">
+  <h2>지금은 이 세션 하나만 예외 세션이다</h2>
+  <p class="sub">벤치마크 세션 목록 <code>bench_files.json</code> 56개 중 측정된 55개, 현재 코드 기본 설정으로 2026-10-06 재계산</p>
+  <div class="hist">
+    <div class="col"><span class="n">25</span><div class="b" style="height:88%"></div></div>
+    <div class="col"><span class="n">23</span><div class="b" style="height:81%"></div></div>
+    <div class="col"><span class="n">6</span><div class="b" style="height:21%"></div></div>
+    <div class="gap">⋯</div>
+    <div class="col"><span class="n">1</span><div class="b out" style="height:4%"></div></div>
+  </div>
+  <div class="hist-x"><span>5배 미만</span><span>5~10배</span><span>10~15배</span><span class="gap"></span><span>61.4배 (45e1d583)</span></div>
+  <div class="cols" style="margin-top:18px">
+    <div class="box">
+      <h3>55개 세션 안에서</h3>
+      <ul>
+        <li>가운데 값 5.59배. 이 세션 다음으로 큰 값은 12.58배(<code>b4cc464b</code>).</li>
+        <li>이 세션은 그 다음 세션의 약 4.9배다.</li>
+        <li>세션별 효율 평균: 이 세션 포함 7.14배 → 빼면 6.13배.</li>
+        <li>전체 합산 효율: 포함 6.17배 → 빼면 5.82배.</li>
+      </ul>
+    </div>
+    <div class="box">
+      <h3>108개 세션 공식 집계 (CHANGELOG §92)</h3>
+      <ul>
+        <li>§92로 사람 시간이 +5,621분 늘었다. 그중 +4,250분이 이 세션 하나에서 나왔다.</li>
+        <li>전체 효율 6.27 → 6.69배, 효율 평균 6.06 → 6.64.</li>
+        <li>§92로 바뀐 세션은 2개뿐이다. 나머지 1개 <code>82e3728d</code>(16.27 → 21.42배, +1,371분)는 발표 자료를 실제로 만든 세션이다.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 10 -->
+<section class="slide">
+  <h2>정리</h2>
+  <div class="box key big">
+    <p>① 이 세션은 월드모델 방식을 만든 뒤, 사람이 시험하는 것처럼 시험하는 Haiku 서브에이전트 580개로 ITSM 과제 103개를 돌렸다. 과제 1개마다 준비·시험 대상·채점 에이전트 3개가 붙었다.</p>
+    <p>② 서브에이전트의 시험 노동이 사람 노동으로 잡히고, 병렬로 돌아 걸린 시간은 거의 늘지 않는다. 그래서 효율이 <b>4.32배 → 61.4배</b>가 됐다. 늘어난 4,250분 중 약 89%가 시험 대상 에이전트 몫이다.</p>
+    <p>③ <b>지금은</b> 55개 세션 중 다음으로 큰 값이 12.58배인 상황에서 이 세션 하나만 튀는 예외 세션이다. 크게 신경 쓸 필요는 없다.</p>
+    <p>④ <b>앞으로</b> AI로 시험하는 일이 흔해지면, 시험 노동이 사람이 시험한 노동과 똑같이 잡혀 배수가 커질 것으로 예상된다. 그래도 시험 결과가 보고서로 남으므로 실제로 노동을 많이 한 것으로 봐도 된다.</p>
+  </div>
+  <h3>한계 · 불확실성</h3>
+  <ul>
+    <li>시험 대상 에이전트를 구분하는 규칙은 아직 계산기에 없다 (CHANGELOG §92 "구분 규칙 미정").</li>
+    <li>여기 쓴 역할 구분(준비·시험 대상·채점)은 각 에이전트에 준 첫 지시문으로 나눴다. 계산기 기능이 아니라 이 자료를 위한 분석이다.</li>
+    <li>55개 세션 분포는 <code>bench_files.json</code> 기준이다. 108개 세션 공식 집계와 세션 목록이 다르다. 1개(<code>6e4c67dc</code>)는 측정값이 나오지 않아 뺐다.</li>
+  </ul>
+</section>
+
+<div class="src">근거: 세션 기록 45e1d583-1a7e-5719-b4a3-ae2da9d4d722.jsonl · efficiency-calculator/CHANGELOG.md §92 · session-api/record_actions_code_api.py</div>
+<div class="nav"><button id="prev">◀</button><span id="pg"></span><button id="next">▶</button></div>
+
+<script>
+  const slides = [...document.querySelectorAll('.slide')];
+  let i = 0;
+  const pg = document.getElementById('pg');
+  function show(n) {
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach((s, k) => s.classList.toggle('active', k === i));
+    pg.textContent = (i + 1) + ' / ' + slides.length;
+  }
+  document.getElementById('prev').onclick = () => show(i - 1);
+  document.getElementById('next').onclick = () => show(i + 1);
+  document.addEventListener('keydown', e => {
+    if (['ArrowRight', 'PageDown', ' '].includes(e.key)) show(i + 1);
+    if (['ArrowLeft', 'PageUp'].includes(e.key)) show(i - 1);
+  });
+  show(0);
+</script>
+</body>
+</html>
