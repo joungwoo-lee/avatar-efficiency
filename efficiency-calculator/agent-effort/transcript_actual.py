@@ -163,6 +163,105 @@ _BOUNDED_TOOLS = frozenset((
 _HUMAN_WAIT_TOOLS = frozenset(("AskUserQuestion", "ExitPlanMode"))
 
 
+class BackgroundExecTracker:
+    """배경 실행(§89) 판정기 — 분모(parse_actions)·분자(collect_record_stats)
+    공용. 판정을 한 곳에 둬서 배경 실행이 한쪽에만 들어가는 일을 막는다.
+
+    대상: run_in_background로 띄운 Bash·PowerShell, 감시(Monitor). 서브에이전트·
+    Workflow는 대상 아님 — 분자는 그 일을 사람이 차례로 하는 일로 세고, 분모는
+    병렬이라 메인 대기에 묻힌다.
+    시작 = 띄운 tool_use 시각. 끝 = 가장 이른 완료 신호:
+      ① <task-notification>(user 기록 또는 queue-operation 기록) — <tool-use-id>
+         또는 <task-id>로 짝짓기
+      ② TaskOutput·BashOutput 결과의 <task_id>·<status> (running 아닌 것)
+    Monitor의 <event> 알림(§88)은 구간을 끊되 계속 도는 것으로 본다.
+    attachment 안의 알림은 화면 기록 사본이라 보지 않는다.
+    full = 정상 완료(<status>completed</status>)·감시 이벤트 — 그 외 종료는 10분 상한.
+    """
+    _POLL = ("TaskOutput", "BashOutput")
+
+    def __init__(self):
+        self.launch = {}     # 띄운 tool_use id -> 시작 시각 (확인 전)
+        self.running = {}    # tool_use id -> 현재 구간 시작 시각
+        self.task = {}       # task id -> tool_use id
+        self.polls = set()   # 폴링 tool_use id
+        self.jobs = []       # [{start, end, full}]
+
+    def _finish(self, use_id, t, status=None, event=False):
+        start = self.running.get(use_id)
+        if start is None or t is None:
+            return
+        self.jobs.append({"start": start, "end": t,
+                          "full": event or status == "completed"})
+        if event:
+            self.running[use_id] = t
+        else:
+            del self.running[use_id]
+
+    def _notice(self, text, t):
+        m = re.search(r"<tool-use-id>([^<]+)</tool-use-id>", text)
+        use_id = m.group(1).strip() if m else None
+        if use_id not in self.running:
+            m = re.search(r"<task-id>([^<]+)</task-id>", text)
+            use_id = self.task.get(m.group(1).strip()) if m else None
+        st = re.search(r"<status>([^<]+)</status>", text)
+        if st:
+            self._finish(use_id, t, st.group(1).strip())
+        elif "<event>" in text:
+            self._finish(use_id, t, event=True)
+
+    def feed(self, rec, t):
+        rtype = rec.get("type")
+        if rtype == "queue-operation":
+            c = rec.get("content")
+            if isinstance(c, str) and "<task-notification" in c:
+                self._notice(c, t)
+            return
+        if rtype not in ("user", "assistant"):
+            return
+        for b in _content_blocks(rec.get("message")):
+            if not isinstance(b, dict):
+                continue
+            if rtype == "assistant" and b.get("type") == "tool_use":
+                inp = b.get("input") or {}
+                name = b.get("name")
+                if b.get("id") and t and (
+                        name == "Monitor" or (name in ("Bash", "PowerShell")
+                                              and isinstance(inp, dict)
+                                              and inp.get("run_in_background"))):
+                    self.launch[b["id"]] = t
+                elif name in self._POLL and b.get("id"):
+                    self.polls.add(b["id"])
+            elif b.get("type") == "tool_result":
+                uid = b.get("tool_use_id")
+                text = _result_text(b)
+                if uid in self.launch:
+                    start = self.launch.pop(uid)
+                    tr = rec.get("toolUseResult")
+                    tr = tr if isinstance(tr, dict) else {}
+                    tid = tr.get("backgroundTaskId") or tr.get("taskId")
+                    if not tid:
+                        m = re.search(r"(?:running in background with ID:|Monitor started \(task)"
+                                      r"\s*([\w-]+)", text, re.I)
+                        tid = m.group(1) if m else None
+                    if tid and not b.get("is_error"):   # 배경으로 떴을 때만 대상
+                        self.task[tid] = uid
+                        self.running[uid] = start
+                elif uid in self.polls:
+                    self.polls.discard(uid)
+                    m = re.search(r"<task_id>([^<]+)</task_id>", text)
+                    st = re.search(r"<status>([^<]+)</status>", text)
+                    if m and st and st.group(1).strip() not in ("running", "pending"):
+                        self._finish(self.task.get(m.group(1).strip()), t, st.group(1).strip())
+            elif rtype == "user" and b.get("type") == "text":
+                text = b.get("text", "")
+                if text.lstrip().startswith("<task-notification"):
+                    self._notice(text, t)
+
+    def result(self):
+        return [j for j in self.jobs if j["start"] < j["end"]]
+
+
 def _epoch(x):
     """ISO 타임스탬프 -> epoch 초 (없거나 깨지면 None)."""
     if not x:
@@ -248,6 +347,9 @@ def parse_actions(jsonl_path, count_window=None):
               # 이벤트는 상한 없음, failed·killed·stopped는 _AI_GAP_CAP_SEC 상한.
               # bg_wait_min = 가산분, bg_wait_cut_min = 상한에 잘린 초과분.
               "bg_wait_min": 0.0, "bg_wait_events": 0, "bg_wait_cut_min": 0.0,
+              # §89 배경 실행(Bash·PowerShell) 목록 — BackgroundExecTracker,
+              # 분자도 같은 판정기를 쓴다 (감사·대칭 확인용, 분모 계산엔 안 씀)
+              "bg_exec_jobs": [],
               # 세션 러닝타임 (§64): 첫 기록 ~ 마지막 기록. 초소형 세션
               # 제외 판정에 쓴다 — 5분 안에 끝난 세션은 측정 가치가 없다.
               "session_span_min": 0.0,
@@ -297,6 +399,7 @@ def parse_actions(jsonl_path, count_window=None):
         seg_files.clear()
     seen_uuid = set()    # §87 R0 재기록 중복 레코드 판별
     tool_names = {}      # §87 R3 tool_use id → 도구 이름
+    bg_exec = BackgroundExecTracker()
     with open(jsonl_path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -319,6 +422,8 @@ def parse_actions(jsonl_path, count_window=None):
             rec_t = _epoch(rec.get("timestamp"))
             tw = rec_t if rec_t else last_tw   # §80 귀속 시각(물려받기)
             last_tw = tw
+            if not rec.get("isSidechain"):
+                bg_exec.feed(rec, rec_t)       # §89 공용 배경 실행 판정
             inw = _inw(tw)
             ts = rec.get("timestamp")
             if ts:
@@ -437,10 +542,10 @@ def parse_actions(jsonl_path, count_window=None):
                 if (is_bg_notif and turn_start is not None and rec_t
                         and turn_prev):
                     gap = max(0.0, rec_t - turn_prev)
+                    full = ("<status>completed</status>" in bg_text
+                            or ("<status>" not in bg_text     # §88
+                                and "<event>" in bg_text))
                     if inw:
-                        full = ("<status>completed</status>" in bg_text
-                                or ("<status>" not in bg_text     # §88
-                                    and "<event>" in bg_text))
                         add = (gap if full else min(gap, _AI_GAP_CAP_SEC)) / 60
                         counts["ai_wall_min"] += add
                         counts["bg_wait_min"] += add
@@ -562,6 +667,7 @@ def parse_actions(jsonl_path, count_window=None):
     f0 = _epoch(counts.get("first_ts")); f1 = _epoch(counts.get("last_ts"))
     if f0 and f1 and f1 >= f0:
         counts["session_span_min"] = (f1 - f0) / 60      # §64
+    counts["bg_exec_jobs"] = bg_exec.result()
     return counts
 
 

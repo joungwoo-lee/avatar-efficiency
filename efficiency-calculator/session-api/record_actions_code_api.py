@@ -89,7 +89,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 from session_api import (measure_agent_actual, is_trivial_session)  # noqa: E402
-from requirement_actions import (collect_record_stats,  # noqa: E402
+from requirement_actions import (collect_record_stats, execution_wait_seconds,  # noqa: E402
                                  find_subagent_files)
 from agent_effort import load_rates, speedup  # noqa: E402
 
@@ -196,7 +196,7 @@ _THINK_DEFAULT_SPEC = {"unit": "word_count", "min_per_unit": 0.00333}
 #                      # (§57 분자 정독과 동속 — 200wpm 상당)
 
 
-def collect_strategy_thinking(jsonl_path, subagent_paths=(), count_window=None):
+def collect_strategy_thinking(jsonl_path, subagent_paths=(), count_window=None, point_times=None):
     """지시 직후 첫 응답의 생각(=전략 생각)만 **계상**. 결정론, LLM 0회.
 
     §68: 서브에이전트 기록(subagent_paths)도 같은 규칙으로 훑는다 — 서브의
@@ -235,7 +235,7 @@ def collect_strategy_thinking(jsonl_path, subagent_paths=(), count_window=None):
             raise
         with fh:
             _r = _scan_strategy_thinking(fh, skip_sidechain=not _is_sub,
-                                         count_window=count_window)
+                                         count_window=count_window, point_times=point_times)
         points += _r[0]; tokens += _r[1]; fallback += _r[2]
         mid_points += _r[3]; mid_tokens += _r[4]
         if _is_sub:
@@ -247,7 +247,7 @@ def collect_strategy_thinking(jsonl_path, subagent_paths=(), count_window=None):
             "sub_fallback_points": sub_fallback}
 
 
-def _scan_strategy_thinking(fh, skip_sidechain=True, count_window=None):
+def _scan_strategy_thinking(fh, skip_sidechain=True, count_window=None, point_times=None):
     """기록 1파일의 전략/중간 생각 집계 → (points, tokens, fallback, mid_points,
     mid_tokens). 서브 파일은 전 기록이 isSidechain이라 skip_sidechain=False.
     count_window: §80 — 생각은 그 응답 레코드의 시각으로 귀속."""
@@ -297,9 +297,13 @@ def _scan_strategy_thinking(fh, skip_sidechain=True, count_window=None):
                     for b in (msg.get("content") or []))
                 if tt and inw:
                     points += 1
+                    if point_times is not None:
+                        point_times.append(_tw)
                     tokens += tt
                 elif has_block and inw:
                     points += 1
+                    if point_times is not None:
+                        point_times.append(_tw)
                     fallback += 1
                 awaiting = False
             elif t == "assistant":
@@ -428,7 +432,8 @@ def exec_item(stats, rates, humanize_act=True):
     """
     calls = stats.get("exec_calls", 0)
     if not calls:
-        return None
+        wait = stats.get("exec_wait_min", 0.0)
+        return {"primitive": "execute", "count": 0, "minutes": wait} if wait else None
     net = min(max(1, stats.get("exec_net_calls", 0)), calls)
     em = rates.get("human_exec_model")
     if not em:  # 구 폴백: 건당 고정 요율
@@ -578,6 +583,97 @@ def build_actions(stats, rates, humanize_rw=True, humanize_act=True):
     return items
 
 
+def background_wait(stats, rates, humanize_rw, humanize_act, point_times=(), window=None):
+    """배경 실행 대기 (§89). 배경 실행 판정은 분모와 같은 판정기
+    (BackgroundExecTracker: 띄운 시각 → 완료 신호, 정상 완료만 상한 없음).
+    대기 = 실행 시간 − 그 사이 사람이 한 다른 일(사람 요율, 기록 순서로 재생).
+    겹침을 빼는 기준은 양쪽이 각자 자기 일이다 — 분모는 AI가 한 일, 분자는
+    사람이 한 일."""
+    jobs = stats.get("bg_exec_jobs", [])
+    if not jobs:
+        return 0.0
+    src = stats["work_sources"]
+    candidates = {k: [] for k in ("read", "draft", "edit", "search", "paste", "execute")}
+    rr = rates["human"]["read"]["min_per_unit"]
+    sr = (rates.get("human_reading_model") or {}).get("skim_min_per_word", rr / 20)
+    candidates["read"] = [(t, w * rr) for t, w in src["input"]]
+    if humanize_rw:
+        for key, rate in (("deep", rr), ("skim", sr)):
+            candidates["read"].extend((t, w * rate) for t, w in src[key])
+        candidates["read"].extend((t, d * rr + sk * sr) for t, d, sk in src["search_output"])
+    else:
+        outputs = {}
+        for ev in stats["exec_events"]:
+            t = ev.get("result_t")
+            outputs[t] = outputs.get(t, 0) + ev["out_words"]
+        reviewed = {}
+        for t, w in src["reviewed"]:
+            reviewed[t] = reviewed.get(t, 0) + w
+        candidates["read"].extend((t, max(0, w - outputs.get(t, 0)) * rr) for t, w in reviewed.items())
+    for cls in ("draft", "edit"):
+        candidates[cls] = [(t, write_minutes({kind: w}, rates, cls == "edit")[0])
+                           for t, w, kind in src[cls if humanize_rw else "gross_" + cls]]
+    if stats.get("answer_words"):
+        candidates["draft"].append((stats["answer_t"], write_minutes({"doc": stats["answer_words"]}, rates)[0]))
+    searches = src["search"]
+    if humanize_act:
+        searches = searches[:max(1, stats["search_landing_docs"], stats["search_turns"])]
+    candidates["search"] = searches
+    candidates["paste"] = [(t, blocks * PASTE_BLOCK_MIN) for t, blocks in src["paste"]]
+    em = rates.get("human_exec_model") or {}
+    seen, valid = set(), set()
+    for ev in stats["exec_events"]:
+        canon = ev["canon"]
+        repeat = canon in seen
+        compose = ev["cmd_words"] * em.get("compose_min_per_word", .05)
+        if humanize_act and (canon in valid or ev["failed"]):
+            compose = 0
+        seen.add(canon)
+        if not ev["failed"]:
+            valid.add(canon)
+        mech = em.get("repeat_cmd_min", .1) if humanize_act and repeat else em.get("new_cmd_min", .25)
+        candidates["execute"].append((ev["t"], compose + mech))
+        cap, words = (50 if repeat else 200), ev["out_words"]
+        if ev.get("result_t") is not None:
+            candidates["execute"].append((ev["result_t"], min(words, cap) * rr + max(0, words - cap) * sr))
+    events = {}
+    def event(t):
+        return events.setdefault(t, {"work": 0.0, "wait": 0.0, "start": [], "end": []})
+    for action in build_actions(dict(stats, exec_wait_min=0), rates, humanize_rw, humanize_act):
+        primitive = action["primitive"]
+        amount = action["minutes"] if "minutes" in action else action["count"] * rates["human"][primitive]["min_per_unit"]
+        rows = [(t, value) for t, value in candidates[primitive] if value > 0]
+        total = sum(value for t, value in rows)
+        for t, value in rows if total else [(0.0, 1.0)]:
+            event(t)["work"] += amount * value / total if total else amount
+    for t in point_times or ():
+        event(t)["work"] += THINK_POINT_MIN
+    if point_times is not None:
+        tr = (rates["human"].get("think") or _THINK_DEFAULT_SPEC)["min_per_unit"]
+        for t, words in src["sub_report"]:
+            event(t)["work"] += words * tr
+    for ev in stats["exec_events"]:
+        event(ev["t"])["wait"] += ev["wait_sec"] / 60
+    for t, sec in stats.get("poll_waits", ()):
+        event(t)["wait"] += sec / 60
+    for index, job in enumerate(jobs):
+        event(job["start"])["start"].append((index, job))
+        event(job["end"])["end"].append(index)
+    clock, deadlines, added = 0.0, {}, 0.0
+    for t, ev in sorted(events.items()):
+        wait = max((execution_wait_seconds(
+            max(0.0, deadlines.pop(i) - clock) * 60,
+            full=jobs[i]["full"]) / 60 for i in ev["end"]), default=0.0)
+        clock += wait
+        if window is None or window[0] <= t <= window[1]:
+            added += wait
+        clock += ev["work"]
+        for index, job in ev["start"]:
+            deadlines[index] = clock + (job["end"] - job["start"]) / 60
+        clock += ev["wait"]
+    return added
+
+
 def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
             include_subagents=False, force=False, humanize=None,
             include_think=True, subagent_paths=None, hitl_compact=True,
@@ -639,11 +735,19 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
             else find_subagent_files(jsonl_path))
     stats = collect_record_stats(jsonl_path, subagent_paths=subs,
                                  count_window=window)
-    suspect, suspect_why = suspect_output_channel(stats)
+    point_times = [] if include_think else None
+    st = collect_strategy_thinking(jsonl_path, subs, count_window=window, point_times=point_times) if include_think else None
+    full_stats = collect_record_stats(jsonl_path, subagent_paths=subs) if window else stats
+    if window and include_think:
+        point_times = []
+        collect_strategy_thinking(jsonl_path, subs, point_times=point_times)
     # §64 초소형 제외: 세션 러닝타임(첫~마지막 기록)이 5분 이하면 측정 안 함
     actual = measure_agent_actual(jsonl_path, rates, include_subagents,
                                   hitl_compact=hitl_compact,
                                   count_window=window)
+    stats["exec_wait_min"] += background_wait(
+        full_stats, rates, humanize_rw, humanize_act, point_times, window)
+    suspect, suspect_why = suspect_output_channel(stats)
     span = actual["counts"].get("session_span_min") or None
     if is_trivial_session(stats, span) and not force:
         return {"session": Path(jsonl_path).name, "excluded": True,
@@ -671,7 +775,6 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
         breakdown.append(row)
     think_info = None
     if include_think:  # 전략 생각 (§53) — 휴먼화 축과 독립, 기본 ON
-        st = collect_strategy_thinking(jsonl_path, subs, count_window=window)
         spec = card.get("think") or _THINK_DEFAULT_SPEC
         # §86: 전략 지점(신·구 포맷 공통)은 지점당 고정 분 — 토큰 수를 쓰지
         # 않는다(reasoning effort 설정 의존 제거). 요율에 무관하게 같은

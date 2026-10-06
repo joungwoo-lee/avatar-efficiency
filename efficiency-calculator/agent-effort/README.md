@@ -134,6 +134,9 @@ agent_min = agent_human_min(사람 협업자의 에포트, hitl)
    **§87·§88**: 완료(completed) 알림·감시(Monitor) 이벤트 알림은 상한 없음. 답 생성·제한 없는 도구의 정상 결과도
    상한 없음 — 방치는 재기록 중복 레코드 무시·AI를 깨운 입력(isMeta·압축 요약)
    경계로 뺀다. 상세 `DESIGN-ai-time-87.md`.
+   **§89**: 배경 실행(Bash·PowerShell `run_in_background`, `Monitor`) 판정기
+   `BackgroundExecTracker`를 분자와 같이 쓴다(감사용 `bg_exec_jobs`). 배경 실행이
+   한쪽에만 들어가는 일을 막는다. 겹친 다른 일은 각자 자기 일로 뺀다.
 
 ## 한계 — 분자·분모 산정 체계 불일치 편향 (해석 주의)
 

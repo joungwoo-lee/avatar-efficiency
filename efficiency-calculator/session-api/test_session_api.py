@@ -827,6 +827,220 @@ class TestWindowMeasure(unittest.TestCase):
             os.unlink(p)
 
 
+class TestBackgroundExecutionWait(unittest.TestCase):
+    def run_case(self, seconds=600, background=True, status="completed", work_words=0,
+                 name="Bash", parallel=False, window=None, foreground_seconds=0, native_notice=False,
+                 input_key="command", is_error=False, block_notice=False):
+        from datetime import datetime, timezone
+        import record_actions_code_api as api
+        base = 1_790_000_000
+
+        def row(t, role, content, **extra):
+            return dict(type=role, timestamp=datetime.fromtimestamp(base + t, timezone.utc).isoformat(),
+                        message={"role": role, "content": content}, **extra)
+
+        rows = [row(0, "user", "Build")]
+        ids = ("a", "b") if parallel else ("a",)
+        rows.append(row(1, "assistant", [{"type": "tool_use", "id": ident, "name": name,
+                    "input": {input_key: "npm run build", "run_in_background": background}}
+                    for ident in ids]))
+        if background:
+            rows.extend(row(2, "user", [{"type": "tool_result", "tool_use_id": ident, "content": ""}],
+                            toolUseResult={"backgroundTaskId": ident}) for ident in ids)
+        if work_words:
+            rows.append(row(100, "assistant", [{"type": "tool_use", "id": "w", "name": "Write",
+                        "input": {"file_path": "note.md", "content": " ".join(f"word{i}" for i in range(work_words))}}]))
+        if foreground_seconds:
+            rows.append(row(100, "assistant", [{"type": "tool_use", "id": "fg", "name": "Bash",
+                        "input": {"command": "cargo build"}}]))
+            rows.append(row(100 + foreground_seconds, "user", [
+                {"type": "tool_result", "tool_use_id": "fg", "content": ""}]))
+        for ident in ids:
+            if background:
+                ending = f"<status>{status}</status>" if status is not None else "<event>changed</event>"
+                notice = f"<task-notification><task-id>{ident}</task-id>{ending}</task-notification>"
+                rows.append(dict(type="queue-operation", operation="enqueue",
+                                 timestamp=row(1 + seconds, "user", "")["timestamp"], content=notice)
+                            if native_notice else row(1 + seconds, "user", [{"type": "text", "text": notice}] if block_notice else notice))
+            else:
+                rows.append(row(1 + seconds, "user", [{"type": "tool_result", "tool_use_id": ident, "content": "", "is_error": is_error}]))
+        rows.append(row(2 + seconds, "assistant", ""))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "session.jsonl"
+            path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+            from unittest.mock import patch
+            with patch.object(api, "collect_record_stats", wraps=api.collect_record_stats) as reads:
+                result = api.measure(path, force=True, subagent_paths=[], include_think=False, window=window)
+                self.assertEqual(reads.call_count, 1 if window is None else 2)
+            wait = next((r for r in result["human"]["breakdown"] if r["primitive"] == "execute"), None)
+            if wait is None:
+                return 0.0, result
+            return wait.get("detail", {}).get("wait_min", wait["minutes"]), result
+
+    def test_normal_completion_includes_long_wait(self):
+        for seconds in (3599, 3600, 3601, 7200):
+            for bg in (False, True):
+                self.assertAlmostEqual(self.run_case(seconds, bg)[0], seconds / 60 if bg else 10, delta=.01)
+
+    def test_background_wait_already_counted_by_agent_is_also_counted_by_human(self):
+        wait, result = self.run_case(7200)
+        self.assertEqual(wait, 120)
+        self.assertGreaterEqual(result["agent"]["machine_min"], 120)
+        # queue-operation 기록으로만 온 완료 알림도 양쪽 다 센다 (§89)
+        self.assertAlmostEqual(self.run_case(native_notice=True)[0], 10, delta=.05)
+
+    def test_human_work_covers_background_wait(self):
+        # 대기 = 실행 시간 − 그 사이 사람이 한 일(사람 요율) — 분모는 AI 일로 따로 뺀다
+        wait, _result = self.run_case(work_words=57)
+        self.assertAlmostEqual(wait, 7.15, places=2)
+        self.assertEqual(self.run_case(work_words=240)[0], .02)  # 접수 응답만 남음
+
+    def test_background_wait_is_not_added_twice(self):
+        self.assertEqual(self.run_case(parallel=True)[0], 10)
+        self.assertEqual(self.run_case(background=False, parallel=True)[0], 10)
+
+    def test_zero_elapsed_notification_adds_no_wait(self):
+        from record_actions_code_api import background_wait
+        self.assertEqual(background_wait({"bg_exec_jobs": []}, {}, True, True), 0)
+
+    def test_foreground_execution_covers_background_wait(self):
+        original = self.run_case()[1]["human"]["min"]
+        overlapped = self.run_case(foreground_seconds=300)[1]["human"]["min"]
+        self.assertAlmostEqual(overlapped, original, delta=.02)
+
+    def test_cleanup_is_not_normal_completion(self):
+        for status in ("killed", "stopped", "cancelled", "failed"):
+            self.assertAlmostEqual(self.run_case(7200, status=status)[0], 10.02, places=2)
+
+    def test_non_shell_tool_with_command_input_is_not_execution(self):
+        # §89: command·cmd·code·script 입력만으로 셸 실행으로 보지 않는다
+        # (Workflow script·Monitor command 를 사람 명령 타이핑으로 오계상한 사고)
+        # §91: 그 외 도구는 대기만 분모와 같은 규칙으로 — 구성(타이핑)·조작 비용은 없다
+        for key in ("command", "cmd", "code", "script"):
+            for name in ("Workflow", "Monitor", "mcp__runner__submit"):
+                wait, result = self.run_case(7200, background=False, name=name, input_key=key)
+                ex = [r for r in result["human"]["breakdown"] if r["primitive"] == "execute"]
+                if name == "Workflow":
+                    self.assertEqual(ex, [])
+                else:
+                    self.assertAlmostEqual(ex[0]["minutes"], 120, delta=.05)
+                    self.assertAlmostEqual(ex[0]["minutes"], wait, delta=.01)
+
+    def test_monitor_and_text_block_notifications(self):
+        self.assertEqual(self.run_case(7200, status=None)[0], 120)
+        self.assertEqual(self.run_case(7200, block_notice=True)[0], 120)
+
+    def test_execution_wait_policy_matches_agent(self):
+        from requirement_actions import execution_wait_seconds
+        from transcript_actual import _AI_GAP_CAP_SEC, _BOUNDED_TOOLS, _HUMAN_WAIT_TOOLS
+        for name in (*_BOUNDED_TOOLS, *_HUMAN_WAIT_TOOLS, "mcp__unknown", None):
+            for error in (False, True):
+                full = not error and name and name not in _BOUNDED_TOOLS and name not in _HUMAN_WAIT_TOOLS
+                self.assertEqual(execution_wait_seconds(7200, name, error), 7200 if full else _AI_GAP_CAP_SEC)
+        for full in (True, False):
+            self.assertEqual(execution_wait_seconds(7200, full=full), 7200 if full else _AI_GAP_CAP_SEC)
+
+    def test_human_and_agent_count_same_background_waits(self):
+        # §89: 배경 실행은 같은 판정기(BackgroundExecTracker)로 양쪽에 다 들어가거나 다 빠진다
+        # (그 사이 다른 일이 없을 때 양쪽 값이 같다)
+        from datetime import datetime, timezone
+        import record_actions_code_api as api
+        base = 1_790_000_000
+
+        def row(t, role, content, **extra):
+            return dict(type=role, timestamp=datetime.fromtimestamp(base + t, timezone.utc).isoformat(),
+                        message={"role": role, "content": content}, **extra)
+
+        def measure(rows):
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "session.jsonl"
+                path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+                r = api.measure(path, force=True, subagent_paths=[], include_think=False)
+            ex = next((x for x in r["human"]["breakdown"] if x["primitive"] == "execute"), None)
+            wait = ex.get("detail", {}).get("wait_min", ex["minutes"]) if ex else 0.0
+            return wait, r["agent"]["machine_min"]
+
+        def launch(name, tool_input):
+            return [row(0, "user", "go"),
+                    row(1, "assistant", [{"type": "tool_use", "id": "x", "name": name, "input": tool_input}]),
+                    row(2, "user", [{"type": "tool_result", "tool_use_id": "x", "content": "started t1"}],
+                        toolUseResult={"backgroundTaskId": "t1"} if name != "Monitor" else {"taskId": "t1"})]
+        note = "<task-notification><task-id>t1</task-id><status>{}</status></task-notification>"
+        cases = {
+            "bash completed": launch("Bash", {"command": "make", "run_in_background": True})
+            + [row(3600, "user", note.format("completed"))],
+            "bash failed": launch("Bash", {"command": "make", "run_in_background": True})
+            + [row(3600, "user", note.format("failed"))],
+            "queue-operation only": launch("Bash", {"command": "make", "run_in_background": True})
+            + [dict(type="queue-operation", operation="enqueue",
+                    timestamp=row(3600, "user", "")["timestamp"], content=note.format("completed"))],
+            "monitor events": launch("Monitor", {"command": "tail -f log"})
+            + [row(1800, "user", "<task-notification><task-id>t1</task-id><event>a</event></task-notification>"),
+               row(3600, "user", "<task-notification><task-id>t1</task-id><event>b</event></task-notification>")],
+            "task output": launch("Bash", {"command": "make", "run_in_background": True})
+            + [row(3, "assistant", [{"type": "tool_use", "id": "y", "name": "TaskOutput",
+                                     "input": {"task_id": "t1", "block": True}}]),
+               row(600, "user", [{"type": "tool_result", "tool_use_id": "y", "content": "done"}])],
+        }
+        for label, rows in cases.items():
+            end = rows[-1]["timestamp"]
+            rows = rows + [row(datetime.fromisoformat(end).timestamp() - base + 1, "assistant", "ok")]
+            human, agent = measure(rows)
+            self.assertAlmostEqual(human, agent, delta=.1, msg=label)
+
+    def test_foreground_non_shell_tool_wait_matches_agent(self):
+        # §91: Bash 아닌 포그라운드 도구(MCP 등)의 대기도 분모와 같은 규칙으로 — 서브에이전트류는 제외
+        from datetime import datetime, timezone
+        import record_actions_code_api as api
+        base = 1_790_000_000
+
+        def row(t, role, content, **extra):
+            return dict(type=role, timestamp=datetime.fromtimestamp(base + t, timezone.utc).isoformat(),
+                        message={"role": role, "content": content}, **extra)
+        for name, err, expect in (("mcp__runner__run", False, 60), ("mcp__runner__run", True, 10),
+                                  ("Workflow", False, 0), ("Agent", False, 0)):
+            rows = [row(0, "user", "go"),
+                    row(1, "assistant", [{"type": "tool_use", "id": "x", "name": name, "input": {"command": "make"}}]),
+                    row(3601, "user", [{"type": "tool_result", "tool_use_id": "x", "content": "ok", "is_error": err}]),
+                    row(3602, "assistant", "done")]
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "session.jsonl"
+                path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+                r = api.measure(path, force=True, subagent_paths=[], include_think=False)
+            ex = next((x for x in r["human"]["breakdown"] if x["primitive"] == "execute"), None)
+            wait = (ex.get("detail", {}).get("wait_min", ex["minutes"]) if ex else 0.0)
+            self.assertAlmostEqual(wait, expect, delta=.05, msg=name)
+
+    def test_background_subagent_adds_no_human_wait(self):
+        # 서브에이전트: 분모는 메인 대기(병렬), 분자는 그 일을 사람이 차례로 — 대기 없음
+        from datetime import datetime, timezone
+        import record_actions_code_api as api
+        base = 1_790_000_000
+
+        def row(t, role, content, **extra):
+            return dict(type=role, timestamp=datetime.fromtimestamp(base + t, timezone.utc).isoformat(),
+                        message={"role": role, "content": content}, **extra)
+        rows = [row(0, "user", "go"),
+                row(1, "assistant", [{"type": "tool_use", "id": "x", "name": "Agent",
+                                      "input": {"prompt": "p", "run_in_background": True}}]),
+                row(2, "user", [{"type": "tool_result", "tool_use_id": "x", "content": "Async agent launched"}]),
+                row(3600, "user", "<task-notification><task-id>t1</task-id><status>completed</status></task-notification>"),
+                row(3601, "assistant", "ok")]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "session.jsonl"
+            path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+            r = api.measure(path, force=True, subagent_paths=[], include_think=False)
+        self.assertFalse(any(x["primitive"] == "execute" for x in r["human"]["breakdown"]))
+        self.assertGreaterEqual(r["agent"]["machine_min"], 60)
+
+    def test_wait_belongs_to_completion_window(self):
+        base = 1_790_000_000
+        whole = self.run_case()[1]["human"]["min"]
+        first = self.run_case(window=(base, base + 300))[1]["human"]["min"]
+        second = self.run_case(window=(base + 300.001, base + 1000))[1]["human"]["min"]
+        self.assertAlmostEqual(first + second, whole, delta=.02)
+
+
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")

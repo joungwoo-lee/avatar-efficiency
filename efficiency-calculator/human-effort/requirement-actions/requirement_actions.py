@@ -30,6 +30,24 @@ if str(_AGENT_DIR) not in sys.path:
 
 from agent_effort import load_rates  # noqa: E402 (human 카드 공용)
 from transcript_actual import json_text_words as _json_text_words  # noqa: E402
+from transcript_actual import (_AI_GAP_CAP_SEC, _BOUNDED_TOOLS,  # noqa: E402
+                               _HUMAN_WAIT_TOOLS, BackgroundExecTracker)
+
+
+def execution_wait_seconds(seconds, name=None, is_error=False, full=None):
+    """도구 결과 대기 상한 — 분모 parse_actions(§87 R3)와 같은 규칙 (§89).
+    full을 주면(배경 실행, §89 BackgroundExecTracker 판정) 그대로 쓴다."""
+    if full is None:
+        full = (not is_error and name and name not in _BOUNDED_TOOLS
+                and name not in _HUMAN_WAIT_TOOLS)
+    return max(0.0, seconds) if full else min(max(0.0, seconds), _AI_GAP_CAP_SEC)
+
+
+# §89 배경 작업 결과를 붙잡고 기다리는 도구 — 그 대기는 실행 대기로 센다
+# (분모도 같은 간격을 10분 상한으로 센다)
+_BG_POLL_TOOLS = ("TaskOutput", "BashOutput")
+# 서브에이전트류 — 그 일은 분자가 사람이 차례로 하는 일로 센다(§59). 대기를 붙이지 않는다.
+_SUBAGENT_TOOLS = ("Agent", "Task", "Workflow")
 
 # 닻으로 총량이 확정되는 단어 단위 행동
 _WORD_READ = ("read",)
@@ -890,7 +908,14 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                              # (툴 에러)은 순계에서 제외(§48) — 쓰기 순계의
                              # "실패한 편집 제외"(§31)와 같은 규칙
     tool_report_w = 0        # StructuredOutput 보고 실측 단어수 (§33)
+    work_sources = {k: [] for k in ("input", "reviewed", "search_output", "search", "deep", "skim",
+                                     "draft", "edit", "gross_draft", "gross_edit", "paste", "sub_report")}
+    pending_poll = {}        # §89 TaskOutput·BashOutput 호출 id → 호출 시각
+    pending_tool_wait = {}   # §91 그 외 대기 도구(MCP 등) 호출 id → (도구명, 호출 시각)
+    poll_waits = []          # §89 (호출 시각, 대기 초) — 분모와 같은 10분 상한
+    bg_exec = BackgroundExecTracker()   # §89 배경 실행 판정 — 분모와 같은 판정기
     pending_exec = {}        # tool_use id → (신원, 명령 단어수, 시작 시각)
+    previous_record = {}
     pending_search = set()   # 검색 도구 호출 id (§73: 결과 판독 계상용)
     search_out_deep = 0      # 검색 결과 판독 — 호출당 앞 200단어 정독 (§73)
     search_out_skim = 0      #                 나머지 훑기
@@ -980,6 +1005,8 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
         for rec, is_sub, rec_tw in _iter_session_records(jsonl_path,
                                                          subagent_paths):
             inw = _inw(rec_tw)
+            if not is_sub and not rec.get("isSidechain"):
+                bg_exec.feed(rec, _ts(rec.get("timestamp")))
             if rec.get("isMeta") or rec.get("isCompactSummary") \
                     or rec.get("isVisibleInTranscriptOnly") \
                     or (rec.get("isSidechain") and not is_sub):
@@ -992,6 +1019,11 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
             content = (rec.get("message") or {}).get("content")
             blocks = ([{"type": "text", "text": content}] if isinstance(content, str)
                       else content if isinstance(content, list) else [])
+            prior_t = previous_record.get(is_sub)
+            if rtype in ("user", "assistant") and rec_t is not None \
+                    and not rec.get("isApiErrorMessage") \
+                    and (rec.get("message") or {}).get("model") != "<synthetic>":
+                previous_record[is_sub] = max(prior_t or rec_t, rec_t)
             if rtype == "user":
                 if not is_sub and any(
                         isinstance(b, dict) and b.get("type") == "text"
@@ -1011,7 +1043,11 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                             input_w += len(t.split())
                             if inw:
                                 input_w_in += len(t.split())
+                                work_sources["input"].append((rec_tw, len(t.split())))
                     elif b.get("type") == "tool_result":
+                        result_gap = max(0.0, rec_t - prior_t) if rec_t is not None and prior_t is not None else 0.0
+                        if rec_t is not None:
+                            prior_t = max(prior_t or rec_t, rec_t)
                         if b.get("is_error") and b.get("tool_use_id"):
                             failed_tool_ids.add(b["tool_use_id"])
                         rc = b.get("content")
@@ -1030,6 +1066,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                         reviewed += len(text.split())
                         if inw:
                             reviewed_in += len(text.split())
+                            work_sources["reviewed"].append((rec_tw, len(text.split())))
                         if b.get("tool_use_id") in pending_search:
                             # §73: 검색 결과(Grep/Glob/셸 grep·MCP 검색)를 읽는
                             # 시간 — 실행 출력과 같은 눈금(앞 200 정독·나머지 훑기)
@@ -1040,12 +1077,21 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                             if inw:
                                 search_out_deep_in += min(_sw, _DEEP_BLOCK_WORDS)
                                 search_out_skim_in += max(0, _sw - _DEEP_BLOCK_WORDS)
+                                work_sources["search_output"].append((rec_tw, min(_sw, _DEEP_BLOCK_WORDS), max(0, _sw - _DEEP_BLOCK_WORDS)))
+                        _tw_pend = pending_tool_wait.pop(b.get("tool_use_id"), None)
+                        if _tw_pend:
+                            # §91 포그라운드 도구 대기 — 분모와 같은 간격·같은 상한
+                            # (정상 결과 상한 없음, 오류 10분). 구성·판독은 기존대로.
+                            poll_waits.append((_tw_pend[1], execution_wait_seconds(
+                                result_gap, _tw_pend[0], b.get("is_error"))))
+                        if b.get("tool_use_id") in pending_poll:
+                            poll_waits.append((pending_poll.pop(b["tool_use_id"]),
+                                               execution_wait_seconds(
+                                result_gap, "TaskOutput", b.get("is_error"))))
                         pe = pending_exec.pop(b.get("tool_use_id"), None)
                         if pe:
-                            _canon, _cw, _t0, _tw = pe
-                            _d = ((rec_t - _t0)
-                                  if (rec_t and _t0 and 0 <= rec_t - _t0 < 3600)
-                                  else 0.0)
+                            _canon, _cw, _t0, _tw, _name = pe
+                            _d = execution_wait_seconds(result_gap, _name, b.get("is_error"))
                             # §69: 종료코드≠0(테스트 실패 등)은 실패가 아니다 —
                             # 환경·타이핑 실수·거부 서명이 있을 때만
                             _hard = bool(b.get("is_error")) and bool(
@@ -1056,7 +1102,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                                 {"canon": _canon, "cmd_words": _cw,
                                  "out_words": len(text.split()),
                                  "wait_sec": _d,
-                                 "failed": _hard, "t": _tw})
+                                 "failed": _hard, "t": _tw, "result_t": rec_tw})
                         pr = pending_read.pop(b.get("tool_use_id"), None)
                         pq = (None if pr else
                               pending_query.pop(b.get("tool_use_id"), None))
@@ -1123,6 +1169,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                             sub_report_w += len(b.get("text", "").split())
                             if inw:
                                 sub_report_w_in += len(b.get("text", "").split())
+                                work_sources["sub_report"].append((rec_tw, len(b.get("text", "").split())))
                         else:
                             texts.append(b.get("text", ""))
                             assistant_text_w += len(b.get("text", "").split())
@@ -1132,6 +1179,12 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                     if b.get("type") != "tool_use":
                         continue
                     name = b.get("name")
+                    if name in _BG_POLL_TOOLS and b.get("id"):
+                        pending_poll[b["id"]] = rec_tw
+                    elif (b.get("id") and name and name not in ("Bash", "PowerShell")
+                            and name not in _SUBAGENT_TOOLS and name not in _BOUNDED_TOOLS
+                            and name not in _HUMAN_WAIT_TOOLS):
+                        pending_tool_wait[b["id"]] = (name, rec_tw)
                     tool_i += 1
                     if inw:
                         tool_calls_in += 1
@@ -1140,6 +1193,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                         search_calls += 1
                         if inw:
                             search_calls_in += 1
+                            work_sources["search"].append((rec_tw, 1))
                         if b.get("id"):
                             pending_search.add(b["id"])
                     if name in ("Bash", "PowerShell"):
@@ -1157,6 +1211,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                             search_calls += 1
                             if inw:
                                 search_calls_in += 1
+                            work_sources["search"].append((rec_tw, 1))
                             if b.get("id"):
                                 pending_search.add(b["id"])
                         elif kind == "read" and b.get("id"):
@@ -1177,10 +1232,11 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                             if inw:
                                 exec_paste_w_in += _pw
                                 exec_paste_b_in += _pb
+                                work_sources["paste"].append((rec_tw, _pb))
                                 exec_anchor_w_in += _anc
                             if b.get("id"):
                                 pending_exec[b["id"]] = (
-                                    canon, len(_cwords) - _pw - _anc, rec_t, rec_tw)
+                                    canon, len(_cwords) - _pw - _anc, rec_t, rec_tw, name)
                     inp = b.get("input") or {}
                     if name == "StructuredOutput":
                         # 구조화 보고 채널 (§33): 워크플로 에이전트의 최종
@@ -1200,6 +1256,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                             search_calls += 1
                             if inw:
                                 search_calls_in += 1
+                            work_sources["search"].append((rec_tw, 1))
                             if b.get("id"):
                                 pending_search.add(b["id"])
                             continue
@@ -1266,10 +1323,10 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                 if texts:
                     final_answer = " ".join(texts)
                     final_answer_t = rec_tw
-    for _canon, _cw, _t0, _tw in pending_exec.values():
+    for _canon, _cw, _t0, _tw, _name in pending_exec.values():
         exec_events.append({"canon": _canon, "cmd_words": _cw,
                             "out_words": 0, "wait_sec": 0.0, "failed": False,
-                            "t": _tw})
+                            "t": _tw, "result_t": None})
     _end_turn()  # 마지막 턴 마감
 
     # 신호⑤ 준비: 턴별 마무리 답변들의 6단어 연속 조각·식별자 집합
@@ -1360,11 +1417,15 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
             _fw = file_read_words.get(f, 0)
             file_split[f] = (_fw, 0)
             deep_w += sum(_rwords(r) for r in regs if _inw(region_t.get(r)))
+            work_sources["deep"].extend((region_t.get(r, 0.0), _rwords(r)) for r in regs if _inw(region_t.get(r)))
             continue
-        ev_words = (edit_texts.get(f, "") + " " + ans_text).lower().split()
-        ev_shingles = ({" ".join(ev_words[i:i + 6])
-                        for i in range(len(ev_words) - 5)}
-                       if len(ev_words) >= 6 else set())
+        # 증거 조각 = (편집 글 + 답변 글)의 6단어 조각. 답변 몫(ans_shingles)은
+        # 파일마다 같으므로 다시 자르지 않는다 — 편집 글 안 조각 + 편집 글 끝과
+        # 답변 글 앞에 걸친 조각만 새로 만든다. 세 집합의 합 = 종전 집합(동일).
+        ev_e = edit_texts.get(f, "").lower().split()
+        ev_e_sh = {" ".join(ev_e[i:i + 6]) for i in range(len(ev_e) - 5)}
+        _seam = ev_e[-5:] + ans_words[:5]
+        ev_seam_sh = {" ".join(_seam[i:i + 6]) for i in range(len(_seam) - 5)}
         f_deep = f_skim = 0
         reg_split = {}
         for region in regs:
@@ -1379,8 +1440,9 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                 # 정독 블록 조건: 변별 식별자 2개+(1개짜리 함수명이 파일 전
                 # 블록을 물들이는 것 방지) 또는 6단어 조각 직접 겹침
                 hit = (sum(1 for t in ans_idents if t in btext) >= 2
-                       or any(" ".join(bl[j:j + 6]) in ev_shingles
-                              for j in range(len(bl) - 5)))
+                       or any(_s in ans_shingles or _s in ev_e_sh or _s in ev_seam_sh
+                              for _s in (" ".join(bl[j:j + 6])
+                                         for j in range(len(bl) - 5))))
                 if hit:
                     r_deep += len(blk)
                 else:
@@ -1408,8 +1470,12 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
             if _inw(region_t.get(region)):
                 deep_w += reg_split[region][0]
                 skim_w += reg_split[region][1]
+                work_sources["deep"].append((region_t.get(region, 0.0), reg_split[region][0]))
+                work_sources["skim"].append((region_t.get(region, 0.0), reg_split[region][1]))
     skim_w += sum(_rwords(r) for f in skim for r in file_regions.get(f, [])
                   if _inw(region_t.get(r)))
+    work_sources["skim"].extend((region_t.get(r, 0.0), _rwords(r))
+                               for f in skim for r in file_regions.get(f, []) if _inw(region_t.get(r)))
     waste_w = sum(_rwords(r) for f in waste for r in file_regions.get(f, [])
                   if _inw(region_t.get(r)))
 
@@ -1447,6 +1513,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                 typed_on[cls][_fp] = typed_on[cls].get(_fp, 0) + _ty
             paste_kind[_k] += _pa
             paste_blocks += _bl
+            work_sources["paste"].append((_t, _bl))
     paste_kind["cmd"] = exec_paste_w_in      # §86 실행 명령 속 복붙
     paste_blocks += exec_paste_b_in
     out_draft = {fp: min(w, typed_on["draft"].get(fp, 0)) for fp, w in out_draft.items()}
@@ -1462,6 +1529,12 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
     # 지켜진다(종전 도구명 기준은 16/55세션에서 역전). Edit는 new_string
     # 전량이 아니라 edit_delta의 added(앵커 제외); 기존 파일의 순수 추가
     # (removed == 0)도 draft, 나머지가 edit.
+    for cls, attrib, final in (("draft", draft_by_t, out_draft), ("edit", edit_by_t, out_edit)):
+        for fp, amount in final.items():
+            rows = [(t, w) for t, w in attrib.get(fp, {}).items() if _inw(t)]
+            total = sum(w for t, w in rows)
+            work_sources[cls].extend((t, amount * w / total, write_kind(fp)) for t, w in rows if total)
+
     gross_d = gross_e = 0
     gross_draft_kind = {"code": 0, "doc": 0, "data": 0, "other": 0}
     gross_edit_kind = {"code": 0, "doc": 0, "data": 0, "other": 0}
@@ -1492,6 +1565,17 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
         gross_e += _ge
         gross_draft_kind[_k] += _gd
         gross_edit_kind[_k] += _ge
+        rows = {"draft": [], "edit": []}
+        for op in ([writes[-1]] if writes else []) + [op for op in seq if op[0] == "edit"]:
+            t = op[4] if len(op) > 4 else 0.0
+            if not _inw(t):
+                continue
+            added, removed = (len(op[2].split()), 0) if op[0] == "write" else edit_delta(op[1], op[2])[:2]
+            cls = "draft" if op[0] == "write" or _created or removed == 0 else "edit"
+            rows[cls].append((t, added))
+        for cls, amount in (("draft", _gd), ("edit", _ge)):
+            total = sum(w for t, w in rows[cls])
+            work_sources["gross_" + cls].extend((t, amount * w / total, _k) for t, w in rows[cls] if total)
 
     # 쓰기 종류 분해 (§59): 코드/문서/데이터는 사람 절차가 다르다
     draft_kind = {"code": 0, "doc": 0, "data": 0, "other": 0}
@@ -1597,7 +1681,10 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
            "exec_out_words": ex_out,
            "exec_out_deep_words": ex_deep,
            "exec_out_skim_words": ex_skim,
-           "exec_wait_min": round(ex_wait / 60, 3),
+           "exec_wait_min": round((ex_wait + sum(w for t, w in poll_waits if _inw(t))) / 60, 3),
+           "poll_waits": poll_waits, "bg_exec_jobs": bg_exec.result(),
+           "work_sources": work_sources, "exec_events": exec_events,
+           "answer_t": tool_report_t if _rep_w > _last_ans_w else answer_t[-1] if answer_t else 0.0,
            "subagent_files": len(subagent_paths),
            "image_blocks": image_blocks_in,
            "sub_report_words": sub_report_w_in,
