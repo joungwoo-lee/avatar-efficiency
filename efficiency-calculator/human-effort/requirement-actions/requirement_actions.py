@@ -805,20 +805,11 @@ def _ts(x):
         return None
 
 
-# 분자에 넣는 서브에이전트 기록 위치. §95: 워크플로 서브에이전트
-# (subagents/workflows/wf_*/)는 세지 않는다(사용자 결정 — §92 철회).
-SUBAGENT_GLOBS = ("*.jsonl",)
-
-
 def find_subagent_files(jsonl_path):
-    """세션의 서브에이전트 트랜스크립트 목록 ({세션}/subagents/*.jsonl).
-    §95: 워크플로 서브에이전트(subagents/workflows/wf_*/)와 그 밖의 하위 폴더는
-    읽지 않는다."""
+    """세션의 서브에이전트 트랜스크립트 목록 ({세션}/subagents/*.jsonl)."""
     d = Path(str(jsonl_path))
     sub = d.with_suffix("") / "subagents"
-    if not sub.is_dir():
-        return []
-    return sorted(str(p) for pat in SUBAGENT_GLOBS for p in sub.glob(pat))
+    return sorted(str(p) for p in sub.glob("*.jsonl")) if sub.is_dir() else []
 
 
 def _iter_session_records(jsonl_path, subagent_paths=()):

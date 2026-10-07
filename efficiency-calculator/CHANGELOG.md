@@ -2058,7 +2058,8 @@ OFF/OFF 112,522 → 93,771분, OFF/ON 1.41 → 1.41. 역전 0.**
 
 - 결정: 워크플로 서브에이전트(`subagents/workflows/wf_*/`)가 한 일은 사람 일로 세지 않는다. 그 일이 제작인지
   시험 대상인지(45e1d583 에이전트 580개) 확인할 기준이 없다.
-- 수정: `find_subagent_files`·`measure_agent_actual`의 서브 기록 목록을 `subagents/*.jsonl` 하나로(§92 이전과 같다).
+- 수정: `find_subagent_files`(requirement_actions.py)·`measure_agent_actual`(session_api.py)을 §92 이전 원본
+  그대로 되돌림 — 서브 기록 목록은 `subagents/*.jsonl` 하나. session_api.py는 §92 이전과 차이 없음.
 - 효과(108세션, rw ON·act ON, §94 대비): 휴먼 89,047 → 83,426분(−5,621), 에이전트 13,394분 불변, 전체 효율
   6.65 → 6.23배, 효율 평균 6.61 → 6.03. 바뀐 세션 2개 — 45e1d583 61.40 → 4.32배, 82e3728d 21.42 → 16.27배.
   45e1d583 발표 자료(docs)의 61.4배는 §92 기준 수치다.
