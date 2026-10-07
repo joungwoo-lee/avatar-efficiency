@@ -31,7 +31,8 @@ if str(_AGENT_DIR) not in sys.path:
 from agent_effort import load_rates  # noqa: E402 (human 카드 공용)
 from transcript_actual import json_text_words as _json_text_words  # noqa: E402
 from transcript_actual import (_AI_GAP_CAP_SEC, _BOUNDED_TOOLS,  # noqa: E402
-                               _HUMAN_WAIT_TOOLS, BackgroundExecTracker)
+                               _HUMAN_WAIT_TOOLS, BackgroundExecTracker,
+                               WaitEvidence)
 
 
 def execution_wait_seconds(seconds, name=None, is_error=False, full=None):
@@ -804,12 +805,20 @@ def _ts(x):
         return None
 
 
+# §94 서브에이전트 기록이 있다고 확인된 위치 (이 PC: 723개 / 1,267개, 그 외 0)
+SUBAGENT_GLOBS = ("*.jsonl", "workflows/wf_*/*.jsonl")
+
+
 def find_subagent_files(jsonl_path):
-    """세션의 서브에이전트 트랜스크립트 목록 ({세션}/subagents/**/*.jsonl).
-    §92: 워크플로 서브에이전트(subagents/workflows/wf_*/)도 포함 — 하위 폴더까지."""
+    """세션의 서브에이전트 트랜스크립트 목록.
+    §92: 워크플로 서브에이전트(subagents/workflows/wf_*/)도 포함.
+    §94: 확인된 두 위치만 읽는다 — subagents/*.jsonl, subagents/workflows/wf_*/*.jsonl.
+    모르는 하위 폴더는 종전대로 안 읽는다."""
     d = Path(str(jsonl_path))
     sub = d.with_suffix("") / "subagents"
-    return sorted(str(p) for p in sub.rglob("*.jsonl")) if sub.is_dir() else []
+    if not sub.is_dir():
+        return []
+    return sorted(str(p) for pat in SUBAGENT_GLOBS for p in sub.glob(pat))
 
 
 def _iter_session_records(jsonl_path, subagent_paths=()):
@@ -915,6 +924,8 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
     pending_tool_wait = {}   # §91 그 외 대기 도구(MCP 등) 호출 id → (도구명, 호출 시각)
     poll_waits = []          # §89 (호출 시각, 대기 초) — 분모와 같은 10분 상한
     bg_exec = BackgroundExecTracker()   # §89 배경 실행 판정 — 분모와 같은 판정기
+    evidence = WaitEvidence()           # §94 긴 대기 증거 — 분모와 같은 판정기
+    long_waits = []                     # §94 (poll_waits 위치, 시작, 끝) — 끝에서 판정
     pending_exec = {}        # tool_use id → (신원, 명령 단어수, 시작 시각)
     previous_record = {}
     pending_search = set()   # 검색 도구 호출 id (§73: 결과 판독 계상용)
@@ -1008,6 +1019,7 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
             inw = _inw(rec_tw)
             if not is_sub and not rec.get("isSidechain"):
                 bg_exec.feed(rec, _ts(rec.get("timestamp")))
+                evidence.feed(rec, _ts(rec.get("timestamp")))   # §94
             if rec.get("isMeta") or rec.get("isCompactSummary") \
                     or rec.get("isVisibleInTranscriptOnly") \
                     or (rec.get("isSidechain") and not is_sub):
@@ -1083,8 +1095,14 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                         if _tw_pend:
                             # §91 포그라운드 도구 대기 — 분모와 같은 간격·같은 상한
                             # (정상 결과 상한 없음, 오류 10분). 구성·판독은 기존대로.
-                            poll_waits.append((_tw_pend[1], execution_wait_seconds(
-                                result_gap, _tw_pend[0], b.get("is_error"))))
+                            # §94 10분 넘는 부분은 증거만큼 — 10분만 넣고 끝에서 판정
+                            _wsec = execution_wait_seconds(
+                                result_gap, _tw_pend[0], b.get("is_error"))
+                            if _wsec > _AI_GAP_CAP_SEC and rec_t is not None:
+                                long_waits.append((len(poll_waits),
+                                                   rec_t - result_gap, rec_t))
+                                _wsec = _AI_GAP_CAP_SEC
+                            poll_waits.append((_tw_pend[1], _wsec))
                         if b.get("tool_use_id") in pending_poll:
                             poll_waits.append((pending_poll.pop(b["tool_use_id"]),
                                                execution_wait_seconds(
@@ -1630,6 +1648,10 @@ def collect_record_stats(jsonl_path, detail=False, subagent_paths=None,
                    if answers and _inw(answer_t[-1]) else 0)
     _last_ans_w_all = len(answers[-1].split()) if answers else 0
     _rep_w = tool_report_w if _inw(tool_report_t) else 0
+    # §94 10분 넘는 포그라운드 도구 대기: 분모와 같은 증거만큼만 (10분은 넣었다)
+    evidence.finish(bg_exec.result())
+    for _i, _a, _b in long_waits:
+        poll_waits[_i] = (poll_waits[_i][0], evidence.credit_for("R3", _a, _b))
     out = {"reviewed_words": reviewed_in, "input_words": input_w_in,
            "artifact_words": sum(artifact.values()),
            # 보고 실측 — 보고형 세션의 쓰기 상한 닻 재료. 채널 2개 중 큰 쪽:

@@ -839,6 +839,10 @@ class TestWorkflowSubagentFiles(unittest.TestCase):
             (wf.parent.parent / "agent-a.jsonl").write_text("", encoding="utf-8")
             (wf / "agent-b.jsonl").write_text("", encoding="utf-8")
             (wf / "agent-b.meta.json").write_text("{}", encoding="utf-8")
+            # §94: 확인된 두 위치만 — 모르는 하위 폴더는 종전대로 안 읽는다
+            odd = Path(directory) / "s" / "subagents" / "other"
+            odd.mkdir()
+            (odd / "agent-c.jsonl").write_text("", encoding="utf-8")
             names = [Path(p).name for p in find_subagent_files(main)]
             self.assertEqual(sorted(names), ["agent-a.jsonl", "agent-b.jsonl"])
 
@@ -939,7 +943,8 @@ class TestBackgroundExecutionWait(unittest.TestCase):
                 if name == "Workflow":
                     self.assertEqual(ex, [])
                 else:
-                    self.assertAlmostEqual(ex[0]["minutes"], 120, delta=.05)
+                    # §94: 실제로 돌았다는 증거가 없으면 10분 넘는 부분은 안 센다(양쪽 같음)
+                    self.assertAlmostEqual(ex[0]["minutes"], 10, delta=.05)
                     self.assertAlmostEqual(ex[0]["minutes"], wait, delta=.01)
 
     def test_monitor_and_text_block_notifications(self):
@@ -1013,19 +1018,30 @@ class TestBackgroundExecutionWait(unittest.TestCase):
         def row(t, role, content, **extra):
             return dict(type=role, timestamp=datetime.fromtimestamp(base + t, timezone.utc).isoformat(),
                         message={"role": role, "content": content}, **extra)
-        for name, err, expect in (("mcp__runner__run", False, 60), ("mcp__runner__run", True, 10),
-                                  ("Workflow", False, 0), ("Agent", False, 0)):
-            rows = [row(0, "user", "go"),
+        # §94: 10분 넘는 부분은 턴 시간 기록(turn_duration)이 덮을 때만 — 양쪽 같은 판정기
+        turn = dict(type="system", subtype="turn_duration", durationMs=3602000,
+                    timestamp=datetime.fromtimestamp(base + 3602, timezone.utc).isoformat())
+        # 턴 시간은 승인 창 대기도 담는다 — 승인 창이 안 뜨는 모드(bypassPermissions)가 확인될 때만
+        for name, err, evid, mode, expect in (("mcp__runner__run", False, True, "bypassPermissions", 60),
+                                              ("mcp__runner__run", False, True, "default", 10),
+                                              ("mcp__runner__run", False, True, None, 10),
+                                              ("mcp__runner__run", False, False, "bypassPermissions", 10),
+                                              ("mcp__runner__run", True, True, "bypassPermissions", 10),
+                                              ("Workflow", False, True, "bypassPermissions", 0),
+                                              ("Agent", False, True, "bypassPermissions", 0)):
+            rows = [row(0, "user", "go", **({"permissionMode": mode} if mode else {})),
                     row(1, "assistant", [{"type": "tool_use", "id": "x", "name": name, "input": {"command": "make"}}]),
                     row(3601, "user", [{"type": "tool_result", "tool_use_id": "x", "content": "ok", "is_error": err}]),
-                    row(3602, "assistant", "done")]
+                    row(3602, "assistant", "done")] + ([turn] if evid else [])
             with tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "session.jsonl"
                 path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
                 r = api.measure(path, force=True, subagent_paths=[], include_think=False)
             ex = next((x for x in r["human"]["breakdown"] if x["primitive"] == "execute"), None)
             wait = (ex.get("detail", {}).get("wait_min", ex["minutes"]) if ex else 0.0)
-            self.assertAlmostEqual(wait, expect, delta=.05, msg=name)
+            self.assertAlmostEqual(wait, expect, delta=.05, msg=(name, evid, mode))
+            if name.startswith("mcp"):   # AI 쪽도 같은 대기
+                self.assertAlmostEqual(r["agent"]["machine_min"], expect, delta=.1, msg=(name, evid, mode))
 
     def test_background_subagent_adds_no_human_wait(self):
         # 서브에이전트: 분모는 메인 대기(병렬), 분자는 그 일을 사람이 차례로 — 대기 없음
@@ -1039,7 +1055,8 @@ class TestBackgroundExecutionWait(unittest.TestCase):
         rows = [row(0, "user", "go"),
                 row(1, "assistant", [{"type": "tool_use", "id": "x", "name": "Agent",
                                       "input": {"prompt": "p", "run_in_background": True}}]),
-                row(2, "user", [{"type": "tool_result", "tool_use_id": "x", "content": "Async agent launched"}]),
+                row(2, "user", [{"type": "tool_result", "tool_use_id": "x", "content": "Async agent launched"}],
+                    toolUseResult={"agentId": "t1", "isAsync": True}),   # §94 실행 구간 증거
                 row(3600, "user", "<task-notification><task-id>t1</task-id><status>completed</status></task-notification>"),
                 row(3601, "assistant", "ok")]
         with tempfile.TemporaryDirectory() as directory:

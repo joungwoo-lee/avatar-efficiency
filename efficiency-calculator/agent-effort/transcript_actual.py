@@ -14,6 +14,8 @@
   대기·감시(Monitor) 이벤트 대기(§88)·제한 없는 도구의 정상 결과는 끝까지
   센다 (DESIGN-ai-time-87.md). 단 이미 종료 알림을 받은 작업의 종료 알림이
   다시 오면(세션 재개 때 재전달) 그 앞 공백은 대기가 아니다(§93).
+  §94: 이 "끝까지"는 10분까지는 그대로, 10분을 넘는 부분은 실제로 돌았다는
+  별도 기록(WaitEvidence 증거)과 겹치는 만큼만 센다 (DESIGN-wait-evidence-94.md).
   AI가 끝낸 뒤 다음 입력까지는 사람 시간이라 제외. 병렬 실행(서브에이전트)은
   메인 타임라인에 이미 흐른 시간이므로 별도 가산하지 않는다.
 
@@ -263,6 +265,208 @@ class BackgroundExecTracker:
         return [j for j in self.jobs if j["start"] < j["end"]]
 
 
+class WaitEvidence:
+    """배경 작업 장부 겸 긴 대기 증거 판정기(§94) — 분모(parse_actions)·분자
+    (collect_record_stats) 공용. 배경 작업(서브에이전트·워크플로)의 시작·재개·
+    종료·재도착, 메인 도구 호출의 대기 상태를 여기 한 곳에서만 추적한다.
+
+    규칙 하나: 모든 간격은 10분까지 센다. 10분을 넘는 부분은 "AI가 시킨 일이
+    실제로 돌고 있었다"는 별도 기록(증거)과 겹친 만큼만 센다 — 모르는 경우가
+    생겨도 간격 하나에서 새는 시간은 최대 10분이다.
+
+    증거(메인 기록만). 증거 시각은 그 일이 끝난 순간에 붙인다 — 배달·재도착
+    시각에 붙이면 쉬던 시간대를 덮는다.
+      E1 system/turn_duration                     [t − durationMs, t]
+      E2 그 실행의 첫 정상 완료 신호의 <duration_ms> [t − duration, t]
+      E3 Agent 결과 toolUseResult.totalDurationMs  [t − duration, t]
+      E4 BackgroundExecTracker 정상 완료·감시 이벤트 구간 — finish()에 넘긴다
+      E5 배경 서브에이전트 [띄운·재개 시각, 첫 정상 완료 신호] — E2가 없을 때만
+    간격 종류별로 쓰는 증거(covered_for): 답 생성(R2)은 E1~E5, 도구 대기(R3)는
+    E2~E5 + 승인 창이 안 뜨는 권한 모드가 확인될 때만 E1(턴 시간은 승인 창에서
+    사람을 기다린 시간도 담는다), 배경 대기(R4)는 E2~E5.
+    턴 시간 기록은 턴이 끝난 뒤에 나오므로 파일을 다 읽은 뒤 finish()로 판정한다.
+    """
+    _NO_PROMPT_MODES = frozenset(("bypassPermissions", "dontAsk"))
+
+    def __init__(self):
+        self.turn_wins = []     # E1
+        self.work_wins = []     # E2·E3·E5 (+E4는 finish)
+        self.modes = []         # (시각, 권한 모드)
+        self.agent_start = {}   # agentId → 이번 실행 시작 시각 (E5)
+        self.agent_alias = {}   # Agent 입력 name → agentId (SendMessage가 이름으로 부를 때)
+        self._name_use = {}     # Agent tool_use id → name
+        self._ended = set()     # 이번 실행의 종료 신호를 이미 본 task-id (증거 시각 고정)
+        self._delivered = {}    # task-id → 이번 실행에서 AI에게 배달된 첫 종료 알림 본문
+        self._open = set()      # 결과를 기다리는 메인 도구 호출
+        self._ai_final = False  # 직전 메인 기록이 도구 호출 없는 AI 답인가
+        self._work = []
+        self._all = []
+
+    def feed(self, rec, t):
+        """기록 하나를 반영한다. 반환: 이 기록이 이미 끝난 실행의 종료 알림
+        재도착(같은 task-id·같은 본문, 그 사이 재개 없음)으로 확인되면 True."""
+        if rec.get("isSidechain"):
+            return False
+        pm = rec.get("permissionMode")
+        if isinstance(pm, str) and t:
+            self.modes.append((t, pm))
+        rtype = rec.get("type")
+        if rtype == "system":
+            d = rec.get("durationMs")
+            if (t and rec.get("subtype") == "turn_duration"
+                    and isinstance(d, (int, float)) and d > 0):
+                self.turn_wins.append((t - d / 1000.0, t))       # E1
+            return False
+        if rtype == "queue-operation":
+            c = rec.get("content")
+            if isinstance(c, str) and "<task-notification" in c:
+                self._notice(c, t)
+            return False
+        if rtype not in ("user", "assistant"):
+            return False
+        # 메인 흐름 기록 = parse_actions가 지시·AI 답·도구 결과로 보는 기록
+        main = not (rec.get("isMeta") or rec.get("isCompactSummary")
+                    or rec.get("isVisibleInTranscriptOnly"))
+        blocks = [b for b in _content_blocks(rec.get("message"))
+                  if isinstance(b, dict)]
+        if rtype == "assistant":
+            if main:
+                self._ai_final = True
+            for b in blocks:
+                if b.get("type") != "tool_use":
+                    continue
+                inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+                if main:
+                    self._ai_final = False
+                    if b.get("id"):
+                        self._open.add(b["id"])
+                if (b.get("name") in ("Agent", "Task") and b.get("id")
+                        and isinstance(inp.get("name"), str)):
+                    self._name_use[b["id"]] = inp["name"]
+                for k in ("to", "resume"):                       # 재개
+                    v = inp.get(k)
+                    if isinstance(v, str):
+                        aid = self.agent_alias.get(v, v)
+                        if t:
+                            self.agent_start[aid] = t
+                        self._ended.discard(aid)
+                        self._delivered.pop(aid, None)
+            return False
+        has_result = any(b.get("type") == "tool_result" for b in blocks)
+        for b in blocks:
+            if b.get("type") == "tool_result":
+                if main:
+                    self._open.discard(b.get("tool_use_id"))
+                tr = rec.get("toolUseResult")
+                tr = tr if isinstance(tr, dict) else {}
+                nm = self._name_use.pop(b.get("tool_use_id"), None)
+                aid = tr.get("agentId")
+                if aid and nm:
+                    self.agent_alias[nm] = aid
+                if aid and tr.get("isAsync") and t:              # 배경 띄움 (E5)
+                    self.agent_start[aid] = t
+                d = tr.get("totalDurationMs")
+                if (t and isinstance(d, (int, float)) and d > 0
+                        and not b.get("is_error")):
+                    self.work_wins.append((t - d / 1000.0, t))   # E3
+            elif b.get("type") == "text":
+                text = b.get("text", "")
+                if text.lstrip().startswith("<task-notification"):
+                    self._notice(text, t)
+        if not main:
+            return False
+        self._ai_final = False
+        texts = [b.get("text", "") for b in blocks if b.get("type") == "text"]
+        if any(x.strip() and not x.lstrip().startswith(_SYSTEM_TEXT_PREFIXES)
+               for x in texts):
+            self._open.clear()          # 새 사람 발화 = 앞 호출은 끝난 것
+        joined = " ".join(texts)
+        if has_result or not joined.lstrip().startswith("<task-notification"):
+            return False
+        m = re.search(r"<task-id>([^<]+)</task-id>", joined)
+        st = re.search(r"<status>([^<]+)</status>", joined)
+        if not m or not st or st.group(1).strip() in ("running", "pending"):
+            return False
+        tid, body = m.group(1).strip(), " ".join(joined.split())
+        if self._delivered.get(tid) == body:
+            return True
+        self._delivered.setdefault(tid, body)
+        return False
+
+    def _notice(self, text, t):
+        st = re.search(r"<status>([^<]+)</status>", text)
+        if not t or not st or st.group(1).strip() in ("running", "pending"):
+            return
+        m = re.search(r"<task-id>([^<]+)</task-id>", text)
+        tid = m.group(1).strip() if m else None
+        start = self.agent_start.pop(tid, None) if tid else None
+        if tid:
+            if tid in self._ended:       # 그 실행의 두 번째 이후 신호 — 증거 아님
+                return
+            self._ended.add(tid)
+        if st.group(1).strip() != "completed":   # 정상 완료만 증거
+            return
+        d = re.search(r"<duration_ms>(\d+)</duration_ms>", text)
+        if d:
+            self.work_wins.append((t - int(d.group(1)) / 1000.0, t))  # E2
+        elif start is not None and start < t:
+            self.work_wins.append((start, t))                      # E5
+
+    def idle(self):
+        """AI가 답을 끝냈고 결과 기다리는 도구·돌고 있는 배경 서브에이전트가
+        없는가 (§94 R1 "쉬던 중" 확인 — 배경 실행 판정기 쪽은 호출자가 본다)."""
+        return self._ai_final and not self._open and not self.agent_start
+
+    @staticmethod
+    def _merge(wins):
+        merged = []
+        for s, e in sorted(wins):
+            if merged and s <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], e)
+            else:
+                merged.append([s, e])
+        return merged
+
+    def finish(self, bg_jobs=()):
+        """E4(배경 실행 판정기의 정상 완료·감시 이벤트 구간)를 더하고 합집합."""
+        work = self.work_wins + [(j["start"], j["end"]) for j in bg_jobs
+                                 if j.get("full")]
+        self._work = self._merge(work)
+        self._all = self._merge(work + self.turn_wins)
+        return self
+
+    def no_prompt(self, a, b):
+        """[a, b] 내내 승인 창이 안 뜨는 권한 모드였다고 기록으로 확인되는가."""
+        before = [m for t, m in self.modes if t <= a]
+        if not before or before[-1] not in self._NO_PROMPT_MODES:
+            return False
+        return all(m in self._NO_PROMPT_MODES for t, m in self.modes if a < t <= b)
+
+    def covered_for(self, kind, a, b):
+        """[a, b] 중 그 간격 종류(R2·R3·R4)에 맞는 증거와 겹친 초."""
+        turn = kind == "R2" or (kind == "R3" and self.no_prompt(a, b))
+        return sum(max(0.0, min(b, e) - max(a, s))
+                   for s, e in (self._all if turn else self._work)
+                   if s < b and e > a)
+
+    def credit_for(self, kind, a, b, cap=_AI_GAP_CAP_SEC):
+        """센 시간(초) = max(min(간격, cap), 증거와 겹친 길이)."""
+        return max(min(max(0.0, b - a), cap), self.covered_for(kind, a, b))
+
+
+def _resume_artifact(rec):
+    """세션을 이어 붙일 때 Claude Code가 만드는 가짜 답("No response requested.")인가.
+    §87 R2는 <synthetic> 답 앞 공백을 뺐다. §94: 빼는 건 이 문구로 확인된 것만 —
+    API 오류 답(isApiErrorMessage: 529 과부하·응답 도중 끊김 등)도 <synthetic>이지만
+    그 호출을 기다리고 일부 생성한 시간이 있다(§87 R2 취지: 과부하 재시도 대기도
+    AI 시간). 이 PC: <synthetic> 54건 중 이 문구 10건, 나머지 44건은 API 오류."""
+    msg = rec.get("message") or {}
+    return msg.get("model") == "<synthetic>" and " ".join(
+        b.get("text", "") for b in _content_blocks(msg)
+        if isinstance(b, dict) and b.get("type") == "text"
+    ).strip() == "No response requested."
+
+
 def _epoch(x):
     """ISO 타임스탬프 -> epoch 초 (없거나 깨지면 None)."""
     if not x:
@@ -352,6 +556,10 @@ def parse_actions(jsonl_path, count_window=None):
               # (감사용). 세션을 며칠 뒤 다시 열면 같은 task-id 완료 알림이
               # 또 온다: 그 앞 공백은 방치다.
               "bg_dup_events": 0, "bg_dup_skip_min": 0.0,
+              # §94 10분 넘는 상한 없는 간격(R2·R3·R4) — 증거와 겹친 만큼만 셌다.
+              # long_gaps: [{kind, start, end, gap_min, evidence_min, counted_min}],
+              # unproven_cut_min: 증거가 없어 잘린 시간 합 (감사용)
+              "long_gaps": [], "unproven_cut_min": 0.0,
               # §89 배경 실행(Bash·PowerShell) 목록 — BackgroundExecTracker,
               # 분자도 같은 판정기를 쓴다 (감사·대칭 확인용, 분모 계산엔 안 씀)
               "bg_exec_jobs": [],
@@ -404,13 +612,20 @@ def parse_actions(jsonl_path, count_window=None):
         seg_files.clear()
     seen_uuid = set()    # §87 R0 재기록 중복 레코드 판별
     tool_names = {}      # §87 R3 tool_use id → 도구 이름
-    # §93 종료 알림(<status> 있음, running·pending 아님)을 이미 받은 task-id.
-    # SendMessage(to)·Agent(resume)로 다시 돌리면 빠진다 — 실측상 같은 서브에이전트가
-    # 2~3번 완료되는 정상 사례는 전부 그 사이에 SendMessage가 있었다.
-    bg_done = set()
-    agent_names = {}     # §93 Agent 입력 name → agentId (SendMessage가 이름으로 부를 때)
-    agent_name_use = {}  # §93 Agent tool_use id → name
     bg_exec = BackgroundExecTracker()
+    evidence = WaitEvidence()   # §94 배경 작업 장부 겸 긴 대기 증거
+    long_gaps = []              # §94 (종류, 시작, 끝) — 10분 넘는 간격, 끝에서 판정
+
+    def _gap(kind, a, b, eligible):
+        """§94 간격 하나를 센다 — 규칙은 하나: 10분까지는 바로 센다. 넘는 부분은
+        eligible(상한 없이 셀 수 있는 종류)일 때만 보관해 끝에서 증거만큼 더한다.
+        반환 (간격 초, 바로 센 초)."""
+        gap = max(0.0, b - a)
+        add = min(gap, _AI_GAP_CAP_SEC)
+        counts["ai_wall_min"] += add / 60
+        if eligible and gap > _AI_GAP_CAP_SEC:
+            long_gaps.append((kind, a, b))
+        return gap, add
     with open(jsonl_path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -433,8 +648,11 @@ def parse_actions(jsonl_path, count_window=None):
             rec_t = _epoch(rec.get("timestamp"))
             tw = rec_t if rec_t else last_tw   # §80 귀속 시각(물려받기)
             last_tw = tw
+            redelivered = False
             if not rec.get("isSidechain"):
                 bg_exec.feed(rec, rec_t)       # §89 공용 배경 실행 판정
+                # §94 장부: 이 기록이 이미 끝난 실행의 종료 알림 재도착인가
+                redelivered = evidence.feed(rec, rec_t)
             inw = _inw(tw)
             ts = rec.get("timestamp")
             if ts:
@@ -444,12 +662,21 @@ def parse_actions(jsonl_path, count_window=None):
             # §87 R1: AI를 깨운 입력(isMeta: 예약 타이머·다른 세션 메시지 등 /
             # isCompactSummary: 압축 요약)은 지시로는 안 세지만 AI 시간의
             # 경계다 — 그 앞 공백은 AI가 쉬던 시간(방치)이므로 시계만 옮긴다.
+            # §94: "쉬던 중"이 확인될 때만 — AI가 답을 끝냈고(직전 메인 기록이
+            # 도구 호출 없는 답) 결과 기다리는 도구·돌고 있는 배경 실행·배경
+            # 서브에이전트가 없을 때. isMeta에는 스킬 본문·그림 첨부·이어가기
+            # 안내도 섞여 있다(이 PC: 그림 46건 중 11건은 도구가 돌던 중).
+            # 확인 안 되면 종전대로 경계로 안 쓴다(간격은 10분 + 증거만큼).
+            # 압축 요약은 경계가 아니다 — 요약이 있다는 것 자체가 그 앞에서 AI가
+            # 압축하던 증거다(외부 보고: 자동 압축 14지점 0.4~6.5분이 빠졌다).
+            # 쉬던 시간은 압축을 시킨 입력(사람 발화·/compact)이 이미 끊는다.
             if (rtype == "user" and rec_t and turn_prev
                     and not rec.get("isSidechain")
-                    and (rec.get("isMeta") or rec.get("isCompactSummary"))
+                    and rec.get("isMeta") and not rec.get("isCompactSummary")
                     and not any(isinstance(x, dict)
                                 and x.get("type") == "tool_result"
-                                for x in _content_blocks(rec.get("message")))):
+                                for x in _content_blocks(rec.get("message")))
+                    and evidence.idle() and not bg_exec.running):
                 turn_prev = max(turn_prev, rec_t)
             if (rtype not in ("user", "assistant") or rec.get("isMeta")
                     or rec.get("isSidechain")          # 병렬 — 시간 가산 금지
@@ -460,15 +687,12 @@ def parse_actions(jsonl_path, count_window=None):
 
             if rtype == "assistant":
                 if turn_start is not None and rec_t and turn_prev:
-                    # §87 R2: 답 생성 간격은 상한 없음 — 느린 응답·서버 과부하
-                    # 재시도 대기도 끝까지 AI 시간. 방치는 R0·R1이 뺀다.
-                    # <synthetic>(세션 이어 붙일 때 자동 생성)은 AI 답이 아님.
-                    # 시계는 뒤로 안 간다(역행 레코드는 간격 0).
-                    synthetic = ((rec.get("message") or {}).get("model")
-                                 == "<synthetic>")
-                    if inw and not synthetic and rec_t > turn_prev:
+                    # §87 R2: 답 생성 간격 — 느린 응답·서버 과부하 재시도 대기도
+                    # AI 시간(§94: 10분 넘는 부분은 증거만큼). 세션 이어 붙이기용
+                    # 가짜 답은 빼고(_resume_artifact), 시계는 뒤로 안 간다.
+                    if inw and not _resume_artifact(rec) and rec_t > turn_prev:
                         # §80 시간 조각은 끝나는 레코드 시각에 귀속
-                        counts["ai_wall_min"] += (rec_t - turn_prev) / 60
+                        _gap("R2", turn_prev, rec_t, True)
                     turn_prev = max(turn_prev, rec_t)
                 ans_w = 0
                 for b in blocks:
@@ -483,16 +707,6 @@ def parse_actions(jsonl_path, count_window=None):
                             tool_names[b["id"]] = b.get("name")
                         seq += 1
                         inp = b.get("input") or {}
-                        if isinstance(inp, dict):
-                            # §93 끝난 작업을 다시 돌림 → 다음 종료 알림은 대기
-                            for k in ("to", "resume"):
-                                v = inp.get(k)
-                                if isinstance(v, str):
-                                    bg_done.discard(v)
-                                    bg_done.discard(agent_names.get(v))
-                            if (b.get("name") in ("Agent", "Task") and b.get("id")
-                                    and isinstance(inp.get("name"), str)):
-                                agent_name_use[b["id"]] = inp["name"]
                         if b.get("name") == "StructuredOutput":
                             # 구조화 보고 채널 (§34): 최종 산출물이 답변 텍스트
                             # 대신 이 도구 입력(JSON)으로 나간다 — AI가 써낸
@@ -559,34 +773,26 @@ def parse_actions(jsonl_path, count_window=None):
                 # §93: 이미 종료 알림을 받은 task-id의 종료 알림이 또 오면(세션을
                 # 며칠 뒤 다시 열 때 재전달) 기다릴 작업이 없었다 — 대기 0, 경계만.
                 # 사이에 SendMessage·resume으로 다시 돌렸으면 정상 대기.
+                # §94: 재도착은 본문이 첫 알림과 같을 때만 확인된 것으로 본다. 다르면
+                # 모르는 경우 — 보통 대기로 세고 10분 넘는 부분은 증거만큼.
                 bg_text = " ".join(
                     b.get("text", "") for b in blocks
                     if isinstance(b, dict) and b.get("type") == "text")
                 is_bg_notif = bg_text.lstrip().startswith("<task-notification")
-                m_tid = re.search(r"<task-id>([^<]+)</task-id>", bg_text)
-                m_st = re.search(r"<status>([^<]+)</status>", bg_text)
-                bg_tid = m_tid.group(1).strip() if (is_bg_notif and m_tid) else None
-                bg_end = bool(m_st) and m_st.group(1).strip() not in (
-                    "running", "pending")
-                bg_dup = bool(bg_tid) and bg_end and bg_tid in bg_done
                 if (is_bg_notif and turn_start is not None and rec_t
                         and turn_prev):
-                    gap = max(0.0, rec_t - turn_prev)
                     full = ("<status>completed</status>" in bg_text
                             or ("<status>" not in bg_text     # §88
                                 and "<event>" in bg_text))
-                    if inw and bg_dup:
+                    if inw and redelivered:       # §93 확인된 재도착 → 0
                         counts["bg_dup_events"] += 1
-                        counts["bg_dup_skip_min"] += gap / 60
+                        counts["bg_dup_skip_min"] += max(0.0, rec_t - turn_prev) / 60
                     elif inw:
-                        add = (gap if full else min(gap, _AI_GAP_CAP_SEC)) / 60
-                        counts["ai_wall_min"] += add
-                        counts["bg_wait_min"] += add
+                        gap, add = _gap("R4", turn_prev, rec_t, full)
+                        counts["bg_wait_min"] += add / 60
                         counts["bg_wait_events"] += 1
-                        counts["bg_wait_cut_min"] += gap / 60 - add
+                        counts["bg_wait_cut_min"] += (gap - add) / 60
                     turn_prev = max(turn_prev, rec_t)
-                if bg_tid and bg_end:
-                    bg_done.add(bg_tid)
                 if turn_start is not None and turn_prev is not None \
                         and turn_prev > turn_start:
                     if _inw(turn_start):
@@ -615,13 +821,8 @@ def parse_actions(jsonl_path, count_window=None):
                             full = (not b.get("is_error") and name
                                     and name not in _BOUNDED_TOOLS
                                     and name not in _HUMAN_WAIT_TOOLS)
-                            counts["ai_wall_min"] += (
-                                gap if full else min(gap, _AI_GAP_CAP_SEC)) / 60
+                            _gap("R3", turn_prev, rec_t, full)
                         turn_prev = max(turn_prev, rec_t)
-                    nm = agent_name_use.pop(b.get("tool_use_id"), None)
-                    tur = rec.get("toolUseResult")
-                    if nm and isinstance(tur, dict) and tur.get("agentId"):
-                        agent_names[nm] = tur["agentId"]        # §93
                     if inw:
                         counts["tool_result_words"] += _result_words(b)
                     seq += 1
@@ -707,6 +908,21 @@ def parse_actions(jsonl_path, count_window=None):
     if f0 and f1 and f1 >= f0:
         counts["session_span_min"] = (f1 - f0) / 60      # §64
     counts["bg_exec_jobs"] = bg_exec.result()
+    # §94 10분 넘는 간격: 증거와 겹친 만큼만 더 센다 (이미 10분은 넣었다)
+    evidence.finish(counts["bg_exec_jobs"])
+    for kind, a, b in long_gaps:
+        cov = evidence.covered_for(kind, a, b)
+        extra = max(0.0, cov - _AI_GAP_CAP_SEC)
+        counts["ai_wall_min"] += extra / 60
+        if kind == "R4":
+            counts["bg_wait_min"] += extra / 60
+            counts["bg_wait_cut_min"] -= extra / 60
+        counts["unproven_cut_min"] += (b - a - _AI_GAP_CAP_SEC - extra) / 60
+        counts["long_gaps"].append({
+            "kind": kind, "start": a, "end": b,
+            "gap_min": round((b - a) / 60, 2),
+            "evidence_min": round(cov / 60, 2),
+            "counted_min": round((_AI_GAP_CAP_SEC + extra) / 60, 2)})
     return counts
 
 

@@ -132,11 +132,19 @@ agent_min = agent_human_min(사람 협업자의 에포트, hitl)
    AI 기록 → 알림)을 포그라운드 도구 대기와 같은 10분 상한으로 `ai_wall_min`에
    넣는다. 감사용 `bg_wait_min`·`bg_wait_events`·`bg_wait_cut_min`.
    **§87·§88**: 완료(completed) 알림·감시(Monitor) 이벤트 알림은 상한 없음. 답 생성·제한 없는 도구의 정상 결과도
-   상한 없음 — 방치는 재기록 중복 레코드 무시·AI를 깨운 입력(isMeta·압축 요약)
+   상한 없음 — 방치는 재기록 중복 레코드 무시·AI를 깨운 입력(isMeta·압축 요약 — §94부터 isMeta만, 쉬던 중이 확인될 때)
    경계로 뺀다. 상세 `DESIGN-ai-time-87.md`.
    **§93**: 이미 종료 알림을 받은 task-id의 종료 알림이 다시 오면(세션 재개 때 재전달)
    대기 0 — 경계로만 쓴다. 그 사이 `SendMessage`·`resume`으로 다시 돌렸으면 정상 대기.
    감사용 `bg_dup_events`·`bg_dup_skip_min`.
+   **§94 안전장치**: 위 "상한 없음" 간격도 10분을 넘는 부분은 실제로 돌았다는 별도
+   기록과 겹친 만큼만 센다(`WaitEvidence` — 턴 시간 기록·`duration_ms`·`totalDurationMs`·
+   배경 실행 구간). 증거가 없으면 10분 — 모르는 경우가 생겨도 간격당 10분까지만 샌다.
+   분자 §91 포그라운드 도구 대기도 같은 판정기. 감사용 `long_gaps`·`unproven_cut_min`.
+   `WaitEvidence`는 배경 작업 장부도 겸한다(시작·재개·종료·재도착 추적을 한 곳에서). 0으로 빼는
+   경우는 확인 신호가 있을 때만: 쉬던 중 깨운 입력(R1), 같은 본문의 종료 알림 재도착(§93),
+   "No response requested." 가짜 답. 압축 요약은 경계가 아니고, API 오류 답 앞 대기는 센다.
+   상세 `DESIGN-wait-evidence-94.md`.
    **§89**: 배경 실행(Bash·PowerShell `run_in_background`, `Monitor`) 판정기
    `BackgroundExecTracker`를 분자와 같이 쓴다(감사용 `bg_exec_jobs`). 배경 실행이
    한쪽에만 들어가는 일을 막는다. 겹친 다른 일은 각자 자기 일로 뺀다.

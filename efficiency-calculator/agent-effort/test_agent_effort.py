@@ -482,8 +482,10 @@ class TestTranscriptActual(unittest.TestCase):
         c = self._wall(nouuid)
         self.assertAlmostEqual(c["ai_wall_min"], 6.0, places=2)
 
-    def test_r1_meta_waker_and_compact_summary_are_boundaries(self):
-        # 예약 타이머(isMeta)·압축 요약이 AI를 깨웠다면 그 앞 공백은 방치.
+    def test_r1_meta_waker_boundary_compact_summary_not(self):
+        # 예약 타이머(isMeta)가 AI를 깨웠다면 그 앞 공백은 방치.
+        # §94: 압축 요약은 경계가 아니다 — 요약 앞은 AI가 압축하던 시간(외부
+        # 보고: 자동 압축 14지점). 확인 안 되면 종전대로 10분 + 증거만큼.
         R = self._rec
         txt = lambda: [{"type": "text", "text": "답 " * 20}]
         lines = [R("user", (9, 0), "작업 " * 20),
@@ -494,18 +496,33 @@ class TestTranscriptActual(unittest.TestCase):
                    isCompactSummary=True, isVisibleInTranscriptOnly=True),
                  R("assistant", (15, 2), txt())]
         c = self._wall(lines)
-        self.assertAlmostEqual(c["ai_wall_min"], 1 + 1 + 2, places=2)
+        self.assertAlmostEqual(c["ai_wall_min"], 1 + 1 + 10, places=2)
+        # 작업 중 자동 압축 6분 → 그대로 6분
+        auto = [R("user", (9, 0), "작업 " * 20),
+                R("assistant", (9, 1), [{"type": "tool_use", "id": "t1",
+                                         "name": "Read", "input": {}}]),
+                R("user", (9, 1), [{"type": "tool_result", "tool_use_id": "t1",
+                                    "content": "x"}]),
+                R("user", (9, 7), "This session is being continued",
+                  isCompactSummary=True, isVisibleInTranscriptOnly=True),
+                R("assistant", (9, 8), txt())]
+        c = self._wall(auto)
+        self.assertAlmostEqual(c["ai_wall_min"], 1 + 7, places=2)
         # 지시로는 안 센다
         self.assertEqual(c["user_instructions"], 1)
 
     def test_r2_long_generation_counted_synthetic_excluded(self):
         # 느린 PC·서버 과부하 재시도: 답 하나에 25분이 걸려도 끝까지 센다.
         # <synthetic>(세션 이어 붙일 때 자동 생성 답)은 AI 답이 아니다.
+        # §94: 10분을 넘는 부분은 턴 시간 기록(turn_duration)이 덮을 때만.
         R = self._rec
         lines = [R("user", (9, 0), "작업 " * 20),
                  {"type": "system", "subtype": "api_error",
                   "timestamp": "2026-08-03T09:12:00.000Z"},
                  R("assistant", (9, 25), [{"type": "text", "text": "답 " * 20}]),
+                 {"type": "system", "subtype": "turn_duration",
+                  "durationMs": 25 * 60000,
+                  "timestamp": "2026-08-03T09:25:00.000Z"},
                  R("user", (10, 0), "다음 " * 20),
                  {"type": "assistant", "timestamp": "2026-08-03T12:00:00.000Z",
                   "message": {"role": "assistant", "model": "<synthetic>",
@@ -513,6 +530,21 @@ class TestTranscriptActual(unittest.TestCase):
                                            "text": "No response requested."}]}}]
         c = self._wall(lines)
         self.assertAlmostEqual(c["ai_wall_min"], 25.0, places=2)
+        # 증거 없음 → 10분, 잘린 15분은 감사 기록
+        c = self._wall([ln for ln in lines if ln.get("subtype") != "turn_duration"])
+        self.assertAlmostEqual(c["ai_wall_min"], 10.0, places=2)
+        self.assertAlmostEqual(c["unproven_cut_min"], 15.0, places=2)
+        self.assertEqual(c["long_gaps"][0]["kind"], "R2")
+        # §94: API 오류 답(isApiErrorMessage)은 "No response requested."가 아니다 —
+        # 과부하로 7분 기다리다 실패한 호출도 AI 시간
+        err = [R("user", (9, 0), "작업 " * 20),
+               {"type": "assistant", "timestamp": "2026-08-03T09:07:00.000Z",
+                "isApiErrorMessage": True,
+                "message": {"role": "assistant", "model": "<synthetic>",
+                            "content": [{"type": "text",
+                                         "text": "API Error: 529 Overloaded."}]}}]
+        c = self._wall(err)
+        self.assertAlmostEqual(c["ai_wall_min"], 7.0, places=2)
 
     def test_r3_unbounded_tools_full_bounded_capped(self):
         # 제한 없는 도구(서브에이전트·MCP)의 정상 결과는 끝까지, 사람을
@@ -522,19 +554,36 @@ class TestTranscriptActual(unittest.TestCase):
                             "input": {"prompt": "x"}}]
         tr = lambda i, err=False: [{"type": "tool_result", "tool_use_id": i,
                                     "content": "ok " * 10, "is_error": err}]
+        # §94: 10분 넘는 부분은 증거가 있을 때만 — Agent는 결과의 실행 시간
+        # (totalDurationMs), MCP는 턴 시간 기록(turn_duration).
         lines = [R("user", (9, 0), "작업 " * 20),
                  R("assistant", (9, 1), tu("a1", "Agent")),
-                 R("user", (9, 31), tr("a1")),                  # 30 전부
+                 R("user", (9, 31), tr("a1"),                   # 30 전부
+                   toolUseResult={"agentId": "x", "totalDurationMs": 30 * 60000}),
                  R("assistant", (9, 32), tu("q1", "AskUserQuestion")),
                  R("user", (9, 52), tr("q1")),                  # 20 → 10
                  R("assistant", (9, 53), tu("m1", "mcp__srv__run")),
-                 R("user", (10, 13), tr("m1")),                 # 20 전부
+                 R("user", (10, 13), tr("m1")),                 # 20: 증거 없으면 10
                  R("assistant", (10, 14), tu("a2", "Agent")),
                  R("user", (10, 44), tr("a2", err=True)),       # 30 → 10
                  R("assistant", (10, 45), [{"type": "text", "text": "끝 " * 20}])]
         c = self._wall(lines)
         self.assertAlmostEqual(c["ai_wall_min"],
+                               1 + 30 + 1 + 10 + 1 + 10 + 1 + 10 + 1, places=2)
+        turn = {"type": "system", "subtype": "turn_duration",
+                "durationMs": 105 * 60000, "timestamp": "2026-08-03T10:45:00.000Z"}
+        # 턴 시간은 승인 창 대기도 담는다 — 승인 창이 안 뜨는 모드가 확인될 때만
+        c = self._wall(lines + [turn])
+        self.assertAlmostEqual(c["ai_wall_min"],
+                               1 + 30 + 1 + 10 + 1 + 10 + 1 + 10 + 1, places=2)
+        bypass = dict(lines[0], permissionMode="bypassPermissions")
+        c = self._wall([bypass] + lines[1:] + [turn])
+        self.assertAlmostEqual(c["ai_wall_min"],
                                1 + 30 + 1 + 10 + 1 + 20 + 1 + 10 + 1, places=2)
+        default = dict(lines[0], permissionMode="default")
+        c = self._wall([default] + lines[1:] + [turn])
+        self.assertAlmostEqual(c["ai_wall_min"],
+                               1 + 30 + 1 + 10 + 1 + 10 + 1 + 10 + 1, places=2)
 
     def test_r4_monitor_event_uncapped_statusless_other_capped(self):
         # §88: 감시(Monitor) 이벤트 알림(<status> 없이 <event>)은 감시 대상이
@@ -547,8 +596,15 @@ class TestTranscriptActual(unittest.TestCase):
                "<event>=== step 1000 done</event>\n</task-notification>")
         bare = ("<task-notification>\n<task-id>m2</task-id>\n"
                 "<summary>something</summary>\n</task-notification>")
-        lines = [R("user", (9, 0), "학습 감시 " * 20),
-                 R("assistant", (9, 1), txt()),
+        # §94: 89분은 감시를 띄운 기록(배경 실행 판정기 구간)이 증거 — 띄운
+        # 기록이 없으면 10분.
+        launch = [R("assistant", (9, 1), [{"type": "tool_use", "id": "mu1",
+                                           "name": "Monitor",
+                                           "input": {"command": "tail -f log"}}]),
+                  R("user", (9, 1), [{"type": "tool_result", "tool_use_id": "mu1",
+                                      "content": "Monitor started"}],
+                    toolUseResult={"taskId": "m1"})]
+        lines = [R("user", (9, 0), "학습 감시 " * 20)] + launch + [
                  R("user", (10, 30), mon),                    # 89 전부
                  R("assistant", (10, 31), txt()),
                  R("user", (11, 0), bare),                    # 29 → 10
@@ -557,6 +613,82 @@ class TestTranscriptActual(unittest.TestCase):
         self.assertAlmostEqual(c["ai_wall_min"], 1 + 89 + 1 + 10 + 1, places=2)
         self.assertEqual(c["bg_wait_events"], 2)
         self.assertAlmostEqual(c["bg_wait_cut_min"], 19.0, places=2)
+        c = self._wall([lines[0], R("assistant", (9, 1), txt())] + lines[3:])
+        self.assertAlmostEqual(c["ai_wall_min"], 1 + 10 + 1 + 10 + 1, places=2)
+        self.assertAlmostEqual(c["unproven_cut_min"], 79.0, places=2)
+
+    def test_94_r1_only_when_idle_confirmed(self):
+        # §94: isMeta 기록 앞 공백을 빼는 건 "쉬던 중"이 확인될 때만. 도구가
+        # 돌던 중(그림 첨부 등)·배경 서브에이전트가 돌던 중이면 종전대로 센다.
+        R = self._rec
+        txt = lambda: [{"type": "text", "text": "답 " * 20}]
+        meta = lambda hm: R("user", hm, "[Image: original 100x100]", isMeta=True)
+        # 도구 호출 중 6분 뒤 그림 기록 → 결과 → 답: 6분은 그대로
+        lines = [R("user", (9, 0), "작업 " * 20),
+                 R("assistant", (9, 1), [{"type": "tool_use", "id": "m1",
+                                          "name": "mcp__shot__take", "input": {}}]),
+                 meta((9, 7)),
+                 R("user", (9, 7), [{"type": "tool_result", "tool_use_id": "m1",
+                                     "content": "ok"}]),
+                 R("assistant", (9, 8), txt())]
+        c = self._wall(lines)
+        self.assertAlmostEqual(c["ai_wall_min"], 1 + 6 + 1, places=2)
+        # 배경 서브에이전트가 도는 중 타이머가 깨움 → 종전대로 10분 + 증거
+        lines = [R("user", (9, 0), "작업 " * 20),
+                 R("assistant", (9, 1), [{"type": "tool_use", "id": "u1",
+                                          "name": "Agent", "input": {"prompt": "x"}}]),
+                 R("user", (9, 1), [{"type": "tool_result", "tool_use_id": "u1",
+                                     "content": "launched"}],
+                   toolUseResult={"agentId": "a1", "isAsync": True}),
+                 R("assistant", (9, 2), txt()),
+                 R("user", (9, 30), "타이머 종료 — 재개", isMeta=True),
+                 R("assistant", (9, 31), txt())]
+        c = self._wall(lines)
+        self.assertAlmostEqual(c["ai_wall_min"], 1 + 1 + 10, places=2)
+        # 아무것도 안 돌고 AI가 답을 끝낸 뒤면 R1대로 뺀다
+        c = self._wall(lines[:1] + [R("assistant", (9, 2), txt())] + lines[4:])
+        self.assertAlmostEqual(c["ai_wall_min"], 2 + 1, places=2)
+
+    def test_94_redelivery_needs_identical_notice(self):
+        # §94: 재도착은 본문이 같을 때만 확인(대기 0). 본문이 다르면 모르는
+        # 경우 — 보통 대기로 세고 10분 넘는 부분은 증거만큼(없으면 10분).
+        R = self._rec
+        txt = lambda: [{"type": "text", "text": "답 " * 20}]
+        note = lambda extra: ("<task-notification>\n<task-id>a1</task-id>\n"
+                              "<status>completed</status>\n%s</task-notification>"
+                              % extra)
+        base = [R("user", (9, 0), "작업 " * 20), R("assistant", (9, 1), txt()),
+                R("user", (9, 5), note("<result>r1</result>")),
+                R("assistant", (9, 6), txt())]
+        same = base + [R("user", (12, 0), note("<result>r1</result>")),
+                       R("assistant", (12, 1), txt())]
+        c = self._wall(same)
+        self.assertEqual(c["bg_dup_events"], 1)
+        self.assertAlmostEqual(c["ai_wall_min"], 1 + 4 + 1 + 0 + 1, places=2)
+        diff = base + [R("user", (12, 0), note("<result>r2</result>")),
+                       R("assistant", (12, 1), txt())]
+        c = self._wall(diff)
+        self.assertEqual(c["bg_dup_events"], 0)
+        self.assertAlmostEqual(c["ai_wall_min"], 1 + 4 + 1 + 10 + 1, places=2)
+
+    def test_94_unknown_long_wait_leaks_at_most_10_min(self):
+        # §94 안전장치: 모르는 경우(띄운 기록 없는 작업의 완료 알림이 4일 뒤
+        # 도착)라도 새는 시간은 10분까지. 알림의 실행 시간(duration_ms)은 그
+        # 길이까지만 증거.
+        R = self._rec
+        txt = lambda: [{"type": "text", "text": "답 " * 20}]
+        note = ("<task-notification>\n<task-id>zz</task-id>\n"
+                "<status>completed</status>\n%s</task-notification>")
+        late = lambda body: {"type": "user",
+                             "timestamp": "2026-08-07T09:01:00.000Z",
+                             "message": {"role": "user", "content": note % body}}
+        base = [R("user", (9, 0), "작업 " * 20), R("assistant", (9, 1), txt())]
+        c = self._wall(base + [late("")])
+        self.assertAlmostEqual(c["ai_wall_min"], 1 + 10, places=2)
+        self.assertAlmostEqual(c["unproven_cut_min"], 4 * 1440 - 10, places=1)
+        c = self._wall(base + [late("<usage><duration_ms>%d</duration_ms></usage>"
+                                    % (45 * 60000))])
+        self.assertAlmostEqual(c["ai_wall_min"], 1 + 45, places=2)
 
     def test_r4_redelivered_end_notice_not_waited(self):
         # §93 보고 사례: 09-04 배경 서브에이전트 완료 → 4일 방치 → 09-08 세션을
