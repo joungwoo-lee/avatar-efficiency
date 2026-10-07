@@ -395,7 +395,8 @@ class TestTranscriptActual(unittest.TestCase):
         T = "2026-08-%02dT09:%02d:00.000Z"
         notif = ("<task-notification>\n<task-id>a1</task-id>\n"
                  "<status>completed</status>\n</task-notification>")
-        killed = notif.replace("completed", "killed")
+        # §93: 다른 작업(a2) — a1은 이미 끝나 재도착 알림이 대기가 아니다
+        killed = notif.replace("completed", "killed").replace("a1", "a2")
         lines = [
             {"type": "user", "timestamp": T % (3, 0),
              "message": {"role": "user", "content": "서브에이전트 돌려 " * 20}},
@@ -556,6 +557,65 @@ class TestTranscriptActual(unittest.TestCase):
         self.assertAlmostEqual(c["ai_wall_min"], 1 + 89 + 1 + 10 + 1, places=2)
         self.assertEqual(c["bg_wait_events"], 2)
         self.assertAlmostEqual(c["bg_wait_cut_min"], 19.0, places=2)
+
+    def test_r4_redelivered_end_notice_not_waited(self):
+        # §93 보고 사례: 09-04 배경 서브에이전트 완료 → 4일 방치 → 09-08 세션을
+        # 다시 여니 같은 task-id 완료 알림이 또 옴. 그 4일은 대기가 아니다.
+        # SendMessage(to=id 또는 Agent name)로 다시 돌린 뒤의 완료는 정상 대기.
+        def R(kind, d, hm, content, **kw):
+            r = {"type": kind,
+                 "timestamp": "2026-09-%02dT%02d:%02d:00.000Z" % ((d,) + hm),
+                 "message": {"role": kind, "content": content}}
+            r.update(kw)
+            return r
+        txt = lambda: [{"type": "text", "text": "답 " * 20}]
+        note = lambda tid: ("<task-notification>\n<task-id>%s</task-id>\n"
+                            "<status>completed</status>\n</task-notification>"
+                            % tid)
+        launch = lambda uid, **inp: [{"type": "tool_use", "id": uid,
+                                      "name": "Agent",
+                                      "input": dict(prompt="x",
+                                                    run_in_background=True,
+                                                    **inp)}]
+        res = lambda uid: [{"type": "tool_result", "tool_use_id": uid,
+                            "content": "Async agent launched"}]
+        send = lambda uid, to: [{"type": "tool_use", "id": uid,
+                                 "name": "SendMessage",
+                                 "input": {"to": to, "message": "이어서"}}]
+        lines = [R("user", 4, (7, 0), "조사 " * 20),
+                 R("assistant", 4, (7, 1), launch("u1")),
+                 R("user", 4, (7, 1), res("u1"),
+                   toolUseResult={"agentId": "a1", "isAsync": True}),
+                 R("assistant", 4, (7, 2), txt()),
+                 R("user", 4, (7, 5), note("a1")),          # 3 대기
+                 R("assistant", 4, (7, 6), txt()),
+                 R("user", 8, (5, 57), note("a1")),         # 재도착 — 0
+                 R("assistant", 8, (5, 58), txt())]
+        c = self._wall(lines)
+        self.assertAlmostEqual(c["ai_wall_min"], 1 + 1 + 3 + 1 + 1, places=2)
+        self.assertEqual(c["bg_wait_events"], 1)
+        self.assertEqual(c["bg_dup_events"], 1)
+        self.assertAlmostEqual(c["bg_dup_skip_min"], 4 * 1440 - 69, places=1)
+        # SendMessage로 다시 돌림(id로, 이름으로) → 그 뒤 완료는 끝까지 대기
+        lines2 = lines[:6] + [
+            R("assistant", 4, (7, 10), send("s1", "a1")),
+            R("user", 4, (7, 10), [{"type": "tool_result", "tool_use_id": "s1",
+                                     "content": "sent"}]),
+            R("assistant", 4, (7, 11), txt()),
+            R("user", 4, (7, 31), note("a1")),          # 20 대기
+            R("assistant", 4, (7, 32), txt()),
+            R("assistant", 4, (7, 33), launch("u2", name="fixer")),
+            R("user", 4, (7, 33), res("u2"),
+              toolUseResult={"agentId": "a9", "isAsync": True}),
+            R("assistant", 4, (7, 34), txt()),
+            R("user", 4, (7, 40), note("a9")),          # 6 대기
+            R("assistant", 4, (7, 41), send("s2", "fixer")),
+            R("user", 4, (7, 41), [{"type": "tool_result", "tool_use_id": "s2",
+                                     "content": "sent"}]),
+            R("user", 4, (8, 41), note("a9"))]          # 60 대기
+        c = self._wall(lines2)
+        self.assertEqual(c["bg_dup_events"], 0)
+        self.assertAlmostEqual(c["bg_wait_min"], 3 + 20 + 6 + 60, places=2)
 
 
 

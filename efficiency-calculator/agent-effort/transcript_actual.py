@@ -12,7 +12,8 @@
   섞일 수 있는 간격(실행 시간이 막힌 도구·즉시 끝나는 도구·사람을 기다리는
   도구·오류 결과·완료 아닌 배경 알림)에만 남긴다. 답 생성·정상 완료 배경
   대기·감시(Monitor) 이벤트 대기(§88)·제한 없는 도구의 정상 결과는 끝까지
-  센다 (DESIGN-ai-time-87.md).
+  센다 (DESIGN-ai-time-87.md). 단 이미 종료 알림을 받은 작업의 종료 알림이
+  다시 오면(세션 재개 때 재전달) 그 앞 공백은 대기가 아니다(§93).
   AI가 끝낸 뒤 다음 입력까지는 사람 시간이라 제외. 병렬 실행(서브에이전트)은
   메인 타임라인에 이미 흐른 시간이므로 별도 가산하지 않는다.
 
@@ -347,6 +348,10 @@ def parse_actions(jsonl_path, count_window=None):
               # 이벤트는 상한 없음, failed·killed·stopped는 _AI_GAP_CAP_SEC 상한.
               # bg_wait_min = 가산분, bg_wait_cut_min = 상한에 잘린 초과분.
               "bg_wait_min": 0.0, "bg_wait_events": 0, "bg_wait_cut_min": 0.0,
+              # §93 이미 끝난 작업의 종료 알림 재도착 — 대기로 안 센 건수·간격
+              # (감사용). 세션을 며칠 뒤 다시 열면 같은 task-id 완료 알림이
+              # 또 온다: 그 앞 공백은 방치다.
+              "bg_dup_events": 0, "bg_dup_skip_min": 0.0,
               # §89 배경 실행(Bash·PowerShell) 목록 — BackgroundExecTracker,
               # 분자도 같은 판정기를 쓴다 (감사·대칭 확인용, 분모 계산엔 안 씀)
               "bg_exec_jobs": [],
@@ -399,6 +404,12 @@ def parse_actions(jsonl_path, count_window=None):
         seg_files.clear()
     seen_uuid = set()    # §87 R0 재기록 중복 레코드 판별
     tool_names = {}      # §87 R3 tool_use id → 도구 이름
+    # §93 종료 알림(<status> 있음, running·pending 아님)을 이미 받은 task-id.
+    # SendMessage(to)·Agent(resume)로 다시 돌리면 빠진다 — 실측상 같은 서브에이전트가
+    # 2~3번 완료되는 정상 사례는 전부 그 사이에 SendMessage가 있었다.
+    bg_done = set()
+    agent_names = {}     # §93 Agent 입력 name → agentId (SendMessage가 이름으로 부를 때)
+    agent_name_use = {}  # §93 Agent tool_use id → name
     bg_exec = BackgroundExecTracker()
     with open(jsonl_path, encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -472,6 +483,16 @@ def parse_actions(jsonl_path, count_window=None):
                             tool_names[b["id"]] = b.get("name")
                         seq += 1
                         inp = b.get("input") or {}
+                        if isinstance(inp, dict):
+                            # §93 끝난 작업을 다시 돌림 → 다음 종료 알림은 대기
+                            for k in ("to", "resume"):
+                                v = inp.get(k)
+                                if isinstance(v, str):
+                                    bg_done.discard(v)
+                                    bg_done.discard(agent_names.get(v))
+                            if (b.get("name") in ("Agent", "Task") and b.get("id")
+                                    and isinstance(inp.get("name"), str)):
+                                agent_name_use[b["id"]] = inp["name"]
                         if b.get("name") == "StructuredOutput":
                             # 구조화 보고 채널 (§34): 최종 산출물이 답변 텍스트
                             # 대신 이 도구 입력(JSON)으로 나간다 — AI가 써낸
@@ -535,23 +556,37 @@ def parse_actions(jsonl_path, count_window=None):
                 # 시간이다(실측 62건 전부 진행 신호, 종료·타임아웃 0건; 5d38d92b
                 # 84·46·44·43분 이벤트가 10분씩으로 잘려 180분 미계상).
                 # 초과분은 bg_wait_cut_min에 감사용으로만 남긴다.
+                # §93: 이미 종료 알림을 받은 task-id의 종료 알림이 또 오면(세션을
+                # 며칠 뒤 다시 열 때 재전달) 기다릴 작업이 없었다 — 대기 0, 경계만.
+                # 사이에 SendMessage·resume으로 다시 돌렸으면 정상 대기.
                 bg_text = " ".join(
                     b.get("text", "") for b in blocks
                     if isinstance(b, dict) and b.get("type") == "text")
                 is_bg_notif = bg_text.lstrip().startswith("<task-notification")
+                m_tid = re.search(r"<task-id>([^<]+)</task-id>", bg_text)
+                m_st = re.search(r"<status>([^<]+)</status>", bg_text)
+                bg_tid = m_tid.group(1).strip() if (is_bg_notif and m_tid) else None
+                bg_end = bool(m_st) and m_st.group(1).strip() not in (
+                    "running", "pending")
+                bg_dup = bool(bg_tid) and bg_end and bg_tid in bg_done
                 if (is_bg_notif and turn_start is not None and rec_t
                         and turn_prev):
                     gap = max(0.0, rec_t - turn_prev)
                     full = ("<status>completed</status>" in bg_text
                             or ("<status>" not in bg_text     # §88
                                 and "<event>" in bg_text))
-                    if inw:
+                    if inw and bg_dup:
+                        counts["bg_dup_events"] += 1
+                        counts["bg_dup_skip_min"] += gap / 60
+                    elif inw:
                         add = (gap if full else min(gap, _AI_GAP_CAP_SEC)) / 60
                         counts["ai_wall_min"] += add
                         counts["bg_wait_min"] += add
                         counts["bg_wait_events"] += 1
                         counts["bg_wait_cut_min"] += gap / 60 - add
                     turn_prev = max(turn_prev, rec_t)
+                if bg_tid and bg_end:
+                    bg_done.add(bg_tid)
                 if turn_start is not None and turn_prev is not None \
                         and turn_prev > turn_start:
                     if _inw(turn_start):
@@ -583,6 +618,10 @@ def parse_actions(jsonl_path, count_window=None):
                             counts["ai_wall_min"] += (
                                 gap if full else min(gap, _AI_GAP_CAP_SEC)) / 60
                         turn_prev = max(turn_prev, rec_t)
+                    nm = agent_name_use.pop(b.get("tool_use_id"), None)
+                    tur = rec.get("toolUseResult")
+                    if nm and isinstance(tur, dict) and tur.get("agentId"):
+                        agent_names[nm] = tur["agentId"]        # §93
                     if inw:
                         counts["tool_result_words"] += _result_words(b)
                     seq += 1
