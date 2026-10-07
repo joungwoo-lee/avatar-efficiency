@@ -828,8 +828,9 @@ class TestWindowMeasure(unittest.TestCase):
 
 
 class TestWorkflowSubagentFiles(unittest.TestCase):
-    def test_workflow_subagent_transcripts_included(self):
-        # §92: subagents/workflows/wf_*/ 아래 워크플로 서브에이전트 기록도 분자에 포함
+    def test_workflow_subagent_transcripts_excluded(self):
+        # §95: subagents/workflows/wf_*/ 아래 워크플로 서브에이전트 기록은 세지 않는다
+        # (§92 철회). 하위 폴더는 어디든 읽지 않는다.
         from requirement_actions import find_subagent_files
         with tempfile.TemporaryDirectory() as directory:
             main = Path(directory) / "s.jsonl"
@@ -839,12 +840,11 @@ class TestWorkflowSubagentFiles(unittest.TestCase):
             (wf.parent.parent / "agent-a.jsonl").write_text("", encoding="utf-8")
             (wf / "agent-b.jsonl").write_text("", encoding="utf-8")
             (wf / "agent-b.meta.json").write_text("{}", encoding="utf-8")
-            # §94: 확인된 두 위치만 — 모르는 하위 폴더는 종전대로 안 읽는다
             odd = Path(directory) / "s" / "subagents" / "other"
             odd.mkdir()
             (odd / "agent-c.jsonl").write_text("", encoding="utf-8")
             names = [Path(p).name for p in find_subagent_files(main)]
-            self.assertEqual(sorted(names), ["agent-a.jsonl", "agent-b.jsonl"])
+            self.assertEqual(sorted(names), ["agent-a.jsonl"])
 
 
 class TestBackgroundExecutionWait(unittest.TestCase):

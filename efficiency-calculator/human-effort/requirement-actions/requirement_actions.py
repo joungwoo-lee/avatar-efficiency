@@ -805,15 +805,15 @@ def _ts(x):
         return None
 
 
-# §94 서브에이전트 기록이 있다고 확인된 위치 (이 PC: 723개 / 1,267개, 그 외 0)
-SUBAGENT_GLOBS = ("*.jsonl", "workflows/wf_*/*.jsonl")
+# 분자에 넣는 서브에이전트 기록 위치. §95: 워크플로 서브에이전트
+# (subagents/workflows/wf_*/)는 세지 않는다(사용자 결정 — §92 철회).
+SUBAGENT_GLOBS = ("*.jsonl",)
 
 
 def find_subagent_files(jsonl_path):
-    """세션의 서브에이전트 트랜스크립트 목록.
-    §92: 워크플로 서브에이전트(subagents/workflows/wf_*/)도 포함.
-    §94: 확인된 두 위치만 읽는다 — subagents/*.jsonl, subagents/workflows/wf_*/*.jsonl.
-    모르는 하위 폴더는 종전대로 안 읽는다."""
+    """세션의 서브에이전트 트랜스크립트 목록 ({세션}/subagents/*.jsonl).
+    §95: 워크플로 서브에이전트(subagents/workflows/wf_*/)와 그 밖의 하위 폴더는
+    읽지 않는다."""
     d = Path(str(jsonl_path))
     sub = d.with_suffix("") / "subagents"
     if not sub.is_dir():

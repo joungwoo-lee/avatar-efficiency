@@ -107,9 +107,8 @@ def measure_agent_actual(jsonl_path, rates=None, include_subagents=False,
     """
     rates = rates or load_rates()
     counts = parse_actions(jsonl_path, count_window=count_window)
-    sub_files = sorted(  # §92 워크플로 서브에이전트 포함, §94 확인된 두 위치만
-        f for pat in ("*.jsonl", "workflows/wf_*/*.jsonl")
-        for f in glob.glob(str(Path(jsonl_path).with_suffix("")) + "/subagents/" + pat))
+    sub_files = sorted(  # §95 워크플로 서브에이전트는 세지 않는다
+        glob.glob(str(Path(jsonl_path).with_suffix("")) + "/subagents/*.jsonl"))
     if include_subagents:  # 자원량(토큰·동작 총량) 관점 참고용 — 시간 아님
         for sf in sub_files:
             sc = parse_actions(sf, count_window=count_window)
