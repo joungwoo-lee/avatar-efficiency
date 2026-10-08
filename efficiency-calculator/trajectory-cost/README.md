@@ -52,12 +52,41 @@ python callsite_example.py <세션.jsonl 경로>
    Fable 5 / Mythos 5 는 같은 단가에 읽기 $1.00)
 - 같은 호출이 파일에 여러 번 적히므로 `message.id` 로 중복 제거
   (실측: usage 레코드 1804줄 = 실제 호출 867건. 안 하면 2배 넘게 부풀려짐)
-- 온프렘 모델은 비용 0 (토큰은 집계). 지정: `onprem_models=[...]` 인자,
+- 요율표에 없는 모델은 온프렘으로 간주해 비용 0 (토큰은 집계).
+  요율표에 있어도 온프렘으로 지정 가능: `onprem_models=[...]` 인자,
   환경변수 `TRAJECTORY_ONPREM_MODELS`, 또는 `rates.json` 의 `onprem_patterns`
 - `<synthetic>` 등 `free_models` 레코드(실제 LLM 호출 아님)는 `by_provider["free"]` 에만 남기고
   `total`/`main_agent`/`by_model` 호출 수에서 제외 (message.id 가 UUID 든 문자열이든 동일)
 - `min_version`/`max_version`: 세션 레코드의 Claude Code 버전 범위 (usage 포맷 드리프트 추적용)
-- 요율표는 `rates.json`. 코드에 숫자 없음
+- 기본 요율표는 `rates.json`. 공식 가격은 별도로 자동 갱신한다.
+
+## 공식 요금 자동 갱신
+
+계산은 저장된 가격으로 바로 진행한다. 인터넷 연결이나 다운로드 완료를 기다리지 않는다.
+
+- 기본 요율표와 마지막 저장본을 읽어 계산한다. 확인 후 24시간이 지났으면
+  별도 프로세스가 [Anthropic 공식 요금표](https://platform.claude.com/docs/en/about-claude/pricing.md)를 받는다.
+- 계산 명령이 먼저 끝나도 갱신 작업은 계속된다. Windows에서는 창을 띄우지 않는다.
+- 다운로드와 가격 검증을 모두 마친 뒤 저장본을 교체한다. 완료된 가격은 **다음 계산부터** 적용한다.
+  한 계산 안에서는 같은 요율표를 사용한다. 프로젝트 합계도 동일하다.
+- 인터넷 연결 실패, 요금표 형식 변경, 저장 실패 시 기존 가격을 유지한다.
+  실패 후에는 15분이 지난 뒤 실행되는 계산에서 다시 갱신을 시도한다.
+- 저장본이 없거나 손상됐으면 기본 `rates.json`을 쓴다.
+  표에 없는 모델은 온프렘으로 간주해 비용 0으로 계산한다.
+- 입력·출력·5분/1시간 캐시 쓰기·캐시 읽기·빠른 응답·검색 요금을 갱신한다.
+  입력 길이에 따라 가격이 달라지는 모델도 반영한다. 입력 길이는 일반 입력과
+  캐시 쓰기·읽기 토큰을 합산하며 출력 토큰은 포함하지 않는다.
+- 결과의 `pricing.source`와 `pricing.checked_at`에 적용한 가격의 출처와 확인 시각을 남긴다.
+  이는 요금 적용 시작일이 아니다. 과거 세션도 선택된 요율표의 가격으로 환산한다.
+
+저장 위치: Windows는 `%LOCALAPPDATA%/trajectory-cost/rates.json`,
+그 외에는 `$XDG_CACHE_HOME/trajectory-cost/rates.json` 또는 `~/.cache/trajectory-cost/rates.json`.
+`TRAJECTORY_RATES_CACHE` 환경변수로 저장 위치를 바꿀 수 있다. 원본 `rates.json`은 바꾸지 않는다.
+
+갱신 없이 저장된 가격만 쓰려면 `load_rates(auto_update=False)` 또는
+`TRAJECTORY_RATES_AUTO_UPDATE=0`을 사용한다. `load_rates(path)`는 지정한 파일만 읽고
+자동 갱신이나 저장본을 사용하지 않는다. 요율표를 고정하려면
+`session_cost(session, rates=load_rates(path))`로 호출한다.
 
 ## 분해가 필요할 때
 
@@ -77,4 +106,6 @@ d["by_model"], d["by_agent"], d["onprem"], d["warnings"]
 값은 API 정가 환산이다(구독제 실청구액 아님). 대화 제목 생성 같은 내부 호출은
 트랜스크립트에 안 남아 `/usage` 와 소폭 차이 난다.
 
-테스트: `python test_trajectory_cost.py`
+테스트: `python test_trajectory_cost.py`, `python test_rate_updates.py`.
+테스트에서는 실제 인터넷을 사용하지 않는다. 다운로드를 멈춘 상태에서 계산 명령이
+끝나는지, 명령이 끝난 후 갱신 작업이 완료되는지도 확인한다.

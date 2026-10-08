@@ -2,9 +2,10 @@
 
 - 부모 세션 + 모든 서브에이전트(sidechain) 호출을 재귀 합산
 - 호출별 모델을 각각 적용 (부모 Opus / 서브 Sonnet 혼재 대응)
-- 캐시 토큰은 write-5m 1.25x / write-1h 2.0x / read 0.1x 로 별도 단가 적용
+- 캐시 토큰은 모델별 공식 단가 적용 (미지정 시 배수 폴백)
 - message.id 기준 중복 제거 (스트리밍 중간 레코드 과대계상 방지)
 - 온프렘(사내 구축) 모델 호출은 provider="onprem" 으로 분리하고 비용 0
+- 요율표에 없는 모델도 온프렘으로 취급. 공식 요금 갱신은 별도 프로세스에서 수행
 - <synthetic> 등 free 모델 레코드(실제 LLM 호출 아님)는 by_provider["free"] 에만 남기고 호출 수 집계에서 제외
 - 레코드의 Claude Code 버전 범위(min_version/max_version)를 출력해 포맷 드리프트 추적
 - 구간 계산: session_cost(..., window=(start, end)) / CLI --from A --to B
@@ -34,6 +35,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+from rate_updates import default_cache_path, read_cached_rates, schedule_refresh
+
 RATES_PATH = Path(__file__).with_name("rates.json")
 DEFAULT_PROJECTS_ROOT = Path(
     os.environ.get("CLAUDE_PROJECTS_ROOT", Path.home() / ".claude" / "projects")
@@ -43,9 +46,21 @@ DEFAULT_PROJECTS_ROOT = Path(
 _DATE_SUFFIX = re.compile(r"-\d{8}$")
 
 
-def load_rates(path: Path | str | None = None) -> dict:
+def load_rates(path: Path | str | None = None, *, auto_update: bool = True) -> dict:
+    """저장된 요율로 즉시 반환. 공식 요금 다운로드는 별도 프로세스에서 진행.
+
+    path를 지정하면 해당 파일만 사용한다(자동 갱신/저장본 사용 없음).
+    auto_update=False 또는 TRAJECTORY_RATES_AUTO_UPDATE=0이면 갱신하지 않는다.
+    """
     with open(path or RATES_PATH, encoding="utf-8") as fh:
-        return json.load(fh)
+        rates = json.load(fh)
+    if path is not None:
+        return rates
+    cache = default_cache_path()
+    rates = read_cached_rates(rates, cache)
+    if auto_update and os.environ.get("TRAJECTORY_RATES_AUTO_UPDATE", "1") != "0":
+        schedule_refresh(RATES_PATH, cache, rates)
+    return rates
 
 
 # --------------------------------------------------------------------------
@@ -113,7 +128,7 @@ def normalize_model(model: str) -> str:
 
 
 def classify_model(model: str, rates: dict, onprem_models: Iterable[str] = ()) -> str:
-    """provider 판정: 'api' | 'onprem' | 'free' | 'unknown'."""
+    """provider 판정: 'api' | 'onprem' | 'free'. 미등록 모델은 온프렘."""
     raw = (model or "").strip()
     norm = normalize_model(raw)
     if raw in rates.get("free_models", []) or norm in rates.get("free_models", []):
@@ -133,7 +148,7 @@ def classify_model(model: str, rates: dict, onprem_models: Iterable[str] = ()) -
     for pat in rates.get("onprem_patterns", []):
         if re.search(pat, low):
             return "onprem"
-    return "unknown"
+    return "onprem"
 
 
 # --------------------------------------------------------------------------
@@ -261,12 +276,17 @@ def dedupe(calls: Iterable[Call]) -> list[Call]:
 # --------------------------------------------------------------------------
 
 def call_cost(call: Call, rates: dict, onprem_models: Iterable[str] = ()) -> tuple[float, str]:
-    """(USD, provider). onprem/free/unknown 은 0.0 USD."""
+    """(USD, provider). onprem/free 은 0.0 USD."""
     provider = classify_model(call.model, rates, onprem_models)
     if provider != "api":
         return 0.0, provider
 
     spec = rates["models"][normalize_model(call.model)]
+    prompt_tokens = (call.input_tokens + call.cache_write_5m + call.cache_write_1h
+                     + call.cache_read)
+    for tier in spec.get("tiers", []):
+        if prompt_tokens > tier["above_input_tokens"]:
+            spec = tier
     if call.speed == "fast" and "fast" in spec:
         spec = spec["fast"]
     mult = rates["cache_multipliers"]
@@ -349,15 +369,12 @@ def session_cost(session: str | Path,
     by_model: dict[str, Bucket] = {}
     by_agent: dict[str, Bucket] = {}
     by_provider: dict[str, Bucket] = {}
-    unknown_models: set[str] = set()
     versions: set[str] = set()
 
     for c in calls:
         if c.version:
             versions.add(str(c.version))
         usd, provider = call_cost(c, rates, onprem_models)
-        if provider == "unknown":
-            unknown_models.add(c.model)
         by_provider.setdefault(provider, Bucket()).add(c, usd)
         if provider == "free":
             # <synthetic> 등 실제 LLM 호출이 아닌 레코드: by_provider["free"] 에만 남기고
@@ -390,10 +407,8 @@ def session_cost(session: str | Path,
         "by_agent": {k: v.as_dict() for k, v in sorted(by_agent.items(), key=lambda kv: -kv[1].cost_usd)},
         "by_provider": {k: v.as_dict() for k, v in by_provider.items()},
         "onprem": (by_provider["onprem"] if "onprem" in by_provider else Bucket()).as_dict(),
-        "warnings": (
-            ["unpriced model treated as $0: " + m for m in sorted(unknown_models)]
-            + ["일부 background 호출(제목 생성 등)은 트랜스크립트에 남지 않아 /usage 와 소폭 차이 가능"]
-        ),
+        "pricing": dict(rates.get("_pricing", {})),
+        "warnings": ["일부 background 호출(제목 생성 등)은 트랜스크립트에 남지 않아 /usage 와 소폭 차이 가능"],
     }
 
 
@@ -426,6 +441,7 @@ def project_cost(project_dir: str | Path,
         "window": ({"start": win[0], "end": (None if win[1] == float("inf") else win[1])}
                    if win else None),
         "trajectory_cost_usd": round(sum(s["trajectory_cost_usd"] for s in sessions), 6),
+        "pricing": dict(rates.get("_pricing", {})),
         "detail": sessions,
     }
 
@@ -445,6 +461,8 @@ def _fmt(d: dict) -> str:
         "session %s  (서브에이전트 파일 %d개)" % (d["session_id"], d["subagent_files"]),
         "  기록 범위        %s ~ %s" % (_iso(d.get("first_ts")), _iso(d.get("last_ts"))),
     ]
+    if d.get("pricing", {}).get("checked_at"):
+        lines.append("  요율 확인        " + d["pricing"]["checked_at"])
     w = d.get("window")
     if w:
         lines.append("  구간             %s ~ %s  (안 %d calls / 밖 %d calls)"

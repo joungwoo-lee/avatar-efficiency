@@ -3,10 +3,11 @@
 import json
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import trajectory_cost as tc
 
-RATES = tc.load_rates()
+RATES = tc.load_rates(tc.RATES_PATH)
 
 
 def _rec(msg_id, model, *, inp=0, w5=0, w1=0, read=0, out=0,
@@ -111,6 +112,7 @@ def test_dedupe_streaming_repeats():
     print("ok dedupe_streaming_repeats")
 
 
+@patch("trajectory_cost.load_rates", new=lambda *args, **kwargs: RATES)
 def test_session_with_subagents_and_onprem():
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
@@ -138,17 +140,22 @@ def test_session_with_subagents_and_onprem():
     print("ok session_with_subagents_and_onprem")
 
 
-def test_unknown_model_flagged():
+@patch("trajectory_cost.load_rates", new=lambda *args, **kwargs: RATES)
+def test_unlisted_model_is_onprem():
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         sid = "99999999-0000-0000-0000-000000000000"
         _write(root / "C--proj", sid + ".jsonl", [_rec("x1", "gpt-9-turbo", out=1000)])
         d = tc.session_cost(sid, projects_root=root)
     assert d["trajectory_cost_usd"] == 0.0
-    assert any("gpt-9-turbo" in w for w in d["warnings"])
-    print("ok unknown_model_flagged")
+    assert d["onprem"]["calls"] == 1
+    assert d["onprem"]["total_tokens"] == 1000
+    assert d["by_provider"]["onprem"]["cost_usd"] == 0.0
+    assert not any("gpt-9-turbo" in w for w in d["warnings"])
+    print("ok unlisted_model_is_onprem")
 
 
+@patch("trajectory_cost.load_rates", new=lambda *args, **kwargs: RATES)
 def test_synthetic_excluded_from_counts_any_id_format():
     """<synthetic> 레코드: message.id 가 UUID 든 '<synthetic>' 문자열이든 호출 수에서 제외.
     by_provider['free'] 에만 남고 달러는 불변. 구버전 포맷(cache_creation 딕트 없음) 혼합."""
@@ -181,6 +188,7 @@ def test_glm_is_onprem():
     print("ok glm_is_onprem")
 
 
+@patch("trajectory_cost.load_rates", new=lambda *args, **kwargs: RATES)
 def test_cache_creation_fallback_when_dict_all_zero():
     """cache_creation 딕트가 있으나 전부 0 이고 최상위 cache_creation_input_tokens 만 있는 경우 -> 5m 로 계상."""
     with tempfile.TemporaryDirectory() as td:
@@ -199,6 +207,7 @@ def test_cache_creation_fallback_when_dict_all_zero():
     print("ok cache_creation_fallback_when_dict_all_zero")
 
 
+@patch("trajectory_cost.load_rates", new=lambda *args, **kwargs: RATES)
 def test_window_range():
     """§80 구간: [start, end] 닫힌 구간, 시각 없는 레코드는 직전 시각 상속,
     서브에이전트도 같은 구간, 구간 나눠 더하면 전체와 같음(가산성)."""
@@ -278,7 +287,7 @@ if __name__ == "__main__":
     test_onprem_is_free()
     test_dedupe_streaming_repeats()
     test_session_with_subagents_and_onprem()
-    test_unknown_model_flagged()
+    test_unlisted_model_is_onprem()
     test_synthetic_excluded_from_counts_any_id_format()
     test_glm_is_onprem()
     test_cache_creation_fallback_when_dict_all_zero()

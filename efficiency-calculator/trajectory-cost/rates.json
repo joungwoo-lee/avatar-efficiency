@@ -1,5 +1,9 @@
 {
   "_comment": "USD per 1M tokens (MTok). 2026-09-21 기준 Anthropic 정가 (platform.claude.com/docs/en/about-claude/pricing). cache_write_5m/cache_write_1h/cache_read 는 모델마다 직접 적는다. 안 적힌 모델은 cache_multipliers 로 input 단가에서 계산(write5m 1.25x / write1h 2.0x / read 0.1x). 예외: Fable 5.1 / Mythos 5.1 은 cache_read 가 input 의 0.025x ($0.25) 라 배수로 못 구하므로 반드시 직접 적는다.",
+  "_pricing": {
+    "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "checked_at": "2026-09-21T00:00:00Z"
+  },
   "cache_multipliers": {
     "write_5m": 1.25,
     "write_1h": 2.0,
