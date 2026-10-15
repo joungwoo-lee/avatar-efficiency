@@ -2065,6 +2065,31 @@ OFF/OFF 112,522 → 93,771분, OFF/ON 1.41 → 1.41. 역전 0.**
   45e1d583 발표 자료(docs)의 61.4배는 §92 기준 수치다.
 - 테스트: session-api 41(1 skip), human-effort 53, agent-effort 31 통과.
 
+## 96. Codex·OpenCode 세션 측정 — 기록을 Claude 모양으로 바꿔 같은 규칙으로 (DESIGN: session-adapters/DESIGN.md)
+
+- 방식: 측정 규칙은 그대로 두고, 입력 기록을 Claude Code 기록 모양으로 바꾼다(`session-adapters/`).
+  `measure()`가 첫 줄로 형식을 판별한다. Claude 기록은 종전 경로 그대로다.
+- 기준 버전: Codex CLI 0.162.1, OpenCode 2.0.29. 두 도구로 같은 11단계 과제를 실제로 돌려 만든 기록으로 대응을 정했다.
+- Codex:
+  - 코드 모드 셀 안의 개별 호출은 `item_completed` 항목(시작·끝 밀리초)으로 바꾼다.
+    결과 글은 셀이 실제로 찍은 조각이고, 어느 호출에도 속하지 않는 출력은 `js_output` 조회 1건이다.
+  - 배경 실행: 셀 결과의 `session_id`를 배경 실행으로 보고, 실제 종료 항목 시각을 대기열 완료 알림으로 쓴다.
+  - 다중 에이전트 v2는 에이전트 사이 메시지를 암호화해 저장한다. 그 단어 수는
+    "(응답 출력 토큰 − 생각 토큰) × 같은 세션 평문 응답의 단어/토큰 비율 − 평문 단어"로 환산하고, `notes`에 건수를 적는다.
+  - 자식 기록 앞의 부모 대화 사본(`subagent_history_start_ordinal`)과 자동 승인 검토기(guardian)는 뺀다.
+- Codex가 Claude Code 세션을 가져와 다시 쓴 사본(`external_agent_session_imports.json`) 284개는 측정에서 뺀다.
+  가져온 순간의 줄은 사본이고, 이 PC에서는 가져온 뒤 Codex로 이어 한 지시가 0건이었다.
+  안 빼면 Claude 쪽과 같은 일을 두 번 센다. 보관함(`archived_sessions`)도 측정 대상에 넣었다.
+- OpenCode: v2 세션(`session_v2`·`session_message`, 공식 `session export`와 같은 내용)과
+  옮겨지지 않은 1.x 세션(`message`·`part`)을 바꾼다. 도구는 created·completed 시각, 배경 셸 종료 알림(`synthetic`)은
+  `<task-notification>`이다. 실제 종료 시각은 셸 출력 파일(`<shellID>.out`)의 마지막 기록 시각으로 둔다
+  (시험: 56.4초 → 25.6초, 실제 25초 명령).
+- 검증: 이 PC Codex 297·OpenCode 402세션 변환·측정 오류 0, 미계상 채널 경보 0, §38 경보 0,
+  변환 누락(원본보다 적은 호출) 0. 전 세션 리포트 `--agent codex`(14세션 측정, 사본 제외 284)·`--agent opencode`(159세션 측정).
+  Claude 세션 전체 리포트는 바꾸기 전 코드와 같은 결과.
+- 발견(미수정): 실행 실패 정규식(`_EXEC_HARD_FAIL_RE`)이 PowerShell 한국어 오류문을 모른다 — Claude 세션에도 같은 규칙.
+- 테스트: session-adapters 16, session-api 41(1 skip), human-effort 53, agent-effort 31 통과.
+
 ## 미해결 (알려진 한계·다음 단계)
 
 > §66~§68 감사에서 검토했으나 미반영한 항목·기대효과 %·위치·판단 근거는

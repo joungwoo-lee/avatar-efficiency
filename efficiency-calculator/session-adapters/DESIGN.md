@@ -106,12 +106,21 @@ Codex 0.162는 도구를 대부분 **코드 모드 셀**(`custom_tool_call` 이�
 | `send_message`·`followup_task` | `SendMessage{to, message}` |
 | `interrupt_agent`·`close_agent` / `list_agents` | `TaskStop` / `TaskList` |
 
-**셀 결과 규칙.** 각 개별 호출의 결과 글은 그 항목에 기록된 출력이다. 단, 셀이 그 출력을
-화면에 내지 않았으면(셀 출력에 그 글이 없으면) AI가 보지 않은 것이므로 결과 글을 비운다.
-셀 출력 중 어느 개별 호출에도 속하지 않는 글(계획 기록, 도구 목록 조회 등 자바스크립트 자체
-출력)은 이름 `js_output`인 조회형 호출 1건의 결과로 둔다. 측정기는 이것을 다른 미등록 조회
-도구와 같게 다룬다(50단어 이상이면 읽기). 셀의 자바스크립트 접착 코드는 사람 작업으로 세지
-않는다. 사람은 명령을 직접 실행하지 접착 코드를 쓰지 않기 때문이다(`TodoWrite`가 0인 것과 같다).
+**셀 결과 규칙.** 결과 글은 AI가 실제로 본 글, 곧 셀이 찍은 출력이다.
+
+- 셀 출력을 조각으로 나눈다. JSON으로 찍힌 조각은 문자열 값으로 풀어 이스케이프를 지운다
+  (`chunk_id`·`session_id`·`exit_code` 같은 상태 값은 뺀다).
+- 개별 호출마다 자기 항목 출력과 같은 조각을 찾는다. 출력 앞 120자가 조각 안에 있거나,
+  조각 앞 120자가 출력 안에 있으면 같다. 웹 검색은 셀이 다른 꼴로 찍으므로 결과의 제목·주소가
+  조각 안에 있으면 같다. 찾은 조각이 그 호출의 결과 글이다. 못 찾으면 AI가 보지 않은 것이므로
+  결과 글을 비운다.
+- 어느 호출에도 속하지 않는 조각(계획 기록, 도구 목록 조회 등 자바스크립트 자체 출력)은
+  이름 `js_output`인 조회형 호출 1건의 결과로 둔다. 호출과 결과를 같은 시각에 써서 대기 시간은
+  0이다. 측정기는 이것을 다른 미등록 조회 도구와 같게 다룬다(50단어 이상이면 읽기).
+- 셀의 자바스크립트 접착 코드는 사람 작업으로 세지 않는다. 사람은 명령을 직접 실행하지 접착
+  코드를 쓰지 않기 때문이다(`TodoWrite`가 0인 것과 같다).
+- 셀 안의 개별 호출은 그 항목의 시작 시각에 `tool_use`, 끝 시각에 `tool_result`를 쓴다.
+  항목은 "시작 시각을 품은 가장 늦은 호출"의 것으로 본다.
 
 ### 6.3 배경 실행
 
@@ -139,6 +148,27 @@ Codex 0.162는 도구를 대부분 **코드 모드 셀**(`custom_tool_call` 이�
   r = 같은 세션(부모+자식)에서 암호화가 없는 응답들의 평문 단어 합 ÷ (출력 토큰 − 생각 토큰) 합.
   본문 자리에는 서로 겹치지 않는 자리표시 단어를 그 수만큼 넣는다(복붙 판정에 안 걸리게).
   자식이 부모에게 보낸 `send_message`는 자식의 보고문(assistant 텍스트, §68)으로 쓴다.
+  부모가 자식에게 보낸 메시지는 자식이 받은 순서대로 짝짓는다.
+  암호화가 있었으면 결과 `notes`에 건수와 비율 r을 적는다.
+
+### 6.5 다른 에이전트에서 가져온 세션 사본 (구현 중 발견)
+
+Codex는 Claude Code 세션을 가져와(`~/.codex/external_agent_session_imports.json`) 자기 rollout으로
+다시 쓴다. 이 PC에서 확인한 사실:
+
+- 메인 rollout 297개 중 261개(sessions)와 보관함 23개, 합계 284개가 가져온 사본이다.
+- 그중 182개는 모든 줄의 시각이 가져온 순간 하나로 다시 찍혀 있다. 원래 시각은 턴 시작
+  시각(`task_started.started_at`)에만 남는다.
+- 가져온 뒤 Codex에서 새 지시를 이어 한 세션은 0개였다.
+
+규칙: 등록부의 `imported_at`(+2초) 안에 쓰인 줄은 사본으로 보고 버린다. 남는 사람 지시가
+없으면 측정에서 뺀다(`excluded`, 사유: 다른 에이전트 세션 사본). 그 일은 원래 에이전트 쪽에서
+이미 잰다. 따라서 Codex 쪽에 넣으면 같은 일을 두 번 센다. 가져온 뒤 이어 한 부분이 있으면
+그 부분만 잰다.
+
+### 6.6 보관함
+
+Codex 보관함(`~/.codex/archived_sessions/`)의 rollout도 측정 대상이고, 자식 찾기도 두 폴더를 함께 본다.
 
 ## 7. OpenCode (v2 세션, 2.0.29)
 
@@ -179,6 +209,21 @@ Codex 0.162는 도구를 대부분 **코드 모드 셀**(`custom_tool_call` 이�
 | 그 밖(MCP 등) | 이름 그대로 |
 
 자식 세션(`parent_id`)은 재귀로 찾아 `subagents/`에 쓴다. 지시문은 평문이다.
+export 파일로 넣을 때는 같은 폴더의 `<자식 세션ID>.json`을 먼저 보고, 없으면 DB를 본다.
+둘 다 없으면 `notes`에 "자식 세션을 찾지 못함"을 적는다.
+
+### 7.3 구현 중 정한 세부 규칙
+
+- **배경 셸의 실제 종료 시각.** OpenCode는 배경 셸 종료 알림(`synthetic`)을 AI가 바쁘면 늦게 배달한다.
+  Claude는 종료 순간을 대기열 기록(`queue-operation`)으로 남긴다. OpenCode 셸 출력 파일
+  (`~/.local/share/opencode/shell/<프로젝트>/<shellID>.out`)의 마지막 기록 시각이 띄운 시각과 알림
+  시각 사이에 있으면, 그 시각에 대기열 완료 알림을 쓴다. 파일이 없으면 배달 시각만 쓴다.
+  시험 세션: 25초짜리 명령이 배달 시각 기준 56.4초로 잡히던 것이 25.6초로 맞았다.
+- **끝나지 않은 도구 호출**(`status`가 pending·running이고 완료 시각 없음)은 `tool_result`를 쓰지 않는다.
+  Claude 기록과 같다.
+- 1.x에서 2.x로 옮겨진 옛 세션의 도구에는 `ran` 시각이 없다. 호출은 `created`, 결과는 `completed` 시각을 쓴다.
+- 대화 텍스트 조각에는 시각이 없다. 뒤에 오는 조각 중 가장 이른 시각, 없으면 응답 완료 시각을 쓴다.
+- 이 PC의 OpenCode 세션에는 시각이 한 순간으로 다시 찍힌 사본이 없다(메시지 5개 이상 세션 192개 중 0개).
 
 ## 8. 검증
 
@@ -191,6 +236,38 @@ Codex 0.162는 도구를 대부분 **코드 모드 셀**(`custom_tool_call` 이�
 4. 이 PC의 실제 Codex·OpenCode 세션 전체를 일괄 변환·측정해 오류 0건을 확인한다.
 5. 형식 판별·대응 규칙은 개인 정보를 뺀 작은 손 작성 기록으로 단위 시험(`test_session_adapters.py`)을 둔다.
 
+### 8.1 결과 (2026-10-15)
+
+**시험 세션.** 같은 11단계 과제를 Codex 0.162.1·OpenCode 2.0.29로 2턴씩 실행했다. 변환 뒤 측정기에서 확인한 값:
+
+| 항목 | Codex | OpenCode |
+|---|---|---|
+| 사람 지시 | 2 | 2 |
+| 범위 읽기 | 셸 명령(`Get-Content … \| Select-Object -Skip 39`) → 셸 읽기 경로 | `Read{offset: 40, limit: 21}` |
+| 편집·새 파일·삭제 | `MultiEdit`·`Write`·`Remove-Item` 실행 | `Edit`·`Write`·`rm` 실행 |
+| 실행 실패 판정 | `foobarcmd` 오류 결과(`is_error`) | `del`·`foobarcmd` 실패(명령 없음) |
+| 배경 실행 | 1건, 25.1초(실제 종료 항목 시각) | 1건, 25.6초(셸 출력 파일 시각) |
+| 서브에이전트 | 1개(지시문 암호화 → 35단어로 환산) | 1개(평문 지시) |
+| 전략 생각 지점 | 1(서브) — 메인 첫 응답의 생각 토큰이 0 | 4 |
+| 턴 시간 | 128.7초·13.9초 | 132.9초·13.4초 |
+| 미계상 채널 경보·§38 경보 | 없음 | 없음 |
+
+**이 PC 전 세션.** Codex 297개(sessions)와 OpenCode 402개(v2 371 + 옮겨지지 않은 1.x 31)를 변환·측정했다.
+
+- 측정 오류: 0건.
+- 미계상 채널 경보: 0건. §38 경보: 0건.
+- 변환 누락: 원본 도구 호출보다 변환된 호출이 적은 세션 0개. 어느 호출에도 붙지 않은 Codex 항목 0개.
+
+전 세션 리포트(`record_actions_code_api_all_sessions.py --agent codex|opencode`):
+
+- Codex: 14세션 측정. 초소형 제외 47, `codex exec` 헤드리스 제외 5, 다른 에이전트 세션 사본 제외 284.
+- OpenCode: 159세션 측정. 초소형 제외 243.
+
+**측정기 쪽에서 발견한 것(이 변환과 별개).** 실행 실패 정규식(`_EXEC_HARD_FAIL_RE`)은 영어 오류문만 안다.
+Windows PowerShell의 한국어 오류("… 용어가 cmdlet, 함수, 스크립트 파일 또는 실행할 수 있는 프로그램
+이름으로 인식되지 않습니다")는 실패로 보지 않는다. 이 PC의 Claude 세션에도 똑같이 적용되는 규칙이라
+여기서는 고치지 않았다.
+
 ## 9. 파일
 
 - `session-adapters/codex_adapter.py` — Codex rollout → Claude 기록
@@ -198,3 +275,22 @@ Codex 0.162는 도구를 대부분 **코드 모드 셀**(`custom_tool_call` 이�
 - `session-adapters/session_adapters.py` — 형식 판별, 공통 기록 작성기, `convert()`
 - `session-adapters/test_session_adapters.py` — 단위 시험
 - `session-api/record_actions_code_api.py` — `measure()` 입구에서 변환 호출
+- `session-api/record_actions_code_api_all_sessions.py` — `--agent codex|opencode` 전 세션 리포트
+
+## 10. 사용법
+
+```python
+from record_actions_code_api import measure
+measure(r"C:\Users\me\.codex\sessions\2026\10\15\rollout-….jsonl")   # Codex
+measure("opencode:ses_ec1aad989ffeOQ3wJ3zyTu7hVH")                   # OpenCode (DB)
+measure("ses_ec1aad989ffeOQ3wJ3zyTu7hVH.json")                       # OpenCode export
+```
+
+```bash
+python session-api/record_actions_code_api.py <rollout.jsonl | export.json | opencode:<ID>>
+python session-api/record_actions_code_api_all_sessions.py --agent codex --out codex.md
+python session-api/record_actions_code_api_all_sessions.py --agent opencode --out opencode.md
+python session-adapters/session_adapters.py <입력> --out <폴더>   # 변환 결과만 보기
+```
+
+결과에 `source_format`(codex·opencode)이 붙는다. 변환에서 생긴 주석(암호화 환산 등)은 `notes` 앞에 붙는다.
