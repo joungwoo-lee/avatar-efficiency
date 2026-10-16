@@ -13,20 +13,16 @@ from pathlib import Path
 
 from session_translator import (OPENCODE_PREFIX, ClaudeWriter, epoch,
                               file_ops_to_tools, parse_apply_patch,
-                              task_notification, _clean)
-
-DEFAULT_DB = os.path.join(str(Path.home()), ".local", "share", "opencode",
-                          "opencode.db")
+                              task_notification, _clean, ro_uri,
+                              find_opencode_db)
 
 
 # ---------------------------------------------------------------- 읽기
 
 def _connect(db_path):
-    db_path = db_path or DEFAULT_DB
-    if not os.path.exists(db_path):
+    if not db_path or not os.path.exists(db_path):
         return None
-    uri = "file:" + Path(db_path).resolve().as_posix() + "?mode=ro"
-    return sqlite3.connect(uri, uri=True)
+    return sqlite3.connect(ro_uri(db_path), uri=True)   # 읽기 전용, 경로는 URI 인코딩
 
 
 def _has_table(con, name):
@@ -99,10 +95,12 @@ def _load_v1(con, sid):
 
 
 def load_session(sid, db_path=None):
-    """세션 ID → (메시지 목록, 자식 세션 ID 목록, 판형). DB 읽기 전용."""
+    """세션 ID → (메시지 목록, 자식 세션 ID 목록, 판형). DB 읽기 전용.
+    db_path가 없으면 find_opencode_db()로 찾는다."""
+    db_path = db_path or find_opencode_db()
     con = _connect(db_path)
     if con is None:
-        raise FileNotFoundError(f"OpenCode DB 없음: {db_path or DEFAULT_DB}")
+        raise FileNotFoundError(f"OpenCode DB 없음: {db_path}")
     try:
         if _has_table(con, "session_v2") and con.execute(
                 "select 1 from session_v2 where id=?", (sid,)).fetchone():
@@ -228,7 +226,7 @@ def map_tool(name, state):
 
 # ---------------------------------------------------------------- 변환 본체
 
-SHELL_DIR = os.path.join(os.path.dirname(DEFAULT_DB), "shell")
+SHELL_DIR = None   # 시험용 덮어쓰기. 평소에는 DB 옆의 shell/ 폴더를 쓴다
 
 
 def shell_end_time(shell_id, launched, notified, shell_dir=None):
@@ -236,7 +234,9 @@ def shell_end_time(shell_id, launched, notified, shell_dir=None):
     기록 시각. 띄운 시각과 알림 시각 사이에 있을 때만 쓴다. 없으면 None."""
     if not shell_id or launched is None:
         return None
-    root = shell_dir or SHELL_DIR
+    root = SHELL_DIR or shell_dir
+    if not root:
+        return None
     try:
         for proj in os.listdir(root):
             f = os.path.join(root, proj, f"{shell_id}.out")
@@ -257,7 +257,7 @@ def _t(d, *keys):
     return None
 
 
-def convert_messages(msgs, writer, children_seen=None):
+def convert_messages(msgs, writer, children_seen=None, shell_dir=None):
     """v2 메시지 목록 → writer. 반환: Agent 호출로 만난 자식 세션 ID 목록."""
     kids = []
     turn_start = None
@@ -287,7 +287,7 @@ def convert_messages(msgs, writer, children_seen=None):
                 state = md.get("state") or "completed"
                 # 실제 종료 시각 = 셸 출력 파일의 마지막 기록 시각(띄운 시각~알림 사이일 때만).
                 # AI가 바쁠 때 끝나면 알림은 늦게 배달된다 — Claude의 대기열 기록에 해당.
-                end = shell_end_time(sh, bg_launch.get(sh), created)
+                end = shell_end_time(sh, bg_launch.get(sh), created, shell_dir)
                 if end is not None and end < created:
                     writer.queue_notification(end, task_notification(sh, state))
                 writer.user_text(created, task_notification(
@@ -390,8 +390,13 @@ def _load_export(path):
 
 
 def convert_opencode(src, out_dir, db_path=None):
-    """OpenCode 세션 1개(+자식) → out_dir에 Claude 모양 jsonl."""
+    """OpenCode 세션 1개(+자식) → out_dir에 Claude 모양 jsonl.
+
+    db_path: 실제 DB 경로(session_translator.find_opencode_db로 찾은 것).
+    export 파일 입력이면 None이어도 된다 — 그때는 자식 세션을 같은 폴더의
+    <세션ID>.json에서만 찾는다. 셸 출력 파일은 DB 옆 shell/ 폴더에서 찾는다."""
     s = str(src)
+    shell_dir = os.path.join(os.path.dirname(db_path), "shell") if db_path else None
     if s.startswith(OPENCODE_PREFIX):
         sid = s[len(OPENCODE_PREFIX):]
         msgs, kids, form = load_session(sid, db_path)
@@ -401,12 +406,13 @@ def convert_opencode(src, out_dir, db_path=None):
         sid = sid or Path(s).stem
         kids, form = [], "export"
         name = Path(s).name
-        try:
-            _m, kids, _f = load_session(sid, db_path)
-        except (KeyError, FileNotFoundError, sqlite3.Error):
-            kids = []
+        if db_path:
+            try:
+                _m, kids, _f = load_session(sid, db_path)
+            except (KeyError, FileNotFoundError, sqlite3.Error):
+                kids = []
     w = ClaudeWriter(sid)
-    found = convert_messages(msgs, w)
+    found = convert_messages(msgs, w, shell_dir=shell_dir)
     main = os.path.join(out_dir, sid + ".jsonl")
     w.write(main)
     notes = []
@@ -426,15 +432,18 @@ def convert_opencode(src, out_dir, db_path=None):
         if sib and os.path.exists(sib):
             cmsgs, _ = _load_export(sib)
             gk = []
-        else:
+        elif db_path:
             try:
                 cmsgs, gk, _f = load_session(cid, db_path)
             except (KeyError, FileNotFoundError, sqlite3.Error):
                 missing.append(cid)
                 continue
+        else:
+            missing.append(cid)
+            continue
         os.makedirs(sub_dir, exist_ok=True)
         cw = ClaudeWriter(cid, sidechain=True)
-        more = convert_messages(cmsgs, cw)
+        more = convert_messages(cmsgs, cw, shell_dir=shell_dir)
         subs.append(cw.write(os.path.join(sub_dir, f"agent-{cid}.jsonl")))
         queue.extend(k for k in gk + more if k and k not in done)
     if missing:

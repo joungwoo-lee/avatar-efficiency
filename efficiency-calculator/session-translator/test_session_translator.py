@@ -17,9 +17,10 @@ for _p in (_HERE, _ROOT / "session-api", _ROOT / "agent-effort",
            _ROOT / "human-effort" / "requirement-actions"):
     sys.path.insert(0, str(_p))
 
-from session_translator import (convert, convert_all, detect_format,  # noqa: E402
+from session_translator import (convert, detect_format,  # noqa: E402
                               hunks_from_unified_diff, parse_apply_patch,
-                              file_ops_to_tools)
+                              file_ops_to_tools, list_sessions, translate_session,
+                              find_opencode_db, find_codex_home, ro_uri)
 import opencode_translator  # noqa: E402
 
 T0 = 1792040000.0          # 기준 시각(초)
@@ -288,20 +289,72 @@ class CodexTest(unittest.TestCase):
         res = self.conv()
         self.assertIn("가져온 세션 사본", res["excluded"])
         self.assertIsNone(res["main"])
-        summary = convert_all("codex", os.path.join(self.tmp, "all"), root=self.tmp)
-        self.assertEqual((len(summary["converted"]), len(summary["excluded"])), (0, 1))
+        with translate_session(self.parent_path, os.path.join(self.tmp, "work")) as t:
+            self.assertIsNone(t.main)
+            self.assertIn("가져온 세션 사본", t.excluded)
 
-    def test_convert_all_folder(self):
-        # 전 세션 변환 — 자식·guardian은 최상위 목록에서 빠지고 부모 변환에 들어간다
-        out = os.path.join(self.tmp, "all")
-        summary = convert_all("codex", out, root=self.tmp)
-        self.assertEqual(len(summary["converted"]), 1)
-        self.assertEqual(summary["converted"][0]["subagents"], 1)
-        self.assertEqual(summary["errors"], [])
-        main = summary["converted"][0]["main"]
-        # 파일 수정 시각 = 기록의 마지막 사건 시각 (측정기의 "진행 중" 제외에 안 걸리게)
-        self.assertAlmostEqual(os.path.getmtime(main), T0 + 41.2, places=0)
-        self.assertTrue(os.path.exists(os.path.join(out, "_translator_summary.json")))
+    def test_list_sessions_top_level_only(self):
+        # 자식·guardian은 최상위 목록에서 빠지고 부모를 번역할 때 함께 들어간다
+        rows = list_sessions("codex", root=self.tmp)
+        self.assertEqual([os.path.normcase(r["src"]) for r in rows],
+                         [os.path.normcase(self.parent_path)])
+        self.assertEqual(rows[0]["agent"], "codex")
+
+    def test_list_sessions_since_and_seen(self):
+        # 스레드 목록이 없으면 기록의 마지막 사건 시각(T0+41.2) — 파일 수정 시각은 안 본다
+        os.utime(self.parent_path, (T0 + 99999, T0 + 99999))
+        rows = list_sessions("codex", root=self.tmp)
+        self.assertAlmostEqual(rows[0]["updated_at"], T0 + 41.2, places=1)
+        self.assertEqual(len(list_sessions("codex", root=self.tmp, since=T0)), 1)
+        self.assertEqual(list_sessions("codex", root=self.tmp, since=T0 + 100), [])
+        seen = {rows[0]["src"]: rows[0]["updated_at"]}   # 지난번에 처리한 뒤 안 바뀜
+        self.assertEqual(list_sessions("codex", root=self.tmp, seen=seen), [])
+
+    def test_list_sessions_uses_codex_thread_list(self):
+        # Codex 스레드 목록(state_N.sqlite)의 갱신 시각이 있으면 그것을 쓴다
+        import sqlite3
+        tid = "11111111-2222-3333-4444-555555555555"
+        named = os.path.join(self.root, f"rollout-2026-10-15T00-00-00-{tid}.jsonl")
+        os.replace(self.parent_path, named)
+        con = sqlite3.connect(os.path.join(self.tmp, "state_5.sqlite"))
+        con.execute("create table threads (id text, updated_at_ms integer)")
+        con.execute("insert into threads values (?, ?)", (tid, int((T0 + 700) * 1000)))
+        con.commit()
+        con.close()
+        rows = list_sessions("codex", root=self.tmp)
+        self.assertAlmostEqual(rows[0]["updated_at"], T0 + 700, places=1)
+        seen = {rows[0]["src"]: T0 + 500}           # 그 뒤로 바뀜 → 다시 나온다
+        self.assertEqual(len(list_sessions("codex", root=self.tmp, seen=seen)), 1)
+
+    def test_translate_session_one_at_a_time(self):
+        work = os.path.join(self.tmp, "state", "translate")
+        with translate_session(self.parent_path, work) as t:
+            folder = t.folder
+            # 측정기가 원하는 모양: 폴더 안에 이 세션 파일만
+            self.assertTrue(folder.startswith(work))
+            self.assertEqual(os.path.dirname(t.main), folder)
+            self.assertEqual(len(t.subagents), 1)
+            self.assertTrue(t.subagents[0].startswith(os.path.join(folder, "")))
+            # 파일 수정 시각 = 기록의 마지막 사건 시각 (측정기의 "진행 중" 제외에 안 걸리게)
+            self.assertAlmostEqual(os.path.getmtime(t.main), T0 + 41.2, places=0)
+            from record_actions_code_api_all_sessions import collect
+            rows, n_excl, n_err = collect(folder)[:3]
+            self.assertEqual((len(rows) + n_excl, n_err), (1, 0))   # 폴더째 넣어도 1세션
+        self.assertFalse(os.path.exists(folder))      # 블록이 끝나면 지운다
+
+    def test_translate_session_cleans_up_on_error(self):
+        work = os.path.join(self.tmp, "work")
+        with self.assertRaises(RuntimeError):
+            with translate_session(self.parent_path, work) as t:
+                folder = t.folder
+                raise RuntimeError("측정 실패")
+        self.assertFalse(os.path.exists(folder))
+
+    def test_work_dir_required(self):
+        with self.assertRaises(ValueError):
+            convert(self.parent_path, None)
+        with self.assertRaises(ValueError):
+            translate_session(self.parent_path, None)
 
     def test_measure_end_to_end(self):
         # 번역 → 기존 측정기(변경 없음)에 Claude 기록으로 넣는다
@@ -425,11 +478,75 @@ class ClaudePassThroughTest(unittest.TestCase):
             write_jsonl(p, [{"type": "user", "timestamp": iso(T0),
                              "message": {"role": "user", "content": "hi"}}])
             self.assertEqual(detect_format(p), "claude")
-            res = convert(p)
-            self.assertEqual(res["main"], p)
-            self.assertIsNone(res["tmpdir"])
+            res = convert(p, os.path.join(tmp, "out"))
+            self.assertEqual(res["main"], p)              # 원본 경로 그대로, 번역 안 함
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+class LocationTest(unittest.TestCase):
+    """경로 찾기 — URI 인코딩, 환경변수, 사람이 정한 위치가 없으면 바로 오류."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.env = {k: os.environ.get(k) for k in ("OPENCODE_DB", "XDG_DATA_HOME", "CODEX_HOME")}
+        for k in self.env:
+            os.environ.pop(k, None)
+
+    def tearDown(self):
+        for k, v in self.env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def make_db(self, folder):
+        import sqlite3
+        os.makedirs(folder, exist_ok=True)
+        p = os.path.join(folder, "opencode.db")
+        con = sqlite3.connect(p)
+        con.execute("create table session_v2 (id text, parent_id text, time_updated integer)")
+        con.execute("insert into session_v2 values ('ses_a', null, ?)", (int(T0 * 1000),))
+        con.commit()
+        con.close()
+        return p
+
+    def test_uri_encodes_special_chars(self):
+        u = ro_uri(os.path.join(self.tmp, "a?b#c d", "opencode.db"))
+        self.assertTrue(u.startswith("file:///"))
+        body = u[:-len("?mode=ro")]
+        self.assertTrue(u.endswith("?mode=ro"))
+        for raw, enc in (("?", "%3F"), ("#", "%23"), (" ", "%20")):
+            self.assertIn(enc, body)
+            self.assertNotIn(raw, body)
+
+    def test_db_in_folder_with_hash_opens(self):
+        db = self.make_db(os.path.join(self.tmp, "x#y z"))   # Windows는 ?를 이름에 못 쓴다
+        rows = list_sessions("opencode", root=db)
+        self.assertEqual([r["src"] for r in rows], ["opencode:ses_a"])
+
+    def test_opencode_db_env_and_xdg(self):
+        db = self.make_db(os.path.join(self.tmp, "custom"))
+        os.environ["OPENCODE_DB"] = db
+        self.assertEqual(find_opencode_db(), str(Path(db).resolve()))
+        os.environ.pop("OPENCODE_DB")
+        xdg_db = self.make_db(os.path.join(self.tmp, "xdg", "opencode"))
+        os.environ["XDG_DATA_HOME"] = os.path.join(self.tmp, "xdg")
+        self.assertEqual(find_opencode_db(), str(Path(xdg_db).resolve()))
+        self.assertEqual(find_opencode_db(db), str(Path(db).resolve()))   # 인자가 먼저
+
+    def test_given_location_missing_is_error(self):
+        os.environ["OPENCODE_DB"] = os.path.join(self.tmp, "없음.db")
+        with self.assertRaises(FileNotFoundError):
+            find_opencode_db()
+        with self.assertRaises(FileNotFoundError):
+            find_opencode_db(os.path.join(self.tmp, "없음2.db"))
+        os.environ["CODEX_HOME"] = os.path.join(self.tmp, "no-codex")
+        with self.assertRaises(FileNotFoundError):
+            find_codex_home()
+        os.environ.pop("CODEX_HOME")
+        self.assertEqual(find_codex_home(self.tmp), str(Path(self.tmp).resolve()))
 
 
 if __name__ == "__main__":

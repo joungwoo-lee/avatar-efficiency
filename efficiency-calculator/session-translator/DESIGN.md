@@ -25,7 +25,7 @@ Codex·OpenCode 세션 ──번역기(session-translator)──▶ Claude 모�
 - 번역한 파일의 수정 시각은 그 기록의 마지막 사건 시각으로 맞춘다. 측정기는 최근 10분 안에 바뀐
   파일을 진행 중 세션으로 빼기 때문이다(§44). 원본이 실제로 진행 중일 때만 그 규칙에 걸린다.
 - 기록이 하나도 없는 세션은 쓰지 않고 요약에 "빈 세션"으로 센다(빈 파일을 남기면 수정 시각이 지금이 된다).
-- 번역 중 생긴 주석(암호화 본문 환산, 사본 제외 사유)은 `<폴더>/_translator_summary.json`에 남긴다.
+- 번역 중 생긴 주석(암호화 본문 환산)과 제외 사유는 번역 결과(`t.notes`·`t.excluded`)로 돌려준다.
   측정기 결과에는 섞지 않는다.
 
 ## 3. "100% 변환"의 정의
@@ -38,7 +38,7 @@ Codex·OpenCode 세션 ──번역기(session-translator)──▶ Claude 모�
 이 정의를 벗어나는 항목은 한 가지뿐이다. Codex 다중 에이전트 v2가 **암호화해서 저장하는
 에이전트 사이 메시지 본문**이다. 본문은 어디에도 평문으로 남지 않는다. 대신 그 메시지를 만든
 응답의 출력 토큰 수는 정확히 남는다. 그래서 단어 수를 "토큰 수 × 같은 세션의 평문 응답에서 잰
-단어/토큰 비율"로 환산한다(6.4절). 이 환산은 번역 요약(`_translator_summary.json`)의 세션별 `notes`에 건수와 함께 드러낸다.
+단어/토큰 비율"로 환산한다(6.4절). 이 환산은 번역 결과의 `notes`(`t.notes`)에 건수와 함께 드러낸다.
 
 ## 4. 측정기가 읽는 Claude 기록 계약
 
@@ -157,7 +157,7 @@ Codex 0.162는 도구를 대부분 **코드 모드 셀**(`custom_tool_call` 이�
   본문 자리에는 서로 겹치지 않는 자리표시 단어를 그 수만큼 넣는다(복붙 판정에 안 걸리게).
   자식이 부모에게 보낸 `send_message`는 자식의 보고문(assistant 텍스트, §68)으로 쓴다.
   부모가 자식에게 보낸 메시지는 자식이 받은 순서대로 짝짓는다.
-  암호화가 있었으면 번역 요약의 `notes`에 건수와 비율 r을 적는다.
+  암호화가 있었으면 번역 결과의 `notes`에 건수와 비율 r을 적는다.
 
 ### 6.5 다른 에이전트에서 가져온 세션 사본 (구현 중 발견)
 
@@ -226,7 +226,7 @@ Codex 앱은 2026-10-15 21:45 ~ 10-16 00:55에 기록 이전(`legacy_to_paginate
 
 자식 세션(`parent_id`)은 재귀로 찾아 `subagents/`에 쓴다. 지시문은 평문이다.
 export 파일로 넣을 때는 같은 폴더의 `<자식 세션ID>.json`을 먼저 보고, 없으면 DB를 본다.
-둘 다 없으면 번역 요약의 `notes`에 "자식 세션을 찾지 못함"을 적는다.
+둘 다 없으면 번역 결과의 `notes`에 "자식 세션을 찾지 못함"을 적는다.
 
 ### 7.3 구현 중 정한 세부 규칙
 
@@ -292,30 +292,55 @@ Windows PowerShell의 한국어 오류("… 용어가 cmdlet, 함수, 스크립�
 이름으로 인식되지 않습니다")는 실패로 보지 않는다. 이 PC의 Claude 세션에도 똑같이 적용되는 규칙이라
 여기서는 고치지 않았다.
 
+### 8.3 리뷰 반영 뒤 재검증 — 워커 방식 (2026-10-16)
+
+워커가 부르는 방식 그대로 돌렸다: `list_sessions` → 세션마다 `translate_session`(작업 폴더 지정) →
+그 폴더를 기존 전 세션 리포트의 `collect()`에 넣기 → 블록 끝에서 삭제.
+
+- 결과는 8.2와 같다. Codex는 측정 14세션, 사람 10,360분, 에이전트 810분이다. OpenCode는 측정 158세션, 사람 20,800분, 에이전트 4,810분이다.
+- 디스크에 동시에 있던 번역 파일은 한 세션 몫뿐이었다. 가장 큰 세션도 Codex 4.73MB, OpenCode 1.66MB였다.
+  끝난 뒤 작업 폴더는 비어 있었다.
+- "최근 30일" 걸러내기:
+  - Codex 250 / 351. 파일 수정 시각을 쓰던 때는 321이었다. 압축·가져오기로 파일만 다시 쓰인 세션이 빠졌다.
+  - OpenCode 33 / 401.
+
 ## 9. 파일
 
 - `session-translator/codex_translator.py` — Codex rollout → Claude 기록
 - `session-translator/opencode_translator.py` — OpenCode v2·1.x → Claude 기록
-- `session-translator/session_translator.py` — 형식 판별, 압축 기록 읽기, 공통 기록 작성기,
-  `convert()`(세션 1개)·`convert_all()`(이 PC 전체), CLI
-- `session-translator/test_session_translator.py` — 단위 시험(번역 → 기존 측정기 2단계 포함)
+- `session-translator/session_translator.py` — 형식 판별, 압축 기록 읽기, 공통 기록 작성기, 위치 찾기,
+  `list_sessions()`·`translate_session()`(워커용), `convert()`(아래 단계), 점검용 CLI
+- `session-translator/test_session_translator.py` — 단위 시험
+- `session-translator/README.md` — 사용법
 
 측정기 쪽 파일은 하나도 바꾸지 않는다.
 
 ## 10. 사용법
 
-번역(이 폴더) → 측정(기존 측정기) 두 단계다.
+워커 코드 안에서 함수로 부른다. 자세한 것은 [README.md](README.md).
 
-```bash
-# 세션 1개
-python session-translator/session_translator.py <rollout.jsonl | rollout.jsonl.zst | export.json | opencode:<ID>> --out conv
-python session-api/record_actions_code_api.py conv/<세션>.jsonl
-
-# 이 PC 전체
-python session-translator/session_translator.py --all codex    --out conv-codex      # [--root Codex 홈]
-python session-translator/session_translator.py --all opencode --out conv-opencode   # [--root opencode.db]
-python session-api/record_actions_code_api_all_sessions.py conv-codex    --out codex.md
-python session-api/record_actions_code_api_all_sessions.py conv-opencode --out opencode.md
+```python
+for s in list_sessions("opencode", since=time.time() - 30 * 86400, seen=ledger):
+    with translate_session(s["src"], work_dir=state_dir / "translate") as t:
+        if t.main:
+            r = measure(t.main, subagent_paths=t.subagents)
+    ledger[s["src"]] = s["updated_at"]
 ```
 
-번역 요약(번역·제외·실패 수, 세션별 주석)은 `<폴더>/_translator_summary.json`이다.
+## 11. 안전 규칙 (2026-10-16 리뷰 반영)
+
+리뷰 지적: 알고리즘은 그대로 써도 되지만, 바깥 껍데기가 안전 규칙을 어겼다. 경로 찾기, 한꺼번에 변환, 임시 폴더,
+매번 전체 재처리, 결과 모양이 문제였다. 예전에 세션 전체를 복사했다가 240GB가 쌓여 시스템 임시 폴더가 찼고,
+opencode가 켜지지 않은 사고가 있었다. 그 사고가 다시 나지 않게 다음을 코드로 강제한다.
+(리뷰가 말한 워커 설계 문서는 이 PC에 없어서 리뷰에 적힌 규칙대로 구현했다.)
+
+| 번호 | 지적 | 고친 것 |
+|---|---|---|
+| 1 | DB 주소를 `"file:" + 경로`로 이어 붙여 `?`·`#`에서 잘리고 Windows에서 슬래시가 모자람 | `ro_uri()` = `Path.resolve().as_uri() + "?mode=ro"`. `?`→`%3F`, `#`→`%23`, `file:///C:/...` |
+| 2 | OpenCode DB 위치가 고정됨 | `find_opencode_db()`: 인자 → `OPENCODE_DB` → `XDG_DATA_HOME` → 기본. `find_codex_home()`: 인자 → `CODEX_HOME` → `~/.codex`. 사람이 정한 위치(인자·환경변수)가 없으면 바로 오류. 링크는 실제 위치로 따라감 |
+| 3 | 전 세션을 폴더에 쌓음 | `convert_all()`·`--all` 삭제. `translate_session()`이 한 세션만 번역하고 `with` 블록 끝에서 지움(예외가 나도) |
+| 4 | 작업 폴더를 안 주면 시스템 tmp에 씀 | `tempfile` 사용 삭제. 작업 폴더가 필수 인자(없으면 `ValueError`). 워커의 `state_dir` 아래를 넘긴다 |
+| 5 | 매번 전 세션을 다시 봄 | `list_sessions(since=, seen=)`. `updated_at`은 실제 변경 시각이다. Codex는 스레드 목록 → 마지막 사건 시각, OpenCode는 세션 갱신 시각. 파일 수정 시각은 쓰지 않는다 |
+| 6 | 결과가 파일 1개 + 경로 목록이라 계산기가 원하는 폴더 모양과 다름 | `translate_session()`이 세션 전용 폴더(`t.folder`)를 내줌. 그 안에는 이 세션의 메인·서브 기록만 계산기 자리대로 있다. `collect(t.folder)`나 `measure(t.main, subagent_paths=t.subagents)`로 바로 잰다 |
+
+`OPENCODE_DB`는 이 번역기가 정한 이름이다. OpenCode 자체가 읽는 환경변수는 아니다.

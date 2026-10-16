@@ -1,31 +1,25 @@
 # -*- coding: utf-8 -*-
-"""Codex·OpenCode 세션 → Claude Code 기록 모양 jsonl 변환 (§96, DESIGN.md).
+"""Session Translator — Codex·OpenCode 세션 → Claude Code 세션 모양 jsonl (§96, DESIGN.md).
 
 번역기만 한다 — 측정기(session-api 등)는 이 모듈을 모르고, 바꾸지도 않는다.
 이 모듈은 "다른 에이전트의 이 기록이 Claude 기록의 무엇에 해당하는가"만 정해
 Claude Code 세션 모양 파일을 써 낸다. 그 파일을 기존 측정기에 그대로 넣는다.
 
-사용:
-    from session_translator import detect_format, convert, convert_all
-    fmt = detect_format("rollout-....jsonl")      # "claude" | "codex" | "opencode"
-    out = convert("rollout-....jsonl", out_dir="conv")
-    out["main"], out["subagents"], out["notes"]   # 쓴 파일·주석
-    convert_all("codex", "conv-codex")            # 이 PC 세션 전체
+워커에서 부르는 법 (한 세션씩 번역 → 측정 → 삭제):
+    from session_translator import list_sessions, translate_session
+    for s in list_sessions("opencode", since=time.time() - 30 * 86400, seen=ledger):
+        with translate_session(s["src"], work_dir=state_dir / "translate") as t:
+            if t.main:
+                r = measure(t.main, subagent_paths=t.subagents)
+        ledger[s["src"]] = s["updated_at"]
 
-CLI:
-    python session_translator.py <입력> --out 폴더
-    python session_translator.py --all codex|opencode --out 폴더 [--root Codex홈|opencode.db]
-    입력 = Codex rollout jsonl | OpenCode export JSON | opencode:<세션ID>
-
-측정 (기존 측정기, 변경 없음):
-    python ../session-api/record_actions_code_api.py 폴더/<세션>.jsonl
-    python ../session-api/record_actions_code_api_all_sessions.py 폴더
+위치 찾기: find_opencode_db() — 인자 → OPENCODE_DB → XDG_DATA_HOME → 기본 위치,
+          find_codex_home() — 인자 → CODEX_HOME → ~/.codex.
 """
 import json
 import os
 import re
 import sys
-import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -419,29 +413,97 @@ def task_notification(task_id, status, extra=""):
     return body + "</task-notification>"
 
 
+# ---------------------------------------------------------------- 위치 찾기
+
+def ro_uri(path):
+    """SQLite 읽기 전용 URI. 경로를 문자열로 이어 붙이지 않는다.
+
+    `Path.as_uri()`가 `?`·`#`·공백을 퍼센트 인코딩하고 Windows에서
+    `file:///C:/...`(슬래시 3개)를 만든다 — 경로 일부가 질의·조각으로 잘려
+    엉뚱한 빈 DB를 열거나 못 여는 일을 막는다."""
+    return Path(path).resolve().as_uri() + "?mode=ro"
+
+
+def find_opencode_db(explicit=None):
+    """OpenCode DB 경로 → 실제 위치(심볼릭 링크를 따라간 절대 경로).
+
+    찾는 순서: ① 인자 ② 환경변수 OPENCODE_DB ③ XDG_DATA_HOME/opencode/opencode.db
+    ④ ~/.local/share/opencode/opencode.db. 처음 있는 것을 쓰고, 없으면 찾아본
+    경로를 모두 적어 FileNotFoundError. ①·②는 사람이 정한 위치라 그 파일이
+    없으면 다음 후보로 넘어가지 않고 바로 오류를 낸다(엉뚱한 DB를 읽지 않게)."""
+    for given, label in ((explicit, "인자"), (os.environ.get("OPENCODE_DB"), "OPENCODE_DB")):
+        if given:
+            p = Path(given).expanduser()
+            if not p.exists():
+                raise FileNotFoundError(f"OpenCode DB 없음({label}): {given}")
+            return str(p.resolve())
+    tried = []
+    for cand in (
+                 os.path.join(os.environ["XDG_DATA_HOME"], "opencode", "opencode.db")
+                 if os.environ.get("XDG_DATA_HOME") else None,
+                 os.path.join(str(Path.home()), ".local", "share", "opencode",
+                              "opencode.db")):
+        if not cand:
+            continue
+        tried.append(str(cand))
+        p = Path(cand).expanduser()
+        if p.exists():
+            return str(p.resolve())
+    raise FileNotFoundError("OpenCode DB를 찾지 못함 — 찾아본 곳: " + ", ".join(tried))
+
+
+def find_codex_home(explicit=None):
+    """Codex 홈(sessions·archived_sessions의 부모) → 실제 위치.
+
+    찾는 순서: ① 인자 ② 환경변수 CODEX_HOME ③ ~/.codex. ①·②가 주어졌는데
+    폴더가 없으면 다음 후보로 넘어가지 않고 바로 오류를 낸다."""
+    for given, label in ((explicit, "인자"), (os.environ.get("CODEX_HOME"), "CODEX_HOME")):
+        if given:
+            p = Path(given).expanduser()
+            if not p.is_dir():
+                raise FileNotFoundError(f"Codex 홈 없음({label}): {given}")
+            return str(p.resolve())
+    tried = []
+    for cand in (os.path.join(str(Path.home()), ".codex"),):
+        if not cand:
+            continue
+        tried.append(str(cand))
+        p = Path(cand).expanduser()
+        if p.is_dir():
+            return str(p.resolve())
+    raise FileNotFoundError("Codex 홈을 찾지 못함 — 찾아본 곳: " + ", ".join(tried))
+
+
 # ---------------------------------------------------------------- 변환 입구
 
-def convert(src, out_dir=None, opencode_db=None, codex_root=None):
-    """입력 → {"format", "main", "subagents", "notes", "tmpdir", "name"}.
+def convert(src, out_dir, opencode_db=None, codex_home=None):
+    """세션 1개 → out_dir에 Claude 모양 jsonl. 반환
+    {"format", "main", "subagents", "notes", "name"} (+ 빠질 때 "excluded").
 
-    out_dir를 안 주면 임시 폴더를 만든다(호출자가 지운다). Claude 기록이면
-    변환하지 않고 그대로 돌려준다(tmpdir=None)."""
+    out_dir는 반드시 준다 — 시스템 임시 폴더에는 쓰지 않는다(그 폴더가 차서
+    난 사고가 있었다). 보통은 아래 translate_session()을 쓴다. Claude 기록이면
+    변환하지 않고 원본 경로를 그대로 돌려준다(원본은 건드리지 않는다)."""
+    if not out_dir:
+        raise ValueError("out_dir가 필요하다 — 시스템 임시 폴더에는 쓰지 않는다")
     fmt = detect_format(src)
     if fmt == "claude":
         return {"format": "claude", "main": str(src), "subagents": None,
-                "notes": [], "tmpdir": None, "name": Path(str(src)).name}
-    tmpdir = None
-    if out_dir is None:
-        out_dir = tmpdir = tempfile.mkdtemp(prefix=f"{fmt}_translate_")
+                "notes": [], "name": Path(str(src)).name}
     os.makedirs(out_dir, exist_ok=True)
     if fmt == "codex":
         from codex_translator import convert_codex
-        res = convert_codex(str(src), out_dir, sessions_root=codex_root)
+        home = find_codex_home(codex_home) if codex_home else None
+        res = convert_codex(str(src), out_dir, codex_home=home)
     else:
         from opencode_translator import convert_opencode
-        res = convert_opencode(str(src), out_dir, db_path=opencode_db)
+        try:
+            db = find_opencode_db(opencode_db)
+        except FileNotFoundError:
+            if str(src).startswith(OPENCODE_PREFIX):
+                raise                      # DB 세션 지정인데 DB가 없다
+            db = None                      # export 파일은 DB 없이도 번역된다
+        res = convert_opencode(str(src), out_dir, db_path=db)
     res["format"] = fmt
-    res["tmpdir"] = tmpdir
     if res.get("main") and os.path.getsize(res["main"]) == 0:
         # 기록이 하나도 없는 세션 — 잴 것이 없다. 빈 파일을 남기면 수정 시각이
         # "지금"이라 측정기가 진행 중 세션으로 센다.
@@ -471,107 +533,193 @@ def _stamp(path):
         os.utime(path, (last, last))
 
 
-# ---------------------------------------------------------------- 전 세션 변환
+# ---------------------------------------------------------------- 목록 → 한 세션씩
 
-def list_sources(agent, root=None):
-    """이 PC의 측정 대상 원본 목록. agent = "codex" | "opencode".
+def list_sessions(agent, root=None, since=None, seen=None):
+    """측정 대상 원본 목록 → [{"src", "agent", "updated_at"}] (오래된 것부터).
 
-    codex: Codex 홈(기본 ~/.codex)의 sessions·archived_sessions rollout 중 자식
-           (서브에이전트) 아닌 것 — 자식은 부모 변환에 함께 들어간다.
-    opencode: opencode.db의 최상위 세션(v2 + 옮겨지지 않은 1.x) → "opencode:<ID>"."""
+    agent = "codex" | "opencode". root = Codex 홈 또는 OpenCode DB(없으면 찾는다).
+    since: epoch 초 — 이 시각 뒤에 바뀐 세션만 (예: 최근 30일 = time.time() - 30*86400).
+    seen:  {src: updated_at} — 지난번에 처리한 세션. 그 뒤로 바뀐 것만 남긴다.
+    변환은 하지 않는다. 하나씩 translate_session()에 넣는다.
+
+    codex: sessions·archived_sessions의 rollout 중 자식(서브에이전트)이 아닌 것.
+           자식은 부모를 번역할 때 함께 들어간다. updated_at = 파일 수정 시각.
+    opencode: 최상위 세션(v2 + 옮겨지지 않은 1.x) → "opencode:<ID>".
+              updated_at = 세션 갱신 시각."""
     if agent == "codex":
-        from codex_translator import DEFAULT_ROOT, rollout_files, _pl
-        home = root or str(Path(DEFAULT_ROOT).parent)
-        out = []
+        from codex_translator import rollout_files, _pl
+        home = find_codex_home(root)
+        thread_updated = _codex_thread_updated(home)
+        rows = []
         for f in rollout_files(home):
             try:
                 src = _pl(json.loads(first_line(f))).get("source")
             except (OSError, ValueError, RuntimeError):
                 src = None
             if not (isinstance(src, dict) and "subagent" in src):
-                out.append(f)
-        return out
-    if agent == "opencode":
+                rows.append((f, thread_updated.get(_thread_id(f)) or _last_event_time(f)
+                             or os.path.getmtime(f)))
+    elif agent == "opencode":
         import sqlite3
-        from opencode_translator import DEFAULT_DB
-        db = root or DEFAULT_DB
-        con = sqlite3.connect("file:" + Path(db).resolve().as_posix() + "?mode=ro",
-                              uri=True)
+        con = sqlite3.connect(ro_uri(find_opencode_db(root)), uri=True)
         try:
-            ids = [r[0] for r in con.execute(
-                "select id from session_v2 where parent_id is null")]
-            ids += [r[0] for r in con.execute(
-                "select id from session s where parent_id is null and not exists"
-                "(select 1 from session_v2 v where v.id = s.id)")]
+            rows = []
+            if con.execute("select 1 from sqlite_master where name='session_v2'").fetchone():
+                rows += [(OPENCODE_PREFIX + i, (u or 0) / 1000.0) for i, u in con.execute(
+                    "select id, time_updated from session_v2 where parent_id is null")]
+            if con.execute("select 1 from sqlite_master where name='session'").fetchone():
+                v2 = {r[0][len(OPENCODE_PREFIX):] for r in rows}
+                rows += [(OPENCODE_PREFIX + i, (u or 0) / 1000.0) for i, u in con.execute(
+                    "select id, time_updated from session where parent_id is null")
+                    if i not in v2]
         finally:
             con.close()
-        return [OPENCODE_PREFIX + i for i in ids]
-    raise ValueError(f"agent는 codex 또는 opencode: {agent}")
+    else:
+        raise ValueError(f"agent는 codex 또는 opencode: {agent}")
+    seen = seen or {}
+    out = [{"src": s, "agent": agent, "updated_at": u} for s, u in rows
+           if (since is None or u > since) and (s not in seen or u > seen[s])]
+    return sorted(out, key=lambda r: r["updated_at"])
 
 
-def convert_all(agent, out_dir, root=None):
-    """이 PC의 Codex 또는 OpenCode 세션 전체 → out_dir에 Claude 모양 jsonl.
+_UUID_RE = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+                      r"\.jsonl(?:\.zst)?$")
 
-    out_dir는 기존 측정기에 그대로 넣는 폴더다:
-        python ../session-api/record_actions_code_api_all_sessions.py <out_dir>
-    다른 에이전트에서 가져온 사본(Codex의 Claude 세션 가져오기)은 쓰지 않고
-    요약에 센다. 요약은 out_dir/_translator_summary.json."""
-    os.makedirs(out_dir, exist_ok=True)
-    kw = {"codex_root": os.path.join(root, "sessions")} if (agent == "codex" and root) \
-        else {"opencode_db": root} if agent == "opencode" else {}
-    summary = {"agent": agent, "root": root, "converted": [], "excluded": [],
-               "errors": []}
-    for src in list_sources(agent, root):
+
+def _thread_id(path):
+    m = _UUID_RE.search(os.path.basename(str(path)))
+    return m.group(1) if m else None
+
+
+def _codex_thread_updated(home):
+    """Codex 스레드 목록(state_N.sqlite threads.updated_at_ms) → {스레드ID: 초}.
+
+    세션이 실제로 바뀐 시각이다. 파일 수정 시각은 쓰지 않는다 — Codex 앱이 옛
+    기록을 압축하거나 다른 에이전트 세션을 가져올 때 파일을 다시 써서, 바뀌지 않은
+    세션도 "방금 바뀐" 것처럼 보이기 때문이다. 목록이 없으면 빈 dict."""
+    import glob
+    import sqlite3
+    dbs = sorted(glob.glob(os.path.join(home, "state_*.sqlite")),
+                 key=lambda p: int(re.sub(r"\D", "", os.path.basename(p)) or 0))
+    if not dbs:
+        return {}
+    try:
+        con = sqlite3.connect(ro_uri(dbs[-1]), uri=True)
         try:
-            res = convert(src, out_dir=out_dir, **kw)
-        except Exception as e:  # 한 세션 실패가 전체를 멈추지 않게 — 요약에 남긴다
-            summary["errors"].append({"src": src, "error": f"{type(e).__name__}: {e}"})
-            continue
-        if res.get("excluded"):
-            summary["excluded"].append({"src": src, "reason": res["excluded"]})
-            continue
-        summary["converted"].append({"src": src, "main": res["main"],
-                                     "subagents": len(res.get("subagents") or []),
-                                     "notes": res.get("notes") or []})
-    with open(os.path.join(out_dir, "_translator_summary.json"), "w",
-              encoding="utf-8") as fh:
-        json.dump(summary, fh, ensure_ascii=False, indent=1)
-    return summary
+            return {i: u / 1000.0 for i, u in con.execute(
+                "select id, updated_at_ms from threads where updated_at_ms is not null")}
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return {}
 
+
+def _last_event_time(path):
+    """기록의 마지막 사건 시각(초) — 스레드 목록에 없는 rollout의 대안."""
+    last = None
+    for line in read_text(path).splitlines():
+        try:
+            t = epoch(json.loads(line).get("timestamp"))
+        except ValueError:
+            continue
+        if t and (last is None or t > last):
+            last = t
+    return last
+
+
+class TranslatedSession:
+    """translate_session()이 내주는 한 세션의 번역 결과.
+
+    folder    — 측정기에 그대로 넣는 폴더. 이 세션 파일만 들어 있다:
+                <folder>/<세션>.jsonl, <folder>/<세션>/subagents/agent-*.jsonl
+                (record_actions_code_api_all_sessions.py <folder> 로도 잴 수 있다)
+    main      — 메인 기록 경로 (빠지는 세션이면 None)
+    subagents — 서브에이전트 기록 경로 목록
+    notes     — 번역 주석(암호화 본문 환산 등)
+    excluded  — 빠지는 사유(다른 에이전트 사본·빈 세션) 또는 None
+    src, format, name"""
+
+    def __init__(self, src, folder, res):
+        self.src = src
+        self.folder = folder
+        self.main = res.get("main")
+        self.subagents = list(res.get("subagents") or [])
+        self.notes = list(res.get("notes") or [])
+        self.excluded = res.get("excluded")
+        self.format = res.get("format")
+        self.name = res.get("name")
+
+
+class translate_session:
+    """세션 1개를 work_dir 아래 전용 폴더에 번역하고, with 블록이 끝나면 지운다.
+
+        with translate_session(src, work_dir=state_dir / "translate") as t:
+            if t.main:
+                measure(t.main, subagent_paths=t.subagents)
+        # 여기서 t.folder는 이미 지워졌다
+
+    한 번에 한 세션만 디스크에 둔다 — 전 세션을 쌓아 디스크가 찼던 사고를
+    막기 위해서다. work_dir는 반드시 준다(시스템 임시 폴더 금지). 블록 안에서
+    예외가 나도 폴더는 지운다."""
+
+    def __init__(self, src, work_dir, opencode_db=None, codex_home=None):
+        if not work_dir:
+            raise ValueError("work_dir가 필요하다 — 시스템 임시 폴더에는 쓰지 않는다")
+        self.src = str(src)
+        self.work_dir = str(work_dir)
+        self.kw = {"opencode_db": opencode_db, "codex_home": codex_home}
+        self.folder = None
+
+    def __enter__(self):
+        import hashlib
+        os.makedirs(self.work_dir, exist_ok=True)
+        tag = hashlib.sha1(self.src.encode("utf-8")).hexdigest()[:12]
+        self.folder = os.path.join(self.work_dir, f"session-{tag}-{os.getpid()}")
+        if os.path.exists(self.folder):          # 앞서 죽은 실행의 찌꺼기
+            _rmtree(self.folder)
+        os.makedirs(self.folder)
+        try:
+            res = convert(self.src, self.folder, **self.kw)
+        except BaseException:
+            _rmtree(self.folder)
+            raise
+        return TranslatedSession(self.src, self.folder, res)
+
+    def __exit__(self, *exc):
+        if self.folder:
+            _rmtree(self.folder)
+        return False
+
+
+def _rmtree(path):
+    import shutil
+    shutil.rmtree(path, ignore_errors=True)
+
+
+# ---------------------------------------------------------------- CLI (세션 1개만)
 
 def main(argv):
+    """세션 1개를 지정 폴더에 번역해 결과를 보여 준다(점검용).
+
+    전 세션 일괄 변환은 일부러 두지 않는다 — 한 세션씩 번역·측정·삭제하는 쪽
+    (list_sessions + translate_session)을 쓴다."""
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     args = list(argv)
-    opts = {}
-    for k in ("--out", "--all", "--root"):
-        if k in args:
-            i = args.index(k)
-            opts[k] = args[i + 1]
-            del args[i:i + 2]
-    out = opts.get("--out")
-    if "--all" in opts:
-        if not out:
-            print("--all에는 --out 폴더가 필요하다", file=sys.stderr)
-            return 2
-        s = convert_all(opts["--all"], out, root=opts.get("--root"))
-        why = {}
-        for e in s["excluded"]:
-            k = "빈 세션" if e["reason"].startswith("빈 세션") else "다른 에이전트 세션 사본"
-            why[k] = why.get(k, 0) + 1
-        print(f"변환 {len(s['converted'])}세션, 제외 "
-              + (", ".join(f"{k} {v}" for k, v in why.items()) or "0")
-              + f", 실패 {len(s['errors'])} → {out}")
-        return 1 if s["errors"] else 0
-    if not args:
-        print("usage: python session_translator.py <입력> [--out 폴더]\n"
-              "       python session_translator.py --all codex|opencode --out 폴더 "
-              "[--root Codex홈|opencode.db]", file=sys.stderr)
+    out = None
+    if "--out" in args:
+        i = args.index("--out")
+        out = args[i + 1]
+        del args[i:i + 2]
+    if not args or not out:
+        print("usage: python session_translator.py <입력> --out 폴더\n"
+              "  입력 = Codex rollout(.jsonl|.jsonl.zst) | OpenCode export JSON | "
+              "opencode:<세션ID>", file=sys.stderr)
         return 2
     for src in args:
-        res = convert(src, out_dir=out)
-        print(json.dumps({k: v for k, v in res.items()},
-                         ensure_ascii=False, indent=1))
+        res = convert(src, out)
+        print(json.dumps(res, ensure_ascii=False, indent=1))
     return 0
 
 

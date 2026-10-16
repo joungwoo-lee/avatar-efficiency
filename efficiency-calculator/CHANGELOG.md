@@ -2070,9 +2070,10 @@ OFF/OFF 112,522 → 93,771분, OFF/ON 1.41 → 1.41. 역전 0.**
 - 방식: 번역기(`session-translator/`)가 Codex·OpenCode 세션을 Claude Code 세션 모양 jsonl로 바꿔 폴더에 쓴다.
   측정기(session-api·agent-effort·human-effort)는 **한 줄도 바꾸지 않는다** — 그 폴더를 Claude 세션처럼 잰다.
   (10-15에 측정기 입구 2곳에 번역 호출을 넣었다가 10-16 사용자 결정으로 되돌렸다. 측정기 코드는 `5c2f069`와 같다.)
-- 쓰는 법: `session_translator.py --all codex|opencode --out <폴더>` → `record_actions_code_api_all_sessions.py <폴더>`.
+- 쓰는 법(워커에서 함수로): `list_sessions()` → 세션마다 `with translate_session(src, work_dir) as t:` →
+  `measure(t.main, subagent_paths=t.subagents)` → 블록 끝에서 자동 삭제. 자세한 것은 `session-translator/README.md`.
   번역 파일의 수정 시각은 기록의 마지막 사건 시각으로 맞춰 측정기의 "진행 중" 제외(§44)가 원본 기준으로 동작한다.
-  기록 0건인 세션은 쓰지 않는다. 번역 주석은 `<폴더>/_translator_summary.json`.
+  기록 0건인 세션은 쓰지 않는다.
 - 이름: 10-16 `session-adapters` → `session-translator`(Session Translator)로 바꿨다(파일 `*_adapter.py` → `*_translator.py`).
 - 기준 버전: Codex CLI 0.162.1, OpenCode 2.0.29. 두 도구로 같은 11단계 과제를 실제로 돌려 만든 기록으로 대응을 정했다.
 - Codex:
@@ -2097,7 +2098,16 @@ OFF/OFF 112,522 → 93,771분, OFF/ON 1.41 → 1.41. 역전 0.**
 - 검증(10-16, 분리 뒤): Codex 번역 64·사본 제외 287·실패 0 → 측정 14세션(사람 10,360분 ÷ 에이전트 810분, 10-15와 같음).
   OpenCode 번역 389·빈 세션 제외 12·실패 0 → 측정 158세션(10-15 159에서 지운 시험 세션 1 차이).
 - 발견(미수정): 실행 실패 정규식(`_EXEC_HARD_FAIL_RE`)이 PowerShell 한국어 오류문을 모른다 — Claude 세션에도 같은 규칙.
-- 테스트: session-translator 17, session-api 41(1 skip), human-effort 53, agent-effort 31 통과.
+- 테스트: session-translator 26(10-16 리뷰 반영 뒤), session-api 41(1 skip), human-effort 53, agent-effort 31 통과.
+- 리뷰 반영(10-16) — 알고리즘은 그대로 두고, 바깥 껍데기만 안전 규칙대로 다시 짰다
+  (240GB가 쌓여 임시 폴더가 차고 opencode가 안 켜졌던 사고가 다시 나지 않게):
+  ① DB 주소는 `Path.as_uri()`로 만든다(`?`·`#`·Windows 경로). ② `find_opencode_db()`는 인자 → `OPENCODE_DB` →
+  `XDG_DATA_HOME` → 기본 순, `find_codex_home()`은 인자 → `CODEX_HOME` → `~/.codex` 순이다. 사람이 정한 위치가 없으면 바로 오류.
+  ③ 일괄 변환(`convert_all`, `--all`)을 없앴다. 한 세션씩 번역하고 블록 끝에서 지운다. ④ 시스템 임시 폴더를 쓰지 않는다
+  (작업 폴더 필수). ⑤ `list_sessions(since=, seen=)`로 바뀐 세션만 고른다. 바뀐 시각은 Codex 스레드 목록 또는
+  마지막 사건 시각이고, 파일 수정 시각이 아니다. ⑥ 세션 전용 폴더(`t.folder`)를 내줘 계산기에 바로 넣는다.
+  재검증: 결과는 같다(Codex 14세션, OpenCode 158세션). 동시 디스크 사용은 한 세션 몫(최대 4.73MB). 시험 26 통과.
+  참고(측정기, 미수정): `record_actions_code_api.slice_session`(`as_of` 구간 측정)은 시스템 임시 폴더(`tempfile.mkdtemp`)를 쓴다.
 
 ## 미해결 (알려진 한계·다음 단계)
 

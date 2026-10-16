@@ -15,11 +15,7 @@ from session_translator import (ClaudeWriter, Placeholder, epoch,
                               file_ops_to_tools, hunks_from_unified_diff,
                               json_text_words, parse_apply_patch,
                               task_notification, words, _clean, read_text,
-                              first_line, session_stem)
-
-DEFAULT_ROOT = os.path.join(os.environ.get("CODEX_HOME")
-                            or os.path.join(str(Path.home()), ".codex"),
-                            "sessions")
+                              first_line, session_stem, find_codex_home)
 
 _ENC_RE = re.compile(r"^gAAAAA[\w\-=]{20,}$")
 _HEADER_RE = re.compile(r"^Script \w+[^\n]*\nWall time [^\n]*\n(?:Output:\n)?")
@@ -385,15 +381,16 @@ def _index(home):
     return idx
 
 
-def _home_for(path, sessions_root):
-    """rollout 경로 → Codex 홈(sessions/·archived_sessions/의 부모)."""
-    if sessions_root:
-        return str(Path(sessions_root).parent)
+def _home_for(path, codex_home):
+    """rollout 경로 → Codex 홈(sessions/·archived_sessions/의 부모).
+    순서: ① 인자 ② 파일 경로의 조상 ③ find_codex_home()(CODEX_HOME → ~/.codex)."""
+    if codex_home:
+        return find_codex_home(codex_home)
     p = Path(path).resolve()
     for anc in p.parents:
         if anc.name in ("sessions", "archived_sessions"):
             return str(anc.parent)
-    return str(Path(DEFAULT_ROOT).parent)
+    return find_codex_home()
 
 
 # ---------------------------------------------------------------- 변환 본체
@@ -838,12 +835,12 @@ class _Conv:
             self.w.queue_notification(t, task_notification(author, "completed", payload))
 
 
-def convert_codex(path, out_dir, sessions_root=None):
+def convert_codex(path, out_dir, codex_home=None):
     """Codex rollout 1개(+자식) → out_dir에 Claude 모양 jsonl."""
     recs = _read(path)
     meta = _meta(recs)
     sid = str(meta.get("id") or session_stem(path))
-    home = _home_for(path, sessions_root)
+    home = _home_for(path, codex_home)
     # 다른 에이전트에서 가져온 사본 줄은 버린다. 남는 지시가 없으면 측정 제외.
     imp = imported_threads(home)
     main_start = import_cut(recs, imp[sid]) if sid in imp else 0
