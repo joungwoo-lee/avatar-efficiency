@@ -14,7 +14,8 @@ from pathlib import Path
 from session_adapters import (ClaudeWriter, Placeholder, epoch,
                               file_ops_to_tools, hunks_from_unified_diff,
                               json_text_words, parse_apply_patch,
-                              task_notification, words, _clean)
+                              task_notification, words, _clean, read_text,
+                              first_line, session_stem)
 
 DEFAULT_ROOT = os.path.join(os.environ.get("CODEX_HOME")
                             or os.path.join(str(Path.home()), ".codex"),
@@ -37,17 +38,16 @@ def is_encrypted(v):
 
 def _read(path):
     recs = []
-    with open(path, encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(rec, dict):
-                recs.append(rec)
+    for line in read_text(path).splitlines():   # 압축(.jsonl.zst) 기록도
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict):
+            recs.append(rec)
     return recs
 
 
@@ -324,11 +324,12 @@ def estimate_encrypted(rec_lists):
 # ---------------------------------------------------------------- 자식 찾기
 
 def rollout_files(home):
-    """Codex 홈의 rollout 전부 — sessions/ 와 보관함 archived_sessions/."""
+    """Codex 홈의 rollout 전부 — sessions/ 와 보관함 archived_sessions/.
+    Codex 앱이 압축해 둔 옛 기록(`rollout-*.jsonl.zst`)도 포함한다."""
     out = []
     for sub in ("sessions", "archived_sessions"):
-        out += glob.glob(os.path.join(home, sub, "**", "rollout-*.jsonl"),
-                         recursive=True)
+        for pat in ("rollout-*.jsonl", "rollout-*.jsonl.zst"):
+            out += glob.glob(os.path.join(home, sub, "**", pat), recursive=True)
     return sorted(out)
 
 
@@ -357,13 +358,19 @@ def import_cut(recs, imported_at):
     return cut
 
 
+_INDEX_CACHE = {}
+
+
 def _index(home):
+    files = rollout_files(home)
+    key = (home, tuple((f, os.path.getmtime(f)) for f in files))
+    if key in _INDEX_CACHE:
+        return _INDEX_CACHE[key]
     idx = {}
-    for f in rollout_files(home):
+    for f in files:
         try:
-            with open(f, encoding="utf-8", errors="replace") as fh:
-                first = json.loads(fh.readline())
-        except (OSError, ValueError):
+            first = json.loads(first_line(f))
+        except (OSError, ValueError, RuntimeError):
             continue
         p = _pl(first)
         src = p.get("source")
@@ -373,6 +380,8 @@ def _index(home):
             if isinstance(spawn.get("thread_spawn"), dict) else None
         if par:
             idx.setdefault(par, []).append(f)
+    _INDEX_CACHE.clear()
+    _INDEX_CACHE[key] = idx
     return idx
 
 
@@ -833,7 +842,7 @@ def convert_codex(path, out_dir, sessions_root=None):
     """Codex rollout 1개(+자식) → out_dir에 Claude 모양 jsonl."""
     recs = _read(path)
     meta = _meta(recs)
-    sid = str(meta.get("id") or Path(path).stem)
+    sid = str(meta.get("id") or session_stem(path))
     home = _home_for(path, sessions_root)
     # 다른 에이전트에서 가져온 사본 줄은 버린다. 남는 지시가 없으면 측정 제외.
     imp = imported_threads(home)
@@ -872,7 +881,7 @@ def convert_codex(path, out_dir, sessions_root=None):
     conv = _Conv(recs, w, est, ph, meta.get("agent_path") or "/root",
                  start=main_start, notes=notes)
     conv.run()
-    stem = Path(path).stem
+    stem = session_stem(path)
     main = os.path.join(out_dir, stem + ".jsonl")
     w.write(main)
     enc_total = conv.enc_used

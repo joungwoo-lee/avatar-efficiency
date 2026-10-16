@@ -51,12 +51,7 @@
     r = measure("session.jsonl", humanize_rw=False,
                 humanize_act=False)                     # rw OFF · act OFF
     r = measure("session.jsonl", humanize=False)        # 구 인터페이스 호환
-    r = measure("rollout-….jsonl")                      # Codex 세션 (§96)
-    r = measure("opencode:<세션ID>")                     # OpenCode 세션 (§96)
     r["speedup"], r["human"]["min"], r["human"]["breakdown"]
-
-Codex·OpenCode 입력 (§96): Claude 기록 모양으로 바꾼 뒤 같은 규칙으로 잰다
-    (../session-adapters/DESIGN.md). 결과에 source_format이 붙는다.
 
 hitl 축약 모드 (§79, §85부터 기본 ON): measure(..., hitl_compact=False) /
     CLI --hitl-full 이 §76 전체 모델. 분모의 사람 확인을 "파일 쓰기 있는 확인 시점당
@@ -93,12 +88,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-_ADAPTERS = _HERE.parent / "session-adapters"
-if str(_ADAPTERS) not in sys.path:
-    sys.path.insert(0, str(_ADAPTERS))
-
 from session_api import (measure_agent_actual, is_trivial_session)  # noqa: E402
-from session_adapters import convert as _adapt, detect_format  # noqa: E402  (§96)
 from requirement_actions import (collect_record_stats, execution_wait_seconds,  # noqa: E402
                                  find_subagent_files)
 from agent_effort import load_rates, speedup  # noqa: E402
@@ -711,32 +701,6 @@ def measure(jsonl_path, humanize_rw=True, humanize_act=True, rates=None,
             humanize_rw, humanize_act = False, False
         else:
             humanize_rw, humanize_act = bool(humanize), True
-    fmt = detect_format(jsonl_path)
-    if fmt != "claude":
-        # §96 Codex·OpenCode 세션 — Claude 기록 모양으로 바꿔 같은 규칙으로 잰다
-        conv = _adapt(jsonl_path)
-        if conv.get("excluded"):   # 다른 에이전트 세션의 사본 등 — 잴 일이 없음
-            if conv.get("tmpdir"):
-                shutil.rmtree(conv["tmpdir"], ignore_errors=True)
-            return {"session": conv["name"], "source_format": fmt,
-                    "excluded": True, "reason": conv["excluded"],
-                    "suspect_output_channel": False}
-        try:
-            r = measure(conv["main"], humanize_rw=humanize_rw,
-                        humanize_act=humanize_act, rates=rates,
-                        include_subagents=include_subagents, force=force,
-                        include_think=include_think,
-                        subagent_paths=(conv["subagents"] if subagent_paths is None
-                                        else subagent_paths),
-                        hitl_compact=hitl_compact, as_of=as_of, window=window)
-        finally:
-            if conv.get("tmpdir"):
-                shutil.rmtree(conv["tmpdir"], ignore_errors=True)
-        r["session"] = conv["name"]
-        r["source_format"] = fmt
-        if conv["notes"]:
-            r["notes"] = conv["notes"] + list(r.get("notes") or [])
-        return r
     as_of = parse_time(as_of)
     if window is not None:
         window = (parse_time(window[0]) or 0.0, parse_time(window[1]))

@@ -2,8 +2,6 @@
 
 실행된 Claude Code 세션 트랜스크립트(JSONL) 1개를 넣으면
 **"이 세션이 실제로 얼마나 효율적이었나"**를 계산한다.
-`record_actions_code_api.py`(LLM 0회)는 Codex rollout·OpenCode 세션도 받는다 —
-Claude 기록 모양으로 바꾼 뒤 같은 규칙으로 잰다(§96, [`../session-adapters`](../session-adapters/DESIGN.md)).
 
 ```
 speedup = human_min(분자) ÷ agent_min(분모)

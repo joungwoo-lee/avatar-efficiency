@@ -2,9 +2,7 @@
 """전 세션 효율 리포트 — record-actions w/o LLM(휴먼화 ON), 마크다운 출력.
 
 이 PC의 Claude Code 세션 전체(~/.claude/projects, 서브에이전트 기록 제외)를
-LLM 0회로 측정해 마크다운 리포트를 만든다. --agent codex|opencode면 Codex
-(~/.codex의 sessions·archived_sessions)·OpenCode(opencode.db) 세션 전체를 같은
-규칙으로 잰다(§96). Codex가 Claude Code 등에서 가져온 세션 사본은 따로 세고 뺀다:
+LLM 0회로 측정해 마크다운 리포트를 만든다:
   ① 요약 — 휴먼화 2축(rw·act) 4조합 평균·효율 비교 + 효과 분해(act/rw),
      효율 분포 히스토그램(기본 자 기준)
   ② 디테일 — 측정한 모든 세션의 표 (agent + 4조합 human·speedup 병기)
@@ -14,13 +12,10 @@ LLM 0회로 측정해 마크다운 리포트를 만든다. --agent codex|opencod
     python report_all_sessions.py --out report.md     # 파일로 저장
     python report_all_sessions.py D:\\other\\projects  # 루트 지정
     python report_all_sessions.py --hitl-full         # §76 전체 hitl 모델로 분모 (기본은 §79 축약)
-    python report_all_sessions.py --agent codex       # Codex 세션 전체 (§96)
-    python report_all_sessions.py --agent opencode    # OpenCode 세션 전체 (§96)
 """
 import glob
 import json
 import os
-import shutil
 import statistics
 import sys
 from datetime import date
@@ -31,16 +26,8 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 from record_actions_code_api import measure  # noqa: E402
-from session_adapters import convert  # noqa: E402  (§96 — measure가 경로를 넣어 둠)
 
 DEFAULT_ROOT = os.path.join(str(Path.home()), ".claude", "projects")
-DEFAULT_ROOTS = {
-    "claude": DEFAULT_ROOT,
-    "codex": (os.environ.get("CODEX_HOME")
-              or os.path.join(str(Path.home()), ".codex")),
-    "opencode": os.path.join(str(Path.home()), ".local", "share", "opencode",
-                             "opencode.db"),
-}
 
 
 ACTIVE_GRACE_SEC = 600  # 최근 10분 내 갱신된 세션 = 진행 중 — 측정 제외
@@ -73,79 +60,32 @@ def is_ai_invoked(jsonl_path):
     return False
 
 
-def sources(root, agent="claude"):
-    """측정 대상 → (원본 목록, 진행 중 목록). 진행 중 = 최근 10분 안에 갱신(§44)."""
+def collect(root, hitl_compact=True):
     import time
-    now = time.time()
-    if agent == "opencode":
-        import sqlite3
-        uri = "file:" + Path(root).resolve().as_posix() + "?mode=ro"
-        con = sqlite3.connect(uri, uri=True)
-        try:
-            rows = list(con.execute(
-                "select id, time_updated from session_v2 where parent_id is null"))
-            rows += list(con.execute(
-                "select id, time_updated from session s where parent_id is null "
-                "and not exists(select 1 from session_v2 v where v.id = s.id)"))
-        finally:
-            con.close()
-        srcs = [(f"opencode:{sid}", tu / 1000.0) for sid, tu in rows]
-    elif agent == "codex":
-        from codex_adapter import rollout_files
-        # 자식(서브에이전트) rollout은 부모 세션에 함께 들어간다
-        files = [f for f in rollout_files(root) if not _codex_is_child(f)]
-        srcs = [(f, os.path.getmtime(f)) for f in files]
-    else:
-        files = [f for f in glob.glob(os.path.join(root, "**", "*.jsonl"), recursive=True)
-                 if f"{os.sep}subagents{os.sep}" not in f]
-        srcs = [(f, os.path.getmtime(f)) for f in files]
-    active = [s for s, t in srcs if now - t < ACTIVE_GRACE_SEC]
-    return [s for s, t in srcs if now - t >= ACTIVE_GRACE_SEC], active
-
-
-def _codex_is_child(path):
-    try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            src = (json.loads(fh.readline()).get("payload") or {}).get("source")
-    except (OSError, ValueError):
-        return False
-    return isinstance(src, dict) and "subagent" in src
-
-
-def collect(root, hitl_compact=True, agent="claude"):
+    files = [f for f in glob.glob(os.path.join(root, "**", "*.jsonl"),
+                                  recursive=True)
+             if f"{os.sep}subagents{os.sep}" not in f]
     # 진행 중 세션 제외 (§44): 기록이 아직 자라는 세션을 측정에 넣으면
     # 실행할 때마다 합계·분포가 흔들린다 — 완결된 세션만 잰다.
-    files, active = sources(root, agent)
+    now = time.time()
+    active = [f for f in files
+              if now - os.path.getmtime(f) < ACTIVE_GRACE_SEC]
+    files = [f for f in files if f not in active]
+    # AI 호출 세션 제외 (§54): 프로그램이 SDK로 돌린 세션(견적 엔진 구동
+    # 등)은 사람의 업무 세션이 아니다 — 서브에이전트 제외와 같은 원리.
+    ai_invoked = [f for f in files if is_ai_invoked(f)]
+    files = [f for f in files if f not in ai_invoked]
     rows = []
-    ai_invoked = []
-    imported = []
     n_excl = n_err = n_excl_suspect = 0
-    for src in files:
-        conv = None
+    for f in files:
         try:
-            # §96 Codex·OpenCode는 한 번만 Claude 모양으로 바꿔 4조합에 같이 쓴다
-            conv = convert(src) if agent != "claude" else None
-            if conv and conv.get("excluded"):   # 다른 에이전트 세션 사본
-                imported.append(src)
-                continue
-            f = conv["main"] if conv else src
-            sub = {"subagent_paths": conv["subagents"]} if conv else {}
-            # AI 호출 세션 제외 (§54): 프로그램이 SDK로 돌린 세션(견적 엔진 구동
-            # 등)은 사람의 업무 세션이 아니다 — 서브에이전트 제외와 같은 원리.
-            # Codex는 `codex exec`(헤드리스) 세션이 여기 해당한다.
-            if is_ai_invoked(f):
-                ai_invoked.append(src)
-                continue
-            on = measure(f, hitl_compact=hitl_compact, **sub)
-            if conv:
-                on["session"] = conv["name"]
-                on["notes"] = conv["notes"] + list(on.get("notes") or [])
+            on = measure(f, hitl_compact=hitl_compact)
             if on.get("excluded"):
                 n_excl += 1
                 if on.get("suspect_output_channel"):
                     n_excl_suspect += 1
                 continue
-            hc = {"hitl_compact": hitl_compact, **sub}
+            hc = {"hitl_compact": hitl_compact}
             rwoff = measure(f, humanize_rw=False, **hc)               # rw만 끔
             actoff = measure(f, humanize_act=False, **hc)             # act만 끔
             raw = measure(f, humanize_rw=False, humanize_act=False, **hc)  # 로레코드
@@ -170,11 +110,8 @@ def collect(root, hitl_compact=True, agent="claude"):
                          "suspect_why": (on.get("notes") or [""])[0]})
         except Exception:
             n_err += 1
-        finally:
-            if conv and conv.get("tmpdir"):
-                shutil.rmtree(conv["tmpdir"], ignore_errors=True)
     return (rows, n_excl, n_err, n_excl_suspect, len(active),
-            len(ai_invoked), len(imported))
+            len(ai_invoked))
 
 
 def histogram(series):
@@ -195,8 +132,8 @@ def histogram(series):
     return lines
 
 
-def render(rows, n_excl, n_err, n_excl_suspect, n_active, n_ai, n_imported=0,
-           root="", hitl_compact=True):
+def render(rows, n_excl, n_err, n_excl_suspect, n_active, n_ai, root,
+           hitl_compact=True):
     n = len(rows)
     if not n:
         return f"측정 가능한 세션 없음 (제외 {n_excl}, 실패 {n_err})"
@@ -219,9 +156,7 @@ def render(rows, n_excl, n_err, n_excl_suspect, n_active, n_ai, n_imported=0,
         "",
         f"- 측정일: {date.today().isoformat()}  |  루트: `{root}`",
         f"- 측정 {n}세션 (초소형 제외 {n_excl}, 진행 중 제외 {n_active}, "
-        f"AI 호출 세션 제외 {n_ai}"
-        + (f", 다른 에이전트 세션 사본 제외 {n_imported}" if n_imported else "")
-        + f", 실패 {n_err}"
+        f"AI 호출 세션 제외 {n_ai}, 실패 {n_err}"
         + (f", **⚠ 쓰기 툴 포맷 의심 {len(suspects)}건"
            + (f"+제외분 {n_excl_suspect}건" if n_excl_suspect else "") + "**"
            if (suspects or n_excl_suspect) else "")
@@ -323,19 +258,10 @@ def main(argv):
         i = argv.index("--out")
         out_path = argv[i + 1]
         argv = argv[:i] + argv[i + 2:]
-    agent = "claude"
-    if "--agent" in argv:
-        i = argv.index("--agent")
-        agent = argv[i + 1]
-        argv = argv[:i] + argv[i + 2:]
-    if agent not in DEFAULT_ROOTS:
-        print(f"--agent는 {', '.join(DEFAULT_ROOTS)} 중 하나", file=sys.stderr)
-        return 2
     compact = "--hitl-full" not in argv   # §85 축약이 기본
     argv = [a for a in argv if a not in ("--hitl-full", "--hitl-compact")]
-    root = argv[0] if argv else DEFAULT_ROOTS[agent]
-    report = render(*collect(root, hitl_compact=compact, agent=agent),
-                    root=(root if agent == "claude" else f"{agent}: {root}"),
+    root = argv[0] if argv else DEFAULT_ROOT
+    report = render(*collect(root, hitl_compact=compact), root=root,
                     hitl_compact=compact)
     if out_path:
         Path(out_path).write_text(report, encoding="utf-8")

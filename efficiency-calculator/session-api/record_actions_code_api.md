@@ -40,17 +40,9 @@ speedup = human_min(분자) ÷ agent_min(분모)
   마지막 기록까지. 종전 단어수 기준(검토·입력 100단어 미만 그리고 산출물
   50단어 미만)은 타임스탬프가 없는 구 기록의 폴백으로만 남는다.
   `force=True`로 우회 가능.
-- **Codex·OpenCode 세션도 같은 규칙으로 잰다 (§96).** 입력이 Codex rollout,
-  OpenCode export JSON, `opencode:<세션ID>`이면 `measure()`가 먼저 Claude 기록
-  모양으로 바꾼 뒤(`../session-adapters/`) 위 규칙을 그대로 적용한다. 측정
-  규칙은 바꾸지 않았다. 대응표·예외(Codex 암호화 메시지의 단어 환산, Codex가
-  Claude 세션을 가져온 사본 제외 등)는 `../session-adapters/DESIGN.md`. 결과에
-  `source_format`이 붙는다.
 
 ```python
 from record_actions_code_api import measure, measure_batch
-r = measure("rollout-….jsonl")                    # Codex 세션 (§96)
-r = measure("opencode:ses_…")                     # OpenCode 세션 (§96)
 r = measure("session.jsonl")                      # rw ON · act ON (기본)
 r = measure("session.jsonl", humanize_rw=False)   # rw OFF · act ON
 r = measure("session.jsonl", humanize_act=False)  # rw ON · act OFF
@@ -850,13 +842,6 @@ tz 없는 ISO는 **로컬 시각**으로 해석(트랜스크립트 타임스탬�
    세션의 절대값은 낮게 나온다.
 
 ## 7. 수정 전후 회귀 (이 PC, AI 호출 세션 제외 70세션)
-
-### 7.-8 §96 — Codex·OpenCode 입력 추가 (2026-10-15)
-
-Claude 기록은 첫 줄로 형식만 판별하고 종전 경로를 그대로 탄다. 이 PC Claude 세션 전체
-리포트(`record_actions_code_api_all_sessions.py` 기본 옵션)를 바꾸기 전 코드와 같은 데이터로
-나란히 돌려 결과가 같음을 확인했다(측정 121세션, 측정일 줄을 뺀 리포트 본문 동일). Codex·OpenCode 전 세션 결과는
-`../session-adapters/DESIGN.md` 8.1절.
 
 ### 7.-7 §95 전후 — 워크플로 서브에이전트 미계상 (이 PC 108세션, 기본 옵션, 2026-10-07)
 

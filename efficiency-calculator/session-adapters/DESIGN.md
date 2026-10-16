@@ -2,23 +2,31 @@
 
 작성일: 2026-10-15
 대상 버전: Codex CLI 0.162.1 (rollout jsonl), OpenCode 2.0.29 (v2 세션 저장소·`session export`)
+고친 날: 2026-10-16 — 번역기와 측정기 분리(측정기 무변경), Codex 압축 기록(`.jsonl.zst`) 읽기
 
 ## 1. 목적
 
 `session-api/record_actions_code_api.py`(LLM 0회 측정기)는 Claude Code 세션 기록만 읽는다.
 이 문서는 Codex·OpenCode 세션도 **같은 측정기, 같은 규칙, 같은 요율**로 재는 방법을 정한다.
 
-## 2. 방식 — 측정기를 고치지 않고 기록을 바꾼다
+## 2. 방식 — 번역기와 측정기를 나눈다
 
-Codex·OpenCode 기록을 **Claude Code 기록 모양의 jsonl**로 변환한 뒤, 기존 측정기에 그대로 넣는다.
+번역기(이 폴더)는 Codex·OpenCode 기록을 **Claude Code 세션 모양의 jsonl 파일**로 바꿔 폴더에 써 낸다.
+측정기(`session-api` 등)는 **한 줄도 바꾸지 않는다**. 번역기가 쓴 파일을 Claude 세션처럼 그대로 잰다.
+
+```
+Codex·OpenCode 세션 ──번역기(session-adapters)──▶ Claude 모양 jsonl 폴더 ──기존 측정기(무변경)──▶ 효율
+```
 
 - 측정 규칙은 한 곳(기존 측정기)에만 있다. 에이전트별로 규칙이 갈라지지 않는다.
-- 변환기는 "이 에이전트의 이 기록은 Claude 기록의 무엇에 해당하는가"만 정한다.
+- 번역기는 "이 에이전트의 이 기록은 Claude 기록의 무엇에 해당하는가"만 정한다. 측정기를 불러 쓰지도 않는다.
 - 서브에이전트 기록은 Claude와 같은 자리(`<세션>/subagents/agent-<id>.jsonl`)에 둔다.
-  그래서 `find_subagent_files`·`measure_agent_actual`의 자동 탐색이 그대로 동작한다.
-
-`measure()`는 입력을 보고 형식을 판별한다. Claude 기록이면 종전과 같다. Codex rollout 파일,
-OpenCode export JSON, `opencode:<세션ID>` 지정이면 임시 폴더에 변환한 뒤 잰다.
+  그래서 측정기의 자동 탐색(`find_subagent_files`·`measure_agent_actual`)이 그대로 동작한다.
+- 번역한 파일의 수정 시각은 그 기록의 마지막 사건 시각으로 맞춘다. 측정기는 최근 10분 안에 바뀐
+  파일을 진행 중 세션으로 빼기 때문이다(§44). 원본이 실제로 진행 중일 때만 그 규칙에 걸린다.
+- 기록이 하나도 없는 세션은 쓰지 않고 요약에 "빈 세션"으로 센다(빈 파일을 남기면 수정 시각이 지금이 된다).
+- 번역 중 생긴 주석(암호화 본문 환산, 사본 제외 사유)은 `<폴더>/_adapter_summary.json`에 남긴다.
+  측정기 결과에는 섞지 않는다.
 
 ## 3. "100% 변환"의 정의
 
@@ -30,7 +38,7 @@ OpenCode export JSON, `opencode:<세션ID>` 지정이면 임시 폴더에 변환
 이 정의를 벗어나는 항목은 한 가지뿐이다. Codex 다중 에이전트 v2가 **암호화해서 저장하는
 에이전트 사이 메시지 본문**이다. 본문은 어디에도 평문으로 남지 않는다. 대신 그 메시지를 만든
 응답의 출력 토큰 수는 정확히 남는다. 그래서 단어 수를 "토큰 수 × 같은 세션의 평문 응답에서 잰
-단어/토큰 비율"로 환산한다(6.4절). 이 환산은 측정 결과 `notes`에 건수와 함께 드러낸다.
+단어/토큰 비율"로 환산한다(6.4절). 이 환산은 번역 요약(`_adapter_summary.json`)의 세션별 `notes`에 건수와 함께 드러낸다.
 
 ## 4. 측정기가 읽는 Claude 기록 계약
 
@@ -149,7 +157,7 @@ Codex 0.162는 도구를 대부분 **코드 모드 셀**(`custom_tool_call` 이�
   본문 자리에는 서로 겹치지 않는 자리표시 단어를 그 수만큼 넣는다(복붙 판정에 안 걸리게).
   자식이 부모에게 보낸 `send_message`는 자식의 보고문(assistant 텍스트, §68)으로 쓴다.
   부모가 자식에게 보낸 메시지는 자식이 받은 순서대로 짝짓는다.
-  암호화가 있었으면 결과 `notes`에 건수와 비율 r을 적는다.
+  암호화가 있었으면 번역 요약의 `notes`에 건수와 비율 r을 적는다.
 
 ### 6.5 다른 에이전트에서 가져온 세션 사본 (구현 중 발견)
 
@@ -169,6 +177,14 @@ Codex는 Claude Code 세션을 가져와(`~/.codex/external_agent_session_import
 ### 6.6 보관함
 
 Codex 보관함(`~/.codex/archived_sessions/`)의 rollout도 측정 대상이고, 자식 찾기도 두 폴더를 함께 본다.
+
+### 6.7 압축된 옛 기록 (2026-10-16 발견)
+
+Codex 앱은 2026-10-15 21:45 ~ 10-16 00:55에 기록 이전(`legacy_to_paginated_v1`)을 돌렸다. 이때 옛 rollout
+249개를 zstd로 압축했다(`rollout-*.jsonl.zst`). 압축하지 않은 123개와 합치면 372개이고, 스레드 목록
+(`state_5.sqlite`의 `threads`) 372개와 같다. 잃어버린 기록은 없다.
+번역기는 두 꼴을 다 읽는다. 푸는 수단은 설치하지 않고 있는 것만 쓴다:
+`zstandard` 패키지 → Python 3.14 `compression.zstd` → Node 22.15+ `zlib.zstdDecompressSync`.
 
 ## 7. OpenCode (v2 세션, 2.0.29)
 
@@ -210,7 +226,7 @@ Codex 보관함(`~/.codex/archived_sessions/`)의 rollout도 측정 대상이고
 
 자식 세션(`parent_id`)은 재귀로 찾아 `subagents/`에 쓴다. 지시문은 평문이다.
 export 파일로 넣을 때는 같은 폴더의 `<자식 세션ID>.json`을 먼저 보고, 없으면 DB를 본다.
-둘 다 없으면 `notes`에 "자식 세션을 찾지 못함"을 적는다.
+둘 다 없으면 번역 요약의 `notes`에 "자식 세션을 찾지 못함"을 적는다.
 
 ### 7.3 구현 중 정한 세부 규칙
 
@@ -258,10 +274,18 @@ export 파일로 넣을 때는 같은 폴더의 `<자식 세션ID>.json`을 먼�
 - 미계상 채널 경보: 0건. §38 경보: 0건.
 - 변환 누락: 원본 도구 호출보다 변환된 호출이 적은 세션 0개. 어느 호출에도 붙지 않은 Codex 항목 0개.
 
-전 세션 리포트(`record_actions_code_api_all_sessions.py --agent codex|opencode`):
+### 8.2 번역기·측정기 분리 뒤 재검증 (2026-10-16)
 
-- Codex: 14세션 측정. 초소형 제외 47, `codex exec` 헤드리스 제외 5, 다른 에이전트 세션 사본 제외 284.
-- OpenCode: 159세션 측정. 초소형 제외 243.
+측정기 코드는 2026-10-15 이전 커밋(`5c2f069`)과 차이가 없다. 번역기로 전 세션을 폴더에 쓰고, 그 폴더를
+기존 전 세션 리포트(`record_actions_code_api_all_sessions.py <폴더>`)에 그대로 넣었다.
+
+- Codex: 번역 64세션, 다른 에이전트 세션 사본 제외 287, 실패 0. 측정 14세션, 초소형 제외 47,
+  `codex exec` 헤드리스 제외 3. 사람 시간 합 10,360분, 에이전트 시간 합 810분.
+  10-15의 통합 방식 결과와 측정 세션 수·합계가 같다.
+  달라진 두 수의 이유: 헤드리스 제외 5 → 3은 시험 세션을 지웠기 때문이다. 사본 284 → 287은
+  Codex가 10-16에 Claude 세션 3개를 더 가져왔기 때문이다.
+- OpenCode: 번역 389세션, 빈 세션 제외 12, 실패 0. 측정 158세션, 초소형 제외 231. 10-15의 159세션과의
+  차이 1은 지운 시험 세션이다.
 
 **측정기 쪽에서 발견한 것(이 변환과 별개).** 실행 실패 정규식(`_EXEC_HARD_FAIL_RE`)은 영어 오류문만 안다.
 Windows PowerShell의 한국어 오류("… 용어가 cmdlet, 함수, 스크립트 파일 또는 실행할 수 있는 프로그램
@@ -272,25 +296,26 @@ Windows PowerShell의 한국어 오류("… 용어가 cmdlet, 함수, 스크립�
 
 - `session-adapters/codex_adapter.py` — Codex rollout → Claude 기록
 - `session-adapters/opencode_adapter.py` — OpenCode v2·1.x → Claude 기록
-- `session-adapters/session_adapters.py` — 형식 판별, 공통 기록 작성기, `convert()`
-- `session-adapters/test_session_adapters.py` — 단위 시험
-- `session-api/record_actions_code_api.py` — `measure()` 입구에서 변환 호출
-- `session-api/record_actions_code_api_all_sessions.py` — `--agent codex|opencode` 전 세션 리포트
+- `session-adapters/session_adapters.py` — 형식 판별, 압축 기록 읽기, 공통 기록 작성기,
+  `convert()`(세션 1개)·`convert_all()`(이 PC 전체), CLI
+- `session-adapters/test_session_adapters.py` — 단위 시험(번역 → 기존 측정기 2단계 포함)
+
+측정기 쪽 파일은 하나도 바꾸지 않는다.
 
 ## 10. 사용법
 
-```python
-from record_actions_code_api import measure
-measure(r"C:\Users\me\.codex\sessions\2026\10\15\rollout-….jsonl")   # Codex
-measure("opencode:ses_ec1aad989ffeOQ3wJ3zyTu7hVH")                   # OpenCode (DB)
-measure("ses_ec1aad989ffeOQ3wJ3zyTu7hVH.json")                       # OpenCode export
-```
+번역(이 폴더) → 측정(기존 측정기) 두 단계다.
 
 ```bash
-python session-api/record_actions_code_api.py <rollout.jsonl | export.json | opencode:<ID>>
-python session-api/record_actions_code_api_all_sessions.py --agent codex --out codex.md
-python session-api/record_actions_code_api_all_sessions.py --agent opencode --out opencode.md
-python session-adapters/session_adapters.py <입력> --out <폴더>   # 변환 결과만 보기
+# 세션 1개
+python session-adapters/session_adapters.py <rollout.jsonl | rollout.jsonl.zst | export.json | opencode:<ID>> --out conv
+python session-api/record_actions_code_api.py conv/<세션>.jsonl
+
+# 이 PC 전체
+python session-adapters/session_adapters.py --all codex    --out conv-codex      # [--root Codex 홈]
+python session-adapters/session_adapters.py --all opencode --out conv-opencode   # [--root opencode.db]
+python session-api/record_actions_code_api_all_sessions.py conv-codex    --out codex.md
+python session-api/record_actions_code_api_all_sessions.py conv-opencode --out opencode.md
 ```
 
-결과에 `source_format`(codex·opencode)이 붙는다. 변환에서 생긴 주석(암호화 환산 등)은 `notes` 앞에 붙는다.
+번역 요약(번역·제외·실패 수, 세션별 주석)은 `<폴더>/_adapter_summary.json`이다.

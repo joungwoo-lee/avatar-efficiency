@@ -17,8 +17,9 @@ for _p in (_HERE, _ROOT / "session-api", _ROOT / "agent-effort",
            _ROOT / "human-effort" / "requirement-actions"):
     sys.path.insert(0, str(_p))
 
-from session_adapters import (convert, detect_format, hunks_from_unified_diff,  # noqa: E402
-                              parse_apply_patch, file_ops_to_tools)
+from session_adapters import (convert, convert_all, detect_format,  # noqa: E402
+                              hunks_from_unified_diff, parse_apply_patch,
+                              file_ops_to_tools)
 import opencode_adapter  # noqa: E402
 
 T0 = 1792040000.0          # 기준 시각(초)
@@ -286,21 +287,27 @@ class CodexTest(unittest.TestCase):
                                     "imported_at": T0 + 100}]}, fh)
         res = self.conv()
         self.assertIn("가져온 세션 사본", res["excluded"])
-        from record_actions_code_api import measure
-        r = measure(self.parent_path)
-        self.assertTrue(r["excluded"])
+        self.assertIsNone(res["main"])
+        summary = convert_all("codex", os.path.join(self.tmp, "all"), root=self.tmp)
+        self.assertEqual((len(summary["converted"]), len(summary["excluded"])), (0, 1))
+
+    def test_convert_all_folder(self):
+        # 전 세션 변환 — 자식·guardian은 최상위 목록에서 빠지고 부모 변환에 들어간다
+        out = os.path.join(self.tmp, "all")
+        summary = convert_all("codex", out, root=self.tmp)
+        self.assertEqual(len(summary["converted"]), 1)
+        self.assertEqual(summary["converted"][0]["subagents"], 1)
+        self.assertEqual(summary["errors"], [])
+        main = summary["converted"][0]["main"]
+        # 파일 수정 시각 = 기록의 마지막 사건 시각 (측정기의 "진행 중" 제외에 안 걸리게)
+        self.assertAlmostEqual(os.path.getmtime(main), T0 + 41.2, places=0)
+        self.assertTrue(os.path.exists(os.path.join(out, "_adapter_summary.json")))
 
     def test_measure_end_to_end(self):
+        # 번역 → 기존 측정기(변경 없음)에 Claude 기록으로 넣는다
         from record_actions_code_api import measure
-        from codex_adapter import DEFAULT_ROOT  # noqa: F401
-        import codex_adapter
-        old = codex_adapter.DEFAULT_ROOT
-        codex_adapter.DEFAULT_ROOT = self.root
-        try:
-            r = measure(self.parent_path, force=True)
-        finally:
-            codex_adapter.DEFAULT_ROOT = old
-        self.assertEqual(r["source_format"], "codex")
+        res = self.conv()
+        r = measure(res["main"], subagent_paths=res["subagents"], force=True)
         self.assertEqual(r["agent"]["subagent_files"], 1)
         self.assertFalse(r["suspect_output_channel"])
         self.assertGreater(r["human"]["min"], 0)
@@ -404,8 +411,8 @@ class OpenCodeTest(unittest.TestCase):
 
     def test_measure_end_to_end(self):
         from record_actions_code_api import measure
-        r = measure(self.src, force=True)
-        self.assertEqual(r["source_format"], "opencode")
+        res = self.conv()
+        r = measure(res["main"], subagent_paths=res["subagents"], force=True)
         self.assertEqual(r["agent"]["subagent_files"], 1)
         self.assertGreater(r["human"]["min"], 0)
 
