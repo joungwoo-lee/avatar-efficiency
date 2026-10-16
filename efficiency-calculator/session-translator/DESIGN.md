@@ -1,4 +1,4 @@
-# 세션 변환기 설계 — Codex·OpenCode 세션을 record-actions 측정기로 재기 (§96)
+# Session Translator 설계 — Codex·OpenCode 세션을 record-actions 측정기로 재기 (§96)
 
 작성일: 2026-10-15
 대상 버전: Codex CLI 0.162.1 (rollout jsonl), OpenCode 2.0.29 (v2 세션 저장소·`session export`)
@@ -15,7 +15,7 @@
 측정기(`session-api` 등)는 **한 줄도 바꾸지 않는다**. 번역기가 쓴 파일을 Claude 세션처럼 그대로 잰다.
 
 ```
-Codex·OpenCode 세션 ──번역기(session-adapters)──▶ Claude 모양 jsonl 폴더 ──기존 측정기(무변경)──▶ 효율
+Codex·OpenCode 세션 ──번역기(session-translator)──▶ Claude 모양 jsonl 폴더 ──기존 측정기(무변경)──▶ 효율
 ```
 
 - 측정 규칙은 한 곳(기존 측정기)에만 있다. 에이전트별로 규칙이 갈라지지 않는다.
@@ -25,7 +25,7 @@ Codex·OpenCode 세션 ──번역기(session-adapters)──▶ Claude 모양 
 - 번역한 파일의 수정 시각은 그 기록의 마지막 사건 시각으로 맞춘다. 측정기는 최근 10분 안에 바뀐
   파일을 진행 중 세션으로 빼기 때문이다(§44). 원본이 실제로 진행 중일 때만 그 규칙에 걸린다.
 - 기록이 하나도 없는 세션은 쓰지 않고 요약에 "빈 세션"으로 센다(빈 파일을 남기면 수정 시각이 지금이 된다).
-- 번역 중 생긴 주석(암호화 본문 환산, 사본 제외 사유)은 `<폴더>/_adapter_summary.json`에 남긴다.
+- 번역 중 생긴 주석(암호화 본문 환산, 사본 제외 사유)은 `<폴더>/_translator_summary.json`에 남긴다.
   측정기 결과에는 섞지 않는다.
 
 ## 3. "100% 변환"의 정의
@@ -38,7 +38,7 @@ Codex·OpenCode 세션 ──번역기(session-adapters)──▶ Claude 모양 
 이 정의를 벗어나는 항목은 한 가지뿐이다. Codex 다중 에이전트 v2가 **암호화해서 저장하는
 에이전트 사이 메시지 본문**이다. 본문은 어디에도 평문으로 남지 않는다. 대신 그 메시지를 만든
 응답의 출력 토큰 수는 정확히 남는다. 그래서 단어 수를 "토큰 수 × 같은 세션의 평문 응답에서 잰
-단어/토큰 비율"로 환산한다(6.4절). 이 환산은 번역 요약(`_adapter_summary.json`)의 세션별 `notes`에 건수와 함께 드러낸다.
+단어/토큰 비율"로 환산한다(6.4절). 이 환산은 번역 요약(`_translator_summary.json`)의 세션별 `notes`에 건수와 함께 드러낸다.
 
 ## 4. 측정기가 읽는 Claude 기록 계약
 
@@ -250,7 +250,7 @@ export 파일로 넣을 때는 같은 폴더의 `<자식 세션ID>.json`을 먼�
    전략 생각 지점, 지시 턴 수, 분모의 AI 시간·턴 시간.
 3. 채널 결산(§59)의 미계상 채널과 §38 미등록 쓰기 경보가 0인지 본다.
 4. 이 PC의 실제 Codex·OpenCode 세션 전체를 일괄 변환·측정해 오류 0건을 확인한다.
-5. 형식 판별·대응 규칙은 개인 정보를 뺀 작은 손 작성 기록으로 단위 시험(`test_session_adapters.py`)을 둔다.
+5. 형식 판별·대응 규칙은 개인 정보를 뺀 작은 손 작성 기록으로 단위 시험(`test_session_translator.py`)을 둔다.
 
 ### 8.1 결과 (2026-10-15)
 
@@ -294,11 +294,11 @@ Windows PowerShell의 한국어 오류("… 용어가 cmdlet, 함수, 스크립�
 
 ## 9. 파일
 
-- `session-adapters/codex_adapter.py` — Codex rollout → Claude 기록
-- `session-adapters/opencode_adapter.py` — OpenCode v2·1.x → Claude 기록
-- `session-adapters/session_adapters.py` — 형식 판별, 압축 기록 읽기, 공통 기록 작성기,
+- `session-translator/codex_translator.py` — Codex rollout → Claude 기록
+- `session-translator/opencode_translator.py` — OpenCode v2·1.x → Claude 기록
+- `session-translator/session_translator.py` — 형식 판별, 압축 기록 읽기, 공통 기록 작성기,
   `convert()`(세션 1개)·`convert_all()`(이 PC 전체), CLI
-- `session-adapters/test_session_adapters.py` — 단위 시험(번역 → 기존 측정기 2단계 포함)
+- `session-translator/test_session_translator.py` — 단위 시험(번역 → 기존 측정기 2단계 포함)
 
 측정기 쪽 파일은 하나도 바꾸지 않는다.
 
@@ -308,14 +308,14 @@ Windows PowerShell의 한국어 오류("… 용어가 cmdlet, 함수, 스크립�
 
 ```bash
 # 세션 1개
-python session-adapters/session_adapters.py <rollout.jsonl | rollout.jsonl.zst | export.json | opencode:<ID>> --out conv
+python session-translator/session_translator.py <rollout.jsonl | rollout.jsonl.zst | export.json | opencode:<ID>> --out conv
 python session-api/record_actions_code_api.py conv/<세션>.jsonl
 
 # 이 PC 전체
-python session-adapters/session_adapters.py --all codex    --out conv-codex      # [--root Codex 홈]
-python session-adapters/session_adapters.py --all opencode --out conv-opencode   # [--root opencode.db]
+python session-translator/session_translator.py --all codex    --out conv-codex      # [--root Codex 홈]
+python session-translator/session_translator.py --all opencode --out conv-opencode   # [--root opencode.db]
 python session-api/record_actions_code_api_all_sessions.py conv-codex    --out codex.md
 python session-api/record_actions_code_api_all_sessions.py conv-opencode --out opencode.md
 ```
 
-번역 요약(번역·제외·실패 수, 세션별 주석)은 `<폴더>/_adapter_summary.json`이다.
+번역 요약(번역·제외·실패 수, 세션별 주석)은 `<폴더>/_translator_summary.json`이다.

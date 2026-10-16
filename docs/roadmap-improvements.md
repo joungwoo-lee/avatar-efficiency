@@ -34,7 +34,7 @@
 | 중앙 집계 서버 운영 | 사용자 설치물을 스위퍼+훅만으로 축소(초간편 설치의 절반), 서버는 사내 1대. TLS·인증 토큰 추가 필요 | 🔶 |
 | WSL setup 자동화 | setup의 WSL 분기(리눅스 경로 hook 등록·전용 cwd) 완성 — 바이너리는 이미 WSL 실행 검증됨 | 🔜 |
 | Claude Code 플러그인화 | hooks 번들 플러그인으로 배포하면 settings.json 병합 자체가 불필요 — 사내 플러그인 레포(cowork) 경로로 배포 일원화 | 🔶 |
-| 멀티 에이전트 지원 | transcript 리더를 어댑터화해 타 에이전트(opencode 등) 세션도 수집 — 논문 §6 "단일 벤더" 위협 해소 | ✅ §96 Codex·OpenCode 측정 (`efficiency-calculator/session-adapters`) — 수집 경로(스위퍼·훅) 연결은 미구현 |
+| 멀티 에이전트 지원 | transcript 리더를 어댑터화해 타 에이전트(opencode 등) 세션도 수집 — 논문 §6 "단일 벤더" 위협 해소 | ✅ §96 Codex·OpenCode 측정 (`efficiency-calculator/session-translator`) — 수집 경로(스위퍼·훅) 연결은 미구현 |
 
 ## 4. 프라이버시·운영 건전성
 

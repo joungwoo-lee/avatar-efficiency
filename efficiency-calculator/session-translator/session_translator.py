@@ -6,15 +6,15 @@
 Claude Code 세션 모양 파일을 써 낸다. 그 파일을 기존 측정기에 그대로 넣는다.
 
 사용:
-    from session_adapters import detect_format, convert, convert_all
+    from session_translator import detect_format, convert, convert_all
     fmt = detect_format("rollout-....jsonl")      # "claude" | "codex" | "opencode"
     out = convert("rollout-....jsonl", out_dir="conv")
     out["main"], out["subagents"], out["notes"]   # 쓴 파일·주석
     convert_all("codex", "conv-codex")            # 이 PC 세션 전체
 
 CLI:
-    python session_adapters.py <입력> --out 폴더
-    python session_adapters.py --all codex|opencode --out 폴더 [--root Codex홈|opencode.db]
+    python session_translator.py <입력> --out 폴더
+    python session_translator.py --all codex|opencode --out 폴더 [--root Codex홈|opencode.db]
     입력 = Codex rollout jsonl | OpenCode export JSON | opencode:<세션ID>
 
 측정 (기존 측정기, 변경 없음):
@@ -323,7 +323,7 @@ class ClaudeWriter:
         self.entrypoint = entrypoint
         self.permission = None
         self.recs = []
-        self._ns = uuid.uuid5(uuid.NAMESPACE_URL, f"adapter:{session_id}")
+        self._ns = uuid.uuid5(uuid.NAMESPACE_URL, f"translator:{session_id}")
 
     def _base(self, t, rtype):
         rec = {"type": rtype, "timestamp": iso(t),
@@ -432,13 +432,13 @@ def convert(src, out_dir=None, opencode_db=None, codex_root=None):
                 "notes": [], "tmpdir": None, "name": Path(str(src)).name}
     tmpdir = None
     if out_dir is None:
-        out_dir = tmpdir = tempfile.mkdtemp(prefix=f"{fmt}_adapt_")
+        out_dir = tmpdir = tempfile.mkdtemp(prefix=f"{fmt}_translate_")
     os.makedirs(out_dir, exist_ok=True)
     if fmt == "codex":
-        from codex_adapter import convert_codex
+        from codex_translator import convert_codex
         res = convert_codex(str(src), out_dir, sessions_root=codex_root)
     else:
-        from opencode_adapter import convert_opencode
+        from opencode_translator import convert_opencode
         res = convert_opencode(str(src), out_dir, db_path=opencode_db)
     res["format"] = fmt
     res["tmpdir"] = tmpdir
@@ -480,7 +480,7 @@ def list_sources(agent, root=None):
            (서브에이전트) 아닌 것 — 자식은 부모 변환에 함께 들어간다.
     opencode: opencode.db의 최상위 세션(v2 + 옮겨지지 않은 1.x) → "opencode:<ID>"."""
     if agent == "codex":
-        from codex_adapter import DEFAULT_ROOT, rollout_files, _pl
+        from codex_translator import DEFAULT_ROOT, rollout_files, _pl
         home = root or str(Path(DEFAULT_ROOT).parent)
         out = []
         for f in rollout_files(home):
@@ -493,7 +493,7 @@ def list_sources(agent, root=None):
         return out
     if agent == "opencode":
         import sqlite3
-        from opencode_adapter import DEFAULT_DB
+        from opencode_translator import DEFAULT_DB
         db = root or DEFAULT_DB
         con = sqlite3.connect("file:" + Path(db).resolve().as_posix() + "?mode=ro",
                               uri=True)
@@ -515,7 +515,7 @@ def convert_all(agent, out_dir, root=None):
     out_dir는 기존 측정기에 그대로 넣는 폴더다:
         python ../session-api/record_actions_code_api_all_sessions.py <out_dir>
     다른 에이전트에서 가져온 사본(Codex의 Claude 세션 가져오기)은 쓰지 않고
-    요약에 센다. 요약은 out_dir/_adapter_summary.json."""
+    요약에 센다. 요약은 out_dir/_translator_summary.json."""
     os.makedirs(out_dir, exist_ok=True)
     kw = {"codex_root": os.path.join(root, "sessions")} if (agent == "codex" and root) \
         else {"opencode_db": root} if agent == "opencode" else {}
@@ -533,7 +533,7 @@ def convert_all(agent, out_dir, root=None):
         summary["converted"].append({"src": src, "main": res["main"],
                                      "subagents": len(res.get("subagents") or []),
                                      "notes": res.get("notes") or []})
-    with open(os.path.join(out_dir, "_adapter_summary.json"), "w",
+    with open(os.path.join(out_dir, "_translator_summary.json"), "w",
               encoding="utf-8") as fh:
         json.dump(summary, fh, ensure_ascii=False, indent=1)
     return summary
@@ -564,8 +564,8 @@ def main(argv):
               + f", 실패 {len(s['errors'])} → {out}")
         return 1 if s["errors"] else 0
     if not args:
-        print("usage: python session_adapters.py <입력> [--out 폴더]\n"
-              "       python session_adapters.py --all codex|opencode --out 폴더 "
+        print("usage: python session_translator.py <입력> [--out 폴더]\n"
+              "       python session_translator.py --all codex|opencode --out 폴더 "
               "[--root Codex홈|opencode.db]", file=sys.stderr)
         return 2
     for src in args:

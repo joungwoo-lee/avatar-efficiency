@@ -11,7 +11,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-from session_adapters import (OPENCODE_PREFIX, ClaudeWriter, epoch,
+from session_translator import (OPENCODE_PREFIX, ClaudeWriter, epoch,
                               file_ops_to_tools, parse_apply_patch,
                               task_notification, _clean)
 

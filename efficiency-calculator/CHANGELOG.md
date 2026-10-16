@@ -2065,14 +2065,15 @@ OFF/OFF 112,522 → 93,771분, OFF/ON 1.41 → 1.41. 역전 0.**
   45e1d583 발표 자료(docs)의 61.4배는 §92 기준 수치다.
 - 테스트: session-api 41(1 skip), human-effort 53, agent-effort 31 통과.
 
-## 96. Codex·OpenCode 세션 측정 — 번역기가 Claude 세션 모양으로 바꾸고, 측정기는 그대로 (DESIGN: session-adapters/DESIGN.md)
+## 96. Codex·OpenCode 세션 측정 — 번역기가 Claude 세션 모양으로 바꾸고, 측정기는 그대로 (DESIGN: session-translator/DESIGN.md)
 
-- 방식: 번역기(`session-adapters/`)가 Codex·OpenCode 세션을 Claude Code 세션 모양 jsonl로 바꿔 폴더에 쓴다.
+- 방식: 번역기(`session-translator/`)가 Codex·OpenCode 세션을 Claude Code 세션 모양 jsonl로 바꿔 폴더에 쓴다.
   측정기(session-api·agent-effort·human-effort)는 **한 줄도 바꾸지 않는다** — 그 폴더를 Claude 세션처럼 잰다.
   (10-15에 측정기 입구 2곳에 번역 호출을 넣었다가 10-16 사용자 결정으로 되돌렸다. 측정기 코드는 `5c2f069`와 같다.)
-- 쓰는 법: `session_adapters.py --all codex|opencode --out <폴더>` → `record_actions_code_api_all_sessions.py <폴더>`.
+- 쓰는 법: `session_translator.py --all codex|opencode --out <폴더>` → `record_actions_code_api_all_sessions.py <폴더>`.
   번역 파일의 수정 시각은 기록의 마지막 사건 시각으로 맞춰 측정기의 "진행 중" 제외(§44)가 원본 기준으로 동작한다.
-  기록 0건인 세션은 쓰지 않는다. 번역 주석은 `<폴더>/_adapter_summary.json`.
+  기록 0건인 세션은 쓰지 않는다. 번역 주석은 `<폴더>/_translator_summary.json`.
+- 이름: 10-16 `session-adapters` → `session-translator`(Session Translator)로 바꿨다(파일 `*_adapter.py` → `*_translator.py`).
 - 기준 버전: Codex CLI 0.162.1, OpenCode 2.0.29. 두 도구로 같은 11단계 과제를 실제로 돌려 만든 기록으로 대응을 정했다.
 - Codex:
   - 코드 모드 셀 안의 개별 호출은 `item_completed` 항목(시작·끝 밀리초)으로 바꾼다.
@@ -2096,7 +2097,7 @@ OFF/OFF 112,522 → 93,771분, OFF/ON 1.41 → 1.41. 역전 0.**
 - 검증(10-16, 분리 뒤): Codex 번역 64·사본 제외 287·실패 0 → 측정 14세션(사람 10,360분 ÷ 에이전트 810분, 10-15와 같음).
   OpenCode 번역 389·빈 세션 제외 12·실패 0 → 측정 158세션(10-15 159에서 지운 시험 세션 1 차이).
 - 발견(미수정): 실행 실패 정규식(`_EXEC_HARD_FAIL_RE`)이 PowerShell 한국어 오류문을 모른다 — Claude 세션에도 같은 규칙.
-- 테스트: session-adapters 17, session-api 41(1 skip), human-effort 53, agent-effort 31 통과.
+- 테스트: session-translator 17, session-api 41(1 skip), human-effort 53, agent-effort 31 통과.
 
 ## 미해결 (알려진 한계·다음 단계)
 

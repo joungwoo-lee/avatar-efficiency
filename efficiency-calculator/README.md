@@ -42,7 +42,7 @@ agent-effort/    분모 — 사전 추산(agent_effort.py) · 세션 실측(tran
                  rates.json = 행동 단가표 단일 출처 (프롬프트 미노출)
 counterfactual-api/  사전 API + 구 계약(integ-spec) drop-in
 session-api/         사후 API + 초소형 게이트
-session-adapters/    번역기 — Codex·OpenCode 세션 → Claude 세션 모양 jsonl 폴더 (§96). 측정은 그 폴더를
+session-translator/  Session Translator — Codex·OpenCode 세션 → Claude 세션 모양 jsonl 폴더 (§96). 측정은 그 폴더를
                      session-api에 그대로 넣는다(측정기 무변경)
 function-classifier/ 긴 트랜스크립트 → 펑션(업무 구분)·프로덕트 분류. condense(원본의 1~2%로 전처리)
                      · classify(complete_json 계약) · summarize_match(부모 클로드 PID 설정으로 하이쿠,
@@ -83,5 +83,5 @@ cd human-effort && python test_estimator.py          # (+ --live 회귀)
 cd agent-effort && python test_agent_effort.py
 cd counterfactual-api && python test_compat.py
 cd session-api && python test_session_api.py
-cd session-adapters && python test_session_adapters.py
+cd session-translator && python test_session_translator.py
 ```

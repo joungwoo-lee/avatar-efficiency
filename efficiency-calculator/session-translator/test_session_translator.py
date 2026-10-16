@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""session-adapters 오프라인 테스트 (§96) — 손으로 만든 작은 기록으로 대응 규칙을 고정한다.
+"""session-translator 오프라인 테스트 (§96) — 손으로 만든 작은 기록으로 대응 규칙을 고정한다.
 
 실제 기록 모양은 Codex CLI 0.162.1·OpenCode 2.0.29가 남긴 기록에서 따왔다(개인 정보 없음).
 """
@@ -17,16 +17,16 @@ for _p in (_HERE, _ROOT / "session-api", _ROOT / "agent-effort",
            _ROOT / "human-effort" / "requirement-actions"):
     sys.path.insert(0, str(_p))
 
-from session_adapters import (convert, convert_all, detect_format,  # noqa: E402
+from session_translator import (convert, convert_all, detect_format,  # noqa: E402
                               hunks_from_unified_diff, parse_apply_patch,
                               file_ops_to_tools)
-import opencode_adapter  # noqa: E402
+import opencode_translator  # noqa: E402
 
 T0 = 1792040000.0          # 기준 시각(초)
 
 
 def iso(sec):
-    from session_adapters import iso as _iso
+    from session_translator import iso as _iso
     return _iso(sec)
 
 
@@ -301,7 +301,7 @@ class CodexTest(unittest.TestCase):
         main = summary["converted"][0]["main"]
         # 파일 수정 시각 = 기록의 마지막 사건 시각 (측정기의 "진행 중" 제외에 안 걸리게)
         self.assertAlmostEqual(os.path.getmtime(main), T0 + 41.2, places=0)
-        self.assertTrue(os.path.exists(os.path.join(out, "_adapter_summary.json")))
+        self.assertTrue(os.path.exists(os.path.join(out, "_translator_summary.json")))
 
     def test_measure_end_to_end(self):
         # 번역 → 기존 측정기(변경 없음)에 Claude 기록으로 넣는다
@@ -363,12 +363,12 @@ class OpenCodeTest(unittest.TestCase):
         out = os.path.join(self.shell, "sh_1.out")
         open(out, "w").write("done\n")
         os.utime(out, (T0 + 30, T0 + 30))
-        self.old_shell = opencode_adapter.SHELL_DIR
-        opencode_adapter.SHELL_DIR = os.path.join(self.tmp, "shell")
+        self.old_shell = opencode_translator.SHELL_DIR
+        opencode_translator.SHELL_DIR = os.path.join(self.tmp, "shell")
         self.out = os.path.join(self.tmp, "out")
 
     def tearDown(self):
-        opencode_adapter.SHELL_DIR = self.old_shell
+        opencode_translator.SHELL_DIR = self.old_shell
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def conv(self):

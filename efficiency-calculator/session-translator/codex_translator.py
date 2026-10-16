@@ -11,7 +11,7 @@ import os
 import re
 from pathlib import Path
 
-from session_adapters import (ClaudeWriter, Placeholder, epoch,
+from session_translator import (ClaudeWriter, Placeholder, epoch,
                               file_ops_to_tools, hunks_from_unified_diff,
                               json_text_words, parse_apply_patch,
                               task_notification, words, _clean, read_text,
