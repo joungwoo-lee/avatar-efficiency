@@ -536,7 +536,7 @@ def _stamp(path):
 # ---------------------------------------------------------------- 목록 → 한 세션씩
 
 def list_sessions(agent, root=None, since=None, seen=None):
-    """측정 대상 원본 목록 → [{"src", "agent", "updated_at"}] (오래된 것부터).
+    """측정 대상 원본 목록 → [{"src", "agent", "updated_at"}] (최신순 — 가장 최근에 바뀐 것부터).
 
     agent = "codex" | "opencode". root = Codex 홈 또는 OpenCode DB(없으면 찾는다).
     since: epoch 초 — 이 시각 뒤에 바뀐 세션만 (예: 최근 30일 = time.time() - 30*86400).
@@ -580,7 +580,7 @@ def list_sessions(agent, root=None, since=None, seen=None):
     seen = seen or {}
     out = [{"src": s, "agent": agent, "updated_at": u} for s, u in rows
            if (since is None or u > since) and (s not in seen or u > seen[s])]
-    return sorted(out, key=lambda r: r["updated_at"])
+    return sorted(out, key=lambda r: r["updated_at"], reverse=True)
 
 
 _UUID_RE = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"

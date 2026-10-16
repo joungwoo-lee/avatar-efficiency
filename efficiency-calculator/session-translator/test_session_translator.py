@@ -521,6 +521,18 @@ class LocationTest(unittest.TestCase):
             self.assertIn(enc, body)
             self.assertNotIn(raw, body)
 
+    def test_list_sessions_newest_first(self):
+        import sqlite3
+        db = self.make_db(os.path.join(self.tmp, "order"))
+        con = sqlite3.connect(db)
+        con.execute("insert into session_v2 values ('ses_new', null, ?)", (int((T0 + 900) * 1000),))
+        con.execute("insert into session_v2 values ('ses_old', null, ?)", (int((T0 - 900) * 1000),))
+        con.commit()
+        con.close()
+        rows = list_sessions("opencode", root=db)
+        self.assertEqual([r["src"] for r in rows],
+                         ["opencode:ses_new", "opencode:ses_a", "opencode:ses_old"])
+
     def test_db_in_folder_with_hash_opens(self):
         db = self.make_db(os.path.join(self.tmp, "x#y z"))   # Windows는 ?를 이름에 못 쓴다
         rows = list_sessions("opencode", root=db)

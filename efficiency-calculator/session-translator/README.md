@@ -59,7 +59,7 @@ save_ledger(seen)
 
 ### `list_sessions(agent, root=None, since=None, seen=None)` — 대상 목록
 
-번역은 하지 않고 목록만 돌려줍니다. 오래된 세션부터 나옵니다.
+번역은 하지 않고 목록만 돌려줍니다. 최신순입니다(가장 최근에 바뀐 세션이 먼저).
 
 - `agent`: `"codex"` 또는 `"opencode"`
 - `root`: Codex 홈 또는 OpenCode DB 경로입니다. 없으면 위 순서로 찾습니다.
