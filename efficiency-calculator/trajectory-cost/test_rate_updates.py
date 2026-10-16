@@ -21,7 +21,7 @@ PRICING = """## Model pricing
 | --- | --- | --- | --- | --- | --- |
 | Claude Opus 5 | $5 / MTok | $6.25 / MTok | $10 / MTok | $0.50 / MTok | $25 / MTok |
 | Claude Opus 4.8 | $5 / MTok | $6.25 / MTok | $10 / MTok | $0.50 / MTok | $25 / MTok |
-| Claude Opus 5.5 | $4 / MTok | $5 / MTok | $8 / MTok | $0.20 / MTok<sup>2</sup> | $20 / MTok |
+| Claude Opus 6 | $4 / MTok | $5 / MTok | $8 / MTok | $0.20 / MTok<sup>2</sup> | $20 / MTok |
 | Claude Fable 5.1 | $10 / MTok | $12.50 / MTok | $20 / MTok | $0.25 / MTok<sup>1</sup> | $50 / MTok |
 | Claude Haiku 5.5 (for prompts up to 100,000 tokens) | $0.10 / MTok | $0.125 / MTok | $0.20 / MTok | $0.01 / MTok | $0.50 / MTok |
 | Claude Haiku 5.5 (for prompts over 100,000 tokens) | $0.50 / MTok | $0.625 / MTok | $1 / MTok | $0.05 / MTok | $2.50 / MTok |
@@ -30,7 +30,7 @@ PRICING = """## Model pricing
 ### Fast mode pricing
 | Model | Input | Output |
 | --- | --- | --- |
-| Claude Opus 5.5 | $8 / MTok | $40 / MTok |
+| Claude Opus 6 | $8 / MTok | $40 / MTok |
 | Claude Opus 5 / Claude Opus 4.8 | $10 / MTok | $50 / MTok |
 
 * **Prompt caching** multipliers apply on top of fast mode pricing
@@ -41,6 +41,14 @@ Web search is available for $10 per 1,000 searches.
 #### Web fetch tool
 Web fetch usage has **no additional charges** beyond standard token costs.
 """
+# 갱신 판정은 실제 시계(24시간)를 쓴다. rates.json 의 checked_at 이 오늘이어도 시험이
+# 흔들리지 않도록, 확인 시각만 오래된 값으로 바꾼 사본을 기본 요율표로 쓴다.
+_STALE_DIR = tempfile.TemporaryDirectory()
+_stale = json.loads(tc.RATES_PATH.read_text(encoding="utf-8"))
+_stale["_pricing"]["checked_at"] = "2000-01-01T00:00:00Z"
+_STALE_PATH = Path(_STALE_DIR.name) / "rates.json"
+_STALE_PATH.write_text(json.dumps(_stale), encoding="utf-8")
+tc.RATES_PATH = _STALE_PATH
 BASE = tc.load_rates(tc.RATES_PATH)
 
 
@@ -62,7 +70,7 @@ class RateUpdateTests(unittest.TestCase):
     def test_parse_official_cache_fast_and_tiers(self):
         result = ru.parse_official_prices(PRICING)
         self.assertEqual(result["models"]["claude-fable-5-1"]["cache_read"], 0.25)
-        self.assertEqual(result["models"]["claude-opus-5-5"]["fast"]["cache_read"], 0.4)
+        self.assertEqual(result["models"]["claude-opus-6"]["fast"]["cache_read"], 0.4)
         self.assertEqual(result["models"]["claude-opus-4-8"]["fast"]["output"], 50)
         self.assertEqual(result["models"]["claude-haiku-5-5"]["tiers"][0]["above_input_tokens"], 100000)
 
@@ -70,7 +78,7 @@ class RateUpdateTests(unittest.TestCase):
         self.assertTrue(self._refresh())
         saved = ru.read_cached_rates(BASE, self.cache)
         self.assertIn("claude-sonnet-4-5", saved["models"])
-        self.assertIn("claude-opus-5-5", saved["models"])
+        self.assertIn("claude-opus-6", saved["models"])
         self.assertEqual(saved["free_models"], BASE["free_models"])
         self.assertEqual(saved["_pricing"]["source"], ru.PRICING_URL)
         self.assertGreater(ru.checked_epoch(saved), time.time() - 10)
@@ -114,9 +122,9 @@ class RateUpdateTests(unittest.TestCase):
                                      "TRAJECTORY_RATES_AUTO_UPDATE": "1"}), \
                 patch.object(tc, "schedule_refresh", side_effect=finish_refresh):
             snapshot = tc.load_rates()
-            self.assertNotIn("claude-opus-5-5", snapshot["models"])
+            self.assertNotIn("claude-opus-6", snapshot["models"])
             following = tc.load_rates(auto_update=False)
-            self.assertIn("claude-opus-5-5", following["models"])
+            self.assertIn("claude-opus-6", following["models"])
 
     def test_custom_table_and_disabled_refresh_never_launch(self):
         with patch.dict(os.environ, {"TRAJECTORY_RATES_CACHE": str(self.cache),
@@ -175,7 +183,7 @@ class RateUpdateTests(unittest.TestCase):
         fixture.write_text(PRICING, encoding="utf-8")
         started, release = self.root / "started", self.root / "release"
         session = self.root / "session.jsonl"
-        session.write_text(json.dumps({"message": {"id": "m", "model": "claude-opus-5-5",
+        session.write_text(json.dumps({"message": {"id": "m", "model": "claude-opus-6",
                                                     "usage": {"output_tokens": 1000000}}}), encoding="utf-8")
         worker = "\n".join([
             "import io, time", "from pathlib import Path", "import rate_updates as ru",
@@ -193,11 +201,12 @@ class RateUpdateTests(unittest.TestCase):
             "import json, subprocess, sys", "import rate_updates as ru", "import trajectory_cost as tc",
             "launch = subprocess.Popen",
             f"ru.subprocess.Popen = lambda command, **options: launch([sys.executable, '-c', {worker!r}], **options)",
+            f"tc.RATES_PATH = __import__('pathlib').Path({str(tc.RATES_PATH)!r})",
             f"tc.main([{str(session)!r}, '--json'])",
         ])
         env = {**os.environ, "TRAJECTORY_RATES_CACHE": str(self.cache), "TRAJECTORY_RATES_AUTO_UPDATE": "1"}
         try:
-            result = subprocess.run([sys.executable, "-c", caller], cwd=tc.RATES_PATH.parent,
+            result = subprocess.run([sys.executable, "-c", caller], cwd=Path(tc.__file__).parent,
                                     env=env, capture_output=True, text=True, encoding="utf-8", timeout=5)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout)["trajectory_cost_usd"], 0)

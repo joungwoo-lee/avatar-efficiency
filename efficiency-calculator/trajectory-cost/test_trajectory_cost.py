@@ -89,6 +89,25 @@ def test_fable_rates():
     print("ok fable_rates")
 
 
+def test_v55_rates():
+    """5.5 세대: Opus/Sonnet 읽기는 0.05x, Haiku 5.5 는 프롬프트 100k 초과 시 5배 단가."""
+    def usd(model, speed="standard", **kw):
+        return tc.call_cost(tc.Call("m", None, model, None, None, False, speed, **kw), RATES)
+    u, prov = usd("claude-opus-5-5", input_tokens=1_000_000, output_tokens=1_000_000)
+    assert prov == "api" and abs(u - 24.0) < 1e-9, u
+    u, _ = usd("claude-opus-5-5", cache_read=1_000_000)
+    assert abs(u - 0.2) < 1e-9, u
+    u, _ = usd("claude-opus-5-5", "fast", output_tokens=1_000_000)
+    assert abs(u - 40.0) < 1e-9, u
+    u, _ = usd("claude-sonnet-5-5", input_tokens=1_000_000, cache_read=1_000_000)
+    assert abs(u - 2.1) < 1e-9, u
+    u, _ = usd("claude-haiku-5-5", input_tokens=100_000, output_tokens=100_000)
+    assert abs(u - 0.06) < 1e-9, u          # 100k 이하: $0.10 / $0.50
+    u, _ = usd("claude-haiku-5-5", input_tokens=100_001, output_tokens=100_000)
+    assert abs(u - (0.5 * 0.100001 + 2.5 * 0.1)) < 1e-9, u   # 100k 초과: $0.50 / $2.50
+    print("ok v55_rates")
+
+
 def test_onprem_is_free():
     for m in ["onprem/qwen3-32b", "llama-3.3-70b", "ollama/gemma3", "EXAONE-4.0"]:
         c = tc.Call("m", None, m, None, None, False, "standard",
@@ -284,6 +303,7 @@ if __name__ == "__main__":
     test_price_math()
     test_date_suffix_and_fast()
     test_fable_rates()
+    test_v55_rates()
     test_onprem_is_free()
     test_dedupe_streaming_repeats()
     test_session_with_subagents_and_onprem()

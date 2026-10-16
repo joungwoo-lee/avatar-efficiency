@@ -1,8 +1,8 @@
 {
-  "_comment": "USD per 1M tokens (MTok). 2026-09-21 기준 Anthropic 정가 (platform.claude.com/docs/en/about-claude/pricing). cache_write_5m/cache_write_1h/cache_read 는 모델마다 직접 적는다. 안 적힌 모델은 cache_multipliers 로 input 단가에서 계산(write5m 1.25x / write1h 2.0x / read 0.1x). 예외: Fable 5.1 / Mythos 5.1 은 cache_read 가 input 의 0.025x ($0.25) 라 배수로 못 구하므로 반드시 직접 적는다.",
+  "_comment": "USD per 1M tokens (MTok). 2026-10-16 기준 Anthropic 정가 (platform.claude.com/docs/en/about-claude/pricing). cache_write_5m/cache_write_1h/cache_read 는 모델마다 직접 적는다. 안 적힌 모델은 cache_multipliers 로 input 단가에서 계산(write5m 1.25x / write1h 2.0x / read 0.1x). 예외: Fable 5.1 / Mythos 5.1 은 cache_read 가 input 의 0.025x ($0.25), Opus 5.5 / Sonnet 5.5 는 0.05x 라 배수로 못 구하므로 반드시 직접 적는다.",
   "_pricing": {
     "source": "https://platform.claude.com/docs/en/about-claude/pricing",
-    "checked_at": "2026-09-21T00:00:00Z"
+    "checked_at": "2026-10-16T00:00:00Z"
   },
   "cache_multipliers": {
     "write_5m": 1.25,
@@ -14,6 +14,24 @@
     "web_fetch_per_1k": 0.0
   },
   "models": {
+    "claude-opus-5-5": {
+      "input": 4.0, "output": 20.0,
+      "cache_write_5m": 5.0, "cache_write_1h": 8.0, "cache_read": 0.2,
+      "fast": {"input": 8.0, "output": 40.0,
+               "cache_write_5m": 10.0, "cache_write_1h": 16.0, "cache_read": 0.4}
+    },
+    "claude-sonnet-5-5": {
+      "input": 2.0, "output": 10.0,
+      "cache_write_5m": 2.5, "cache_write_1h": 4.0, "cache_read": 0.1
+    },
+    "claude-haiku-5-5": {
+      "input": 0.1, "output": 0.5,
+      "cache_write_5m": 0.125, "cache_write_1h": 0.2, "cache_read": 0.01,
+      "tiers": [
+        {"above_input_tokens": 100000, "input": 0.5, "output": 2.5,
+         "cache_write_5m": 0.625, "cache_write_1h": 1.0, "cache_read": 0.05}
+      ]
+    },
     "claude-opus-5": {
       "input": 5.0, "output": 25.0,
       "cache_write_5m": 6.25, "cache_write_1h": 10.0, "cache_read": 0.5,
